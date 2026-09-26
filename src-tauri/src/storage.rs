@@ -122,6 +122,13 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
             remind_end    INTEGER NOT NULL DEFAULT 1,
             enabled       INTEGER NOT NULL DEFAULT 1,
             last_fired_key TEXT
+        );
+        CREATE TABLE IF NOT EXISTS input_stats (
+            date        TEXT NOT NULL,
+            hour        INTEGER NOT NULL,
+            key_count   INTEGER NOT NULL,
+            click_count INTEGER NOT NULL,
+            UNIQUE(date, hour)
         );",
     )
     .map_err(|e| format!("建表失败: {e}"))?;
@@ -477,6 +484,56 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<(), Stri
     )
     .map_err(|e| format!("写入设置失败: {e}"))?;
     Ok(())
+}
+
+// ---------- 键鼠统计（M6） ----------
+
+/// 累加键鼠计数到指定小时桶
+pub fn add_input_stats(
+    conn: &Connection,
+    date: &str,
+    hour: i32,
+    keys: i64,
+    clicks: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO input_stats(date, hour, key_count, click_count) VALUES(?1, ?2, ?3, ?4)
+         ON CONFLICT(date, hour) DO UPDATE SET
+           key_count = key_count + ?3, click_count = click_count + ?4",
+        rusqlite::params![date, hour, keys, clicks],
+    )
+    .map_err(|e| format!("写入键鼠统计失败: {e}"))?;
+    Ok(())
+}
+
+/// 某日键鼠总计数
+pub fn input_for_date(conn: &Connection, date: &str) -> Result<(i64, i64), String> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(key_count), 0), COALESCE(SUM(click_count), 0)
+         FROM input_stats WHERE date = ?1",
+        [date],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .map_err(|e| format!("查询键鼠统计失败: {e}"))
+}
+
+/// 最近 N 天每日总时长（旧→新）
+pub fn recent_daily(conn: &Connection, days: i32) -> Result<Vec<(String, i64)>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT date, SUM(seconds) FROM daily_stats
+             GROUP BY date ORDER BY date DESC LIMIT ?1",
+        )
+        .map_err(|e| format!("查询每日汇总失败: {e}"))?;
+    let rows = stmt
+        .query_map([days], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| format!("查询每日汇总失败: {e}"))?;
+    let mut out: Vec<(String, i64)> = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取每日汇总失败: {e}"))?);
+    }
+    out.reverse();
+    Ok(out)
 }
 
 /// 解析 Tai 的时间字段 -> (日期 "YYYY-MM-DD", 小时)

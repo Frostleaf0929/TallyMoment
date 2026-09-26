@@ -6,7 +6,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use crate::{reminder, storage};
+use crate::{input_hook, reminder, storage};
+use chrono::Timelike;
 
 /// 空闲判定阈值：超过 60 秒无键鼠输入视为离开，停止计时
 const IDLE_THRESHOLD_MS: u32 = 60_000;
@@ -116,6 +117,14 @@ pub fn spawn(app: AppHandle) {
 
         if now % TRAY_REFRESH_SECS == 0 {
             refresh_tray(&app);
+            // 键鼠计数增量落库（M6）
+            let (dk, dc) = input_hook::flush_delta();
+            if dk > 0 || dc > 0 {
+                let dt = Local::now();
+                let date = dt.format("%Y-%m-%d").to_string();
+                let hour = dt.hour() as i32;
+                with_db(&app, |db| storage::add_input_stats(db, &date, hour, dk, dc));
+            }
         }
 
         check_checklist(&app, Local::now());

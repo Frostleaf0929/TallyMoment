@@ -18,6 +18,9 @@ mod imp {
     /// 键入/点击总计数（只记次数，不记内容）——M6 键鼠统计的种子
     static KEY_COUNT: AtomicU64 = AtomicU64::new(0);
     static CLICK_COUNT: AtomicU64 = AtomicU64::new(0);
+    /// 上次落库基线
+    static LAST_FLUSH_KEY: AtomicU64 = AtomicU64::new(0);
+    static LAST_FLUSH_CLICK: AtomicU64 = AtomicU64::new(0);
 
     /// (键入次数, 点击次数) 自应用启动以来
     pub fn stats() -> (u64, u64) {
@@ -25,6 +28,15 @@ mod imp {
             KEY_COUNT.load(Ordering::Relaxed),
             CLICK_COUNT.load(Ordering::Relaxed),
         )
+    }
+
+    /// 落库用：返回自上次调用以来的增量，并推进基线
+    pub fn flush_delta() -> (i64, i64) {
+        let k = KEY_COUNT.load(Ordering::Relaxed);
+        let c = CLICK_COUNT.load(Ordering::Relaxed);
+        let dk = k.saturating_sub(LAST_FLUSH_KEY.swap(k, Ordering::Relaxed)) as i64;
+        let dc = c.saturating_sub(LAST_FLUSH_CLICK.swap(c, Ordering::Relaxed)) as i64;
+        (dk, dc)
     }
 
     fn now_tick() -> u32 {
@@ -80,12 +92,17 @@ mod imp {
 }
 
 #[cfg(windows)]
-pub use imp::{spawn, stats};
+pub use imp::{spawn, stats, flush_delta};
 
 #[cfg(not(windows))]
 pub fn spawn(_app: tauri::AppHandle) {}
 
 #[cfg(not(windows))]
 pub fn stats() -> (u64, u64) {
+    (0, 0)
+}
+
+#[cfg(not(windows))]
+pub fn flush_delta() -> (i64, i64) {
     (0, 0)
 }

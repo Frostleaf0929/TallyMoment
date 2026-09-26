@@ -29,7 +29,20 @@ export interface DayReport {
   recording: boolean;
   paused: boolean;
   current: CurrentApp | null;
+  keys: number;
+  clicks: number;
   apps: AppUsage[];
   hourly: HourSlice[];
   segments: SegSlice[];
+}
+
+export interface DailyTotal {
+  date: string;
+  seconds: number;
+}
+
+export interface Insight {
+  title: string;
+  detail: string;
+  tone: "good" | "warn" | "info";
 }

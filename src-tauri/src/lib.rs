@@ -1,9 +1,10 @@
 mod input_hook;
+mod insights;
 mod reminder;
 mod storage;
 mod tracker;
 
-use chrono::Timelike as _;
+use chrono::{TimeZone as _, Timelike as _};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -30,6 +31,8 @@ struct DayReport {
     recording: bool,
     paused: bool,
     current: Option<CurrentApp>,
+    keys: i64,
+    clicks: i64,
     apps: Vec<storage::AppUsage>,
     hourly: Vec<storage::HourSlice>,
     segments: Vec<storage::SegSlice>,
@@ -97,6 +100,7 @@ fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
     let total_seconds = apps.iter().map(|a| a.seconds).sum::<i64>();
     let app_count = apps.len();
     let recording = session.is_some() && !paused;
+    let (keys, clicks) = storage::input_for_date(&conn, &date)?;
     Ok(DayReport {
         date,
         total_seconds,
@@ -104,10 +108,74 @@ fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
         recording,
         paused,
         current,
+        keys,
+        clicks,
         apps,
         hourly,
         segments,
     })
+}
+
+/// 历史某日报表（无实时会话合并）
+#[tauri::command]
+fn day_report(app: tauri::AppHandle, date: String) -> Result<DayReport, String> {
+    let day = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+        .map_err(|_| "日期格式需为 YYYY-MM-DD")?;
+    let naive = day.and_hms_opt(0, 0, 0).ok_or("日期异常")?;
+    let day_start = chrono::Local
+        .from_local_datetime(&naive)
+        .single()
+        .ok_or("日期异常")?
+        .timestamp();
+    let day_end = day_start + 86_400;
+
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let apps = storage::today_app_usage(&conn, &date)?;
+    let total_seconds = apps.iter().map(|a| a.seconds).sum::<i64>();
+    let app_count = apps.len();
+    let hourly = storage::today_hourly(&conn, &date)?;
+    let segments = storage::today_segments(&conn, day_start, day_end)?;
+    let (keys, clicks) = storage::input_for_date(&conn, &date)?;
+    Ok(DayReport {
+        date,
+        total_seconds,
+        app_count,
+        recording: false,
+        paused: false,
+        current: None,
+        keys,
+        clicks,
+        apps,
+        hourly,
+        segments,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DailyTotal {
+    date: String,
+    seconds: i64,
+}
+
+#[tauri::command]
+fn recent_daily(app: tauri::AppHandle, days: i32) -> Result<Vec<DailyTotal>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::recent_daily(&conn, days.clamp(1, 60)).map(|v| {
+        v.into_iter()
+            .map(|(date, seconds)| DailyTotal { date, seconds })
+            .collect()
+    })
+}
+
+/// 规则版每日洞察（纯本地，无 AI 依赖）
+#[tauri::command]
+fn insights(app: tauri::AppHandle) -> Result<Vec<insights::Insight>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    insights::compute(&conn)
 }
 
 #[tauri::command]
@@ -256,7 +324,10 @@ pub fn run() {
             import_tai,
             export_json,
             restore_json,
-            pet_stats
+            pet_stats,
+            day_report,
+            recent_daily,
+            insights
         ])
         .setup(|app| {
             let today_item =
@@ -360,7 +431,7 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app, event| {
-        // 退出前结算未完会话，避免丢数据
+        // 退出前结算未完会话与键鼠增量，避免丢数据
         if let tauri::RunEvent::ExitRequested { .. } = event {
             if let Some(shared) = app.try_state::<TrackerShared>() {
                 if let Ok(mut guard) = shared.session.lock() {
@@ -374,6 +445,21 @@ pub fn run() {
                                 );
                             }
                         }
+                    }
+                }
+            }
+            let (dk, dc) = input_hook::flush_delta();
+            if dk > 0 || dc > 0 {
+                if let Some(db) = app.try_state::<Db>() {
+                    if let Ok(conn) = db.0.lock() {
+                        let dt = chrono::Local::now();
+                        let _ = storage::add_input_stats(
+                            &conn,
+                            &dt.format("%Y-%m-%d").to_string(),
+                            dt.hour() as i32,
+                            dk,
+                            dc,
+                        );
                     }
                 }
             }
