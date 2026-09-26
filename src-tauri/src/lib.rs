@@ -1,5 +1,6 @@
 mod input_hook;
 mod insights;
+mod pet_settings;
 mod reminder;
 mod storage;
 mod tracker;
@@ -404,6 +405,117 @@ fn delete_data(
     storage::delete_range(&conn, &scope, app_id)
 }
 
+/// 桌宠设置读取
+#[tauri::command]
+fn pet_settings_get(app: tauri::AppHandle) -> Result<pet_settings::PetSettings, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    Ok(pet_settings::load(&conn))
+}
+
+/// 桌宠设置保存并即时应用
+#[tauri::command]
+fn pet_settings_set(
+    app: tauri::AppHandle,
+    scale: f64,
+    opacity: f64,
+    always_on_top: bool,
+    pass_through: bool,
+    mirror: bool,
+) -> Result<pet_settings::PetSettings, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let mut s = pet_settings::load(&conn);
+    s.scale = scale.clamp(50.0, 200.0);
+    s.opacity = opacity.clamp(30.0, 100.0);
+    s.always_on_top = always_on_top;
+    s.pass_through = pass_through;
+    s.mirror = mirror;
+    pet_settings::save(&conn, &s)?;
+    pet_settings::apply_window(&app, &s);
+    Ok(s)
+}
+
+/// 桌宠位置重置（回到右下角默认位）
+#[tauri::command]
+fn pet_reset_position(app: tauri::AppHandle) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let mut s = pet_settings::load(&conn);
+    s.pos_x = -1.0;
+    s.pos_y = -1.0;
+    pet_settings::save(&conn, &s)?;
+    pet_settings::apply_window(&app, &s);
+    Ok(())
+}
+
+/// 拖动结束后保存桌宠位置（逻辑坐标）
+#[tauri::command]
+fn pet_save_position(app: tauri::AppHandle, x: f64, y: f64) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let mut s = pet_settings::load(&conn);
+    s.pos_x = x;
+    s.pos_y = y;
+    pet_settings::save(&conn, &s)
+}
+
+/// 模型列表（内置 + 已导入）
+#[tauri::command]
+fn pet_models_list(app: tauri::AppHandle) -> Result<Vec<pet_settings::ModelInfo>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    pet_settings::list_models(&conn)
+}
+
+/// 导入 Mver 模型包（文件夹或 ZIP）
+#[tauri::command]
+fn pet_import_model(app: tauri::AppHandle, path: String) -> Result<pet_settings::ModelInfo, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let models = pet_settings::models_dir(&conn);
+    pet_settings::import_model_in(&models, &path)
+}
+
+/// 切换启用模型
+#[tauri::command]
+fn pet_model_set_active(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<pet_settings::PetSettings, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    if id != pet_settings::BUILTIN_ID {
+        let dir = pet_settings::models_dir(&conn).join(&id);
+        if !dir.join("config.json").is_file() {
+            return Err("模型不存在".into());
+        }
+    }
+    storage::set_setting(&conn, "pet.active_model", &id)?;
+    let s = pet_settings::load(&conn);
+    pet_settings::apply_window(&app, &s);
+    Ok(s)
+}
+
+/// 删除已导入的模型
+#[tauri::command]
+fn pet_model_delete(app: tauri::AppHandle, id: String) -> Result<Vec<pet_settings::ModelInfo>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let models = pet_settings::models_dir(&conn);
+    pet_settings::delete_model_in(&models, &conn, &id)?;
+    pet_settings::list_models(&conn)
+}
+
+/// 读取模型 config.json（前端解析按键矩阵）
+#[tauri::command]
+fn pet_model_config(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let models = pet_settings::models_dir(&conn);
+    pet_settings::model_config_in(&models, &id)
+}
+
 #[tauri::command]
 fn close_reminder(app: tauri::AppHandle) {
     reminder::close(&app);
@@ -542,6 +654,15 @@ pub fn run() {
             reminder_show_window,
             export_tai,
             delete_data,
+            pet_settings_get,
+            pet_settings_set,
+            pet_reset_position,
+            pet_save_position,
+            pet_models_list,
+            pet_import_model,
+            pet_model_set_active,
+            pet_model_delete,
+            pet_model_config,
             close_reminder,
             import_tai,
             export_json,
@@ -619,26 +740,43 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // 桌宠窗：透明、置顶、无装饰，屏幕右下角（提醒窗上方留空间）
-            let (mut px, mut py) = (900.0, 600.0);
-            if let Ok(Some(m)) = app.primary_monitor() {
-                let scale = m.scale_factor();
+            // 桌宠窗：读取持久化设置（缩放/位置/置顶/穿透）
+            let pet_s = {
+                let db = app.state::<Db>();
+                let conn = db
+                    .0
+                    .lock()
+                    .map_err(|_| "数据库锁不可用")
+                    .unwrap_or_else(|_| panic!("db lock"));
+                pet_settings::load(&conn)
+            };
+            let k = pet_s.scale / 100.0;
+            let (mut px, mut py) = (-1.0, -1.0);
+            if pet_s.pos_x >= 0.0 && pet_s.pos_y >= 0.0 {
+                px = pet_s.pos_x;
+                py = pet_s.pos_y;
+            } else if let Ok(Some(m)) = app.primary_monitor() {
+                let sc = m.scale_factor();
                 let size = m.size();
-                px = size.width as f64 / scale - 392.0;
-                py = size.height as f64 / scale - 306.0;
+                px = size.width as f64 / sc - pet_settings::BASE_W * k - 392.0;
+                py = size.height as f64 / sc - pet_settings::BASE_H * k - 306.0;
             }
-            let _ = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("index.html".into()))
+            let pet_window = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("index.html".into()))
                 .title("拾刻桌宠")
-                .inner_size(372.0, 226.0)
-                .position(px, py)
+                .inner_size(pet_settings::BASE_W * k, pet_settings::BASE_H * k)
+                .position(px.max(0.0), py.max(0.0))
                 .decorations(false)
                 .transparent(true)
-                .always_on_top(true)
+                .always_on_top(pet_s.always_on_top)
                 .skip_taskbar(true)
                 .resizable(false)
                 .focused(false)
                 .shadow(false)
+                .visible(true)
                 .build();
+            if let Ok(w) = pet_window {
+                let _ = w.set_ignore_cursor_events(pet_s.pass_through);
+            }
 
             tracker::spawn(app.handle().clone());
             input_hook::spawn(app.handle().clone());

@@ -126,3 +126,16 @@ export interface ReminderPayload {
   accent: string | null;
   actions: ReminderAction[];
 }
+
+export interface PetSettings {
+  scale: number;
+  opacity: number;
+  alwaysOnTop: boolean;
+  passThrough: boolean;
+  mirror: boolean;
+  posX: number;
+  posY: number;
+  activeModel: string;
+  activeModelDir: string | null;
+  mode: "keyboard" | "standard";
+}

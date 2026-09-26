@@ -12,6 +12,7 @@ import HistoryPage from "./pages/HistoryPage.vue";
 import InsightsPage from "./pages/InsightsPage.vue";
 import TodoPage from "./pages/TodoPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
+import PetSettingsPage from "./pages/PetSettingsPage.vue";
 
 // 提醒小窗/桌宠与主面板共用同一个前端入口，按窗口标签分流
 let mode = "main";
@@ -25,13 +26,14 @@ try {
 // 标记到 <html>，供 theme.css 让提醒/桌宠窗体透明
 document.documentElement.dataset.mode = mode;
 
-type Tab = "today" | "history" | "insights" | "todo" | "data" | "settings";
+type Tab = "today" | "history" | "insights" | "todo" | "petsettings" | "data" | "settings";
 const tabs: { key: Tab; label: string; icon: string }[] = [
   { key: "today", label: "今日", icon: "clock" },
   { key: "history", label: "历史", icon: "doc" },
   { key: "insights", label: "洞察", icon: "graph" },
   { key: "todo", label: "待办", icon: "checklist" },
   { key: "data", label: "数据", icon: "database" },
+  { key: "petsettings", label: "桌宠", icon: "cat" },
 ];
 const active = ref<Tab>("today");
 
@@ -41,6 +43,7 @@ const themePref = ref<ThemePref>((localStorage.getItem("ui.theme") as ThemePref)
 const accent = ref(localStorage.getItem("ui.accent") || "indigo");
 const glass = ref(localStorage.getItem("ui.glass") !== "off");
 const collapsed = ref(localStorage.getItem("ui.side") === "collapsed");
+const brandLang = ref(localStorage.getItem("ui.brandLang") || "both");
 const systemDark = ref(true);
 let media: MediaQueryList | undefined;
 
@@ -57,6 +60,11 @@ watchEffect(() => {
   localStorage.setItem("ui.theme", themePref.value);
   localStorage.setItem("ui.accent", accent.value);
   localStorage.setItem("ui.glass", glass.value ? "on" : "off");
+  localStorage.setItem("ui.brandLang", brandLang.value);
+  // 窗口标题按品牌语言联动
+  const t = brandLang.value === "zh" ? "拾刻" : brandLang.value === "en" ? "TallyMoment" : "拾刻 · TallyMoment";
+  document.title = t;
+  try { getCurrentWebviewWindow().setTitle(t); } catch { /* 浏览器直开 */ }
 });
 
 function toggleCollapse() {
@@ -108,8 +116,8 @@ onUnmounted(() => clearInterval(timer));
     <div v-else class="shell" :class="{ 'glass-off': !glass }">
       <aside class="side" :class="{ collapsed }">
         <div class="brand">
-          <span class="logo">拾刻</span>
-          <span v-if="!collapsed" class="en">TallyMoment</span>
+          <span v-if="brandLang !== 'en'" class="logo">拾刻</span>
+          <span v-if="!collapsed && brandLang !== 'zh'" class="en">TallyMoment</span>
         </div>
         <nav class="nav">
           <button
@@ -153,8 +161,9 @@ onUnmounted(() => clearInterval(timer));
             <DataCard />
           </div>
         </div>
+        <PetSettingsPage v-show="active === 'petsettings'" />
         <SettingsPage v-show="active === 'settings'" v-model:theme-pref="themePref"
-          v-model:accent="accent" v-model:glass="glass" v-model:pet-visible="petVisible"
+          v-model:accent="accent" v-model:brand-lang="brandLang" v-model:glass="glass" v-model:pet-visible="petVisible"
           @toggle-glass="toggleGlass" @toggle-pet="togglePet" />
       </main>
     </div>

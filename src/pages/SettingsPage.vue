@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { NSwitch } from "naive-ui";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import Icon from "../components/Icon.vue";
@@ -11,6 +11,7 @@ const props = defineProps<{
   accent: string;
   glass: boolean;
   petVisible: boolean;
+  brandLang: string;
 }>();
 
 const emit = defineEmits<{
@@ -20,6 +21,7 @@ const emit = defineEmits<{
   (e: "update:petVisible", v: boolean): void;
   (e: "toggleGlass"): void;
   (e: "togglePet"): void;
+  (e: "update:brandLang", v: string): void;
 }>();
 
 const themes: { key: ThemePref; label: string; icon: string }[] = [
@@ -47,6 +49,17 @@ onMounted(async () => {
     autoStart.value = false;
   }
 });
+
+const brandLang = computed({
+  get: () => props.brandLang as string,
+  set: (v: string) => emit("update:brandLang", v),
+});
+
+const brandOptions = [
+  { key: "zh", label: "中文 · 拾刻" },
+  { key: "en", label: "英文 · TallyMoment" },
+  { key: "both", label: "双语 · 拾刻 TallyMoment" },
+];
 
 const accents: { key: string; color: string; label: string }[] = [
   { key: "indigo", color: "#7b84ec", label: "靛蓝" },
@@ -77,6 +90,21 @@ const accents: { key: string; color: string; label: string }[] = [
         >
           <Icon :name="t.icon" :size="16" />
           <span>{{ t.label }}</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="glass-card card">
+      <h2>品牌语言</h2>
+      <div class="seg">
+        <button
+          v-for="b in brandOptions"
+          :key="b.key"
+          class="seg-item"
+          :class="{ active: brandLang === b.key }"
+          @click="brandLang = b.key"
+        >
+          {{ b.label }}
         </button>
       </div>
     </div>
