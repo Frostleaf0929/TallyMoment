@@ -1,17 +1,58 @@
 <script setup lang="ts">
+import { onMounted, onUnmounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
+
 const stack = ["Tauri 2", "Vue 3", "TypeScript", "Pinia", "Naive UI", "ECharts"];
+
+const seconds = ref(0);
+const paused = ref(false);
+const recording = ref(false);
+const online = ref(false);
+let timer: number | undefined;
+
+async function refresh() {
+  try {
+    const s = await invoke<{ seconds: number; paused: boolean; recording: boolean }>(
+      "today_summary"
+    );
+    seconds.value = s.seconds;
+    paused.value = s.paused;
+    recording.value = s.recording;
+    online.value = true;
+  } catch {
+    online.value = false;
+  }
+}
+
+onMounted(() => {
+  refresh();
+  timer = window.setInterval(refresh, 3000);
+});
+onUnmounted(() => clearInterval(timer));
+
+const minutes = () => Math.floor(seconds.value / 60);
+const statusText = () => (!online.value ? "未连接" : paused.value ? "已暂停" : "记录中");
 </script>
 
 <template>
   <main class="landing">
-    <div class="badge">M0 · 脚手架就绪</div>
+    <div class="badge">M1 · 核心时间记录</div>
     <h1>拾刻</h1>
     <p class="sub">TallyMoment</p>
     <p class="slogan">拾起每一刻，看清每一天</p>
+
+    <div class="status">
+      <div class="pulse" :class="{ off: paused || !online }"></div>
+      <span>{{ statusText() }}</span>
+      <span class="divider">·</span>
+      <span class="num">{{ minutes() }}</span>
+      <span>分钟今日</span>
+    </div>
+
     <div class="stack">
       <span v-for="s in stack" :key="s">{{ s }}</span>
     </div>
-    <p class="hint">窗口与托盘运行中 · 点右上角 × 会最小化到托盘，托盘图标可再次打开</p>
+    <p class="hint">关闭窗口会最小化到托盘，记录不会中断 · 托盘菜单可暂停记录</p>
   </main>
 </template>
 
@@ -78,6 +119,51 @@ h1 {
 .slogan {
   margin: 14px 0 0;
   color: #b6bdcc;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 24px;
+  padding: 10px 20px;
+  border: 1px solid #2a2f3d;
+  background: rgba(22, 26, 36, 0.8);
+  border-radius: 12px;
+  color: #b6bdcc;
+}
+
+.pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
+  animation: pulse 2s infinite;
+}
+
+.pulse.off {
+  background: #6b7280;
+  animation: none;
+  box-shadow: none;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(52, 211, 153, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
+  }
+}
+
+.num {
+  color: #34d399;
+  font-weight: 700;
+  font-size: 18px;
 }
 
 .stack {
