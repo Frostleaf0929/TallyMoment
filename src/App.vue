@@ -9,6 +9,7 @@ import DayTimeline from "./components/DayTimeline.vue";
 import HourlyChart from "./components/HourlyChart.vue";
 import AppRanking from "./components/AppRanking.vue";
 import ChecklistCard from "./components/ChecklistCard.vue";
+import DataCard from "./components/DataCard.vue";
 import ReminderCard from "./components/ReminderCard.vue";
 
 // 提醒小窗与主面板共用同一个前端入口，按窗口标签分流
@@ -112,6 +113,11 @@ const statusText = () =>
       <section class="card wide">
         <h2>我的清单（到点在右下角弹提醒）</h2>
         <ChecklistCard />
+      </section>
+
+      <section class="card wide">
+        <h2>数据管理</h2>
+        <DataCard />
       </section>
     </main>
   </NConfigProvider>

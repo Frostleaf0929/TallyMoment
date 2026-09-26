@@ -149,6 +149,47 @@ fn close_reminder(app: tauri::AppHandle) {
     reminder::close(&app);
 }
 
+/// 导入 Tai 的 data.db（同文件防重复导入：按 路径+修改时间 签名）
+#[tauri::command]
+fn import_tai(app: tauri::AppHandle, path: String) -> Result<storage::ImportSummary, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let sig = std::fs::metadata(&path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .map(|t| format!("{t:?}|{path}"));
+    if let (Some(s), Some(prev)) = (&sig, storage::get_setting(&conn, "tai_import_sig")) {
+        if *prev == *s {
+            return Err("这个文件已经导入过了（文件内容未变化）".into());
+        }
+    }
+    let summary = storage::import_tai_data(&path, &conn)?;
+    if let Some(s) = sig {
+        let _ = storage::set_setting(&conn, "tai_import_sig", &s);
+    }
+    Ok(summary)
+}
+
+/// 全量导出 JSON 到数据目录，返回文件路径
+#[tauri::command]
+fn export_json(app: tauri::AppHandle) -> Result<String, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let dir = storage::resolve_db_path()?
+        .parent()
+        .ok_or("数据目录异常")?
+        .to_path_buf();
+    storage::export_json(&conn, &dir)
+}
+
+/// 从 JSON 恢复（仅空库）
+#[tauri::command]
+fn restore_json(app: tauri::AppHandle, path: String) -> Result<storage::ImportSummary, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::restore_json(&conn, &path)
+}
+
 // 关闭主窗口时不退出，而是隐藏到托盘（记录在后台继续）
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -187,7 +228,10 @@ pub fn run() {
             checklist_add,
             checklist_set_enabled,
             checklist_delete,
-            close_reminder
+            close_reminder,
+            import_tai,
+            export_json,
+            restore_json
         ])
         .setup(|app| {
             let today_item =
