@@ -36,6 +36,7 @@ pub struct Db(pub Mutex<Connection>);
 pub struct TrayMenu {
     pub today: OnceLock<tauri::menu::MenuItem<tauri::Wry>>,
     pub pause: OnceLock<tauri::menu::CheckMenuItem<tauri::Wry>>,
+    pub pet: OnceLock<tauri::menu::CheckMenuItem<tauri::Wry>>,
 }
 
 /// Windows 空闲毫秒数（GetLastInputInfo，只读最后输入时刻，不读取输入内容）

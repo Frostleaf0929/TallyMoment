@@ -1,3 +1,4 @@
+mod input_hook;
 mod reminder;
 mod storage;
 mod tracker;
@@ -9,7 +10,7 @@ use std::sync::{Mutex, OnceLock};
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tracker::{Db, TrackerShared, TrayMenu};
 
@@ -170,16 +171,32 @@ fn import_tai(app: tauri::AppHandle, path: String) -> Result<storage::ImportSumm
     Ok(summary)
 }
 
-/// 全量导出 JSON 到数据目录，返回文件路径
+/// 全量导出 JSON：带 path 写到指定位置，否则写数据目录；返回文件路径
 #[tauri::command]
-fn export_json(app: tauri::AppHandle) -> Result<String, String> {
+fn export_json(app: tauri::AppHandle, path: Option<String>) -> Result<String, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    let dir = storage::resolve_db_path()?
-        .parent()
-        .ok_or("数据目录异常")?
-        .to_path_buf();
-    storage::export_json(&conn, &dir)
+    let dir = match path.as_ref() {
+        Some(p) => std::path::PathBuf::from(p)
+            .parent()
+            .ok_or("导出路径异常")?
+            .to_path_buf(),
+        None => storage::resolve_db_path()?
+            .parent()
+            .ok_or("数据目录异常")?
+            .to_path_buf(),
+    };
+    let file_name = match path.as_ref() {
+        Some(p) => std::path::PathBuf::from(p)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .ok_or("导出路径异常")?,
+        None => format!(
+            "export-{}.json",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        ),
+    };
+    storage::export_json(&conn, &dir, &file_name)
 }
 
 /// 从 JSON 恢复（仅空库）
@@ -188,6 +205,11 @@ fn restore_json(app: tauri::AppHandle, path: String) -> Result<storage::ImportSu
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
     storage::restore_json(&conn, &path)
+}
+
+#[tauri::command]
+fn pet_stats() -> (u64, u64) {
+    input_hook::stats()
 }
 
 // 关闭主窗口时不退出，而是隐藏到托盘（记录在后台继续）
@@ -212,6 +234,7 @@ pub fn run() {
     eprintln!("[tallymoment] 数据库: {}", db_path.display());
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Db(Mutex::new(db)))
         .manage(TrackerShared {
@@ -221,6 +244,7 @@ pub fn run() {
         .manage(TrayMenu {
             today: OnceLock::new(),
             pause: OnceLock::new(),
+            pet: OnceLock::new(),
         })
         .invoke_handler(tauri::generate_handler![
             today_report,
@@ -231,22 +255,28 @@ pub fn run() {
             close_reminder,
             import_tai,
             export_json,
-            restore_json
+            restore_json,
+            pet_stats
         ])
         .setup(|app| {
             let today_item =
                 MenuItem::with_id(app, "today", "今日累计 0 分钟", false, None::<&str>)?;
             let pause_item =
                 CheckMenuItem::with_id(app, "pause", "暂停记录", true, false, None::<&str>)?;
+            let pet_item =
+                CheckMenuItem::with_id(app, "pet", "显示桌宠", true, true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "打开面板", true, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu =
-                Menu::with_items(app, &[&today_item, &pause_item, &sep1, &show, &sep2, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[&today_item, &pause_item, &pet_item, &sep1, &show, &sep2, &quit],
+            )?;
 
             let _ = app.state::<TrayMenu>().today.set(today_item);
             let _ = app.state::<TrayMenu>().pause.set(pause_item);
+            let _ = app.state::<TrayMenu>().pet.set(pet_item);
 
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -264,6 +294,15 @@ pub fn run() {
                         }
                     }
                     "quit" => app.exit(0),
+                    "pet" => {
+                        if let Some(w) = app.get_webview_window("pet") {
+                            let vis = w.is_visible().unwrap_or(false);
+                            let _ = if vis { w.hide() } else { w.show() };
+                            if let Some(p) = app.state::<TrayMenu>().pet.get() {
+                                let _ = p.set_checked(!vis);
+                            }
+                        }
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -286,7 +325,29 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // 桌宠窗：透明、置顶、无装饰，屏幕右下角（提醒窗上方留空间）
+            let (mut px, mut py) = (900.0, 600.0);
+            if let Ok(Some(m)) = app.primary_monitor() {
+                let scale = m.scale_factor();
+                let size = m.size();
+                px = size.width as f64 / scale - 392.0;
+                py = size.height as f64 / scale - 306.0;
+            }
+            let _ = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("index.html".into()))
+                .title("拾刻桌宠")
+                .inner_size(372.0, 226.0)
+                .position(px, py)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .focused(false)
+                .shadow(false)
+                .build();
+
             tracker::spawn(app.handle().clone());
+            input_hook::spawn(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

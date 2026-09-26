@@ -10,12 +10,15 @@ import HourlyChart from "./components/HourlyChart.vue";
 import AppRanking from "./components/AppRanking.vue";
 import ChecklistCard from "./components/ChecklistCard.vue";
 import DataCard from "./components/DataCard.vue";
+import PetView from "./components/PetView.vue";
 import ReminderCard from "./components/ReminderCard.vue";
 
-// 提醒小窗与主面板共用同一个前端入口，按窗口标签分流
+// 提醒小窗/桌宠与主面板共用同一个前端入口，按窗口标签分流
 let mode = "main";
 try {
-  if (getCurrentWebviewWindow().label === "reminder") mode = "reminder";
+  const label = getCurrentWebviewWindow().label;
+  if (label === "reminder") mode = "reminder";
+  else if (label === "pet") mode = "pet";
 } catch {
   /* 浏览器直开时按主面板处理 */
 }
@@ -59,6 +62,7 @@ const statusText = () =>
 <template>
   <NConfigProvider :theme="darkTheme">
     <ReminderCard v-if="mode === 'reminder'" />
+    <PetView v-else-if="mode === 'pet'" />
     <main v-else class="dash">
       <header class="top">
         <div class="brand">

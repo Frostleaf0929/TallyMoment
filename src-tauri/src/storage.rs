@@ -706,8 +706,8 @@ pub fn import_tai_data(src_path: &str, conn: &Connection) -> Result<ImportSummar
     Ok(summary)
 }
 
-/// 全量导出为 JSON，写到数据目录下，返回文件路径
-pub fn export_json(conn: &Connection, dir: &std::path::Path) -> Result<String, String> {
+/// 全量导出为 JSON，写到 dir/file_name，返回文件完整路径
+pub fn export_json(conn: &Connection, dir: &std::path::Path, file_name: &str) -> Result<String, String> {
     use serde_json::json;
 
     let mut apps = Vec::new();
@@ -818,10 +818,7 @@ pub fn export_json(conn: &Connection, dir: &std::path::Path) -> Result<String, S
     });
 
     std::fs::create_dir_all(dir).map_err(|e| format!("创建导出目录失败: {e}"))?;
-    let path = dir.join(format!(
-        "export-{}.json",
-        chrono::Local::now().format("%Y%m%d-%H%M%S")
-    ));
+    let path = dir.join(file_name);
     std::fs::write(
         &path,
         serde_json::to_string_pretty(&payload).map_err(|e| format!("序列化失败: {e}"))?,
@@ -1048,7 +1045,7 @@ mod tests {
         write_segment(&conn, app_id, 1_700_000_000, 1_700_000_600, "测试区间").unwrap();
         checklist_add(&conn, "测试清单", "08:00", "09:00", true, true).unwrap();
 
-        let exported = export_json(&conn, &dir).unwrap();
+        let exported = export_json(&conn, &dir, "export-test.json").unwrap();
 
         let p2 = tmp_db("restored.db");
         let conn2 = open(&p2).unwrap();
