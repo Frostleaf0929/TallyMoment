@@ -28,6 +28,18 @@ pub struct SegSlice {
     pub title: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecklistItem {
+    pub id: i64,
+    pub name: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub remind_start: bool,
+    pub remind_end: bool,
+    pub enabled: bool,
+}
+
 /// 数据库文件位置：绿色优先（exe 旁 Data/），不可写时回退 %APPDATA%\TallyMoment\Data
 pub fn resolve_db_path() -> Result<PathBuf, String> {
     let primary = std::env::current_exe()
@@ -100,6 +112,16 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS checklist (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT NOT NULL,
+            start_time    TEXT NOT NULL,
+            end_time      TEXT NOT NULL,
+            remind_start  INTEGER NOT NULL DEFAULT 1,
+            remind_end    INTEGER NOT NULL DEFAULT 1,
+            enabled       INTEGER NOT NULL DEFAULT 1,
+            last_fired_key TEXT
         );",
     )
     .map_err(|e| format!("建表失败: {e}"))?;
@@ -292,4 +314,140 @@ pub fn today_start_ts() -> i64 {
         .and_then(|t| t.with_second(0))
         .and_then(|t| t.with_nanosecond(0));
     midnight.map(|t| t.timestamp()).unwrap_or(now.timestamp())
+}
+
+// ---------- 清单 ----------
+
+fn valid_hhmm(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 5
+        && b[2] == b':'
+        && b[..2].iter().all(|c| c.is_ascii_digit())
+        && b[3..].iter().all(|c| c.is_ascii_digit())
+}
+
+fn checklist_row(row: &rusqlite::Row) -> rusqlite::Result<ChecklistItem> {
+    Ok(ChecklistItem {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        start_time: row.get(2)?,
+        end_time: row.get(3)?,
+        remind_start: row.get::<_, i64>(4)? != 0,
+        remind_end: row.get::<_, i64>(5)? != 0,
+        enabled: row.get::<_, i64>(6)? != 0,
+    })
+}
+
+const CHECKLIST_COLS: &str =
+    "id, name, start_time, end_time, remind_start, remind_end, enabled";
+
+pub fn checklist_list(conn: &Connection) -> Result<Vec<ChecklistItem>, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {CHECKLIST_COLS} FROM checklist ORDER BY start_time, id"
+        ))
+        .map_err(|e| format!("查询清单失败: {e}"))?;
+    let rows = stmt
+        .query_map([], checklist_row)
+        .map_err(|e| format!("查询清单失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取清单失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 新增清单项（不支持跨天，要求 start < end）
+pub fn checklist_add(
+    conn: &Connection,
+    name: &str,
+    start_time: &str,
+    end_time: &str,
+    remind_start: bool,
+    remind_end: bool,
+) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 50 {
+        return Err("名称需为 1~50 个字符".into());
+    }
+    if !valid_hhmm(start_time) || !valid_hhmm(end_time) {
+        return Err("时间格式需为 HH:MM".into());
+    }
+    if start_time >= end_time {
+        return Err("开始时间需早于结束时间（暂不支持跨天）".into());
+    }
+    conn.execute(
+        "INSERT INTO checklist(name, start_time, end_time, remind_start, remind_end) VALUES(?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            name,
+            start_time,
+            end_time,
+            remind_start as i64,
+            remind_end as i64
+        ],
+    )
+    .map_err(|e| format!("新增清单失败: {e}"))?;
+    Ok(())
+}
+
+pub fn checklist_set_enabled(conn: &Connection, id: i64, enabled: bool) -> Result<(), String> {
+    conn.execute(
+        "UPDATE checklist SET enabled = ?2 WHERE id = ?1",
+        rusqlite::params![id, enabled as i64],
+    )
+    .map_err(|e| format!("更新清单失败: {e}"))?;
+    Ok(())
+}
+
+pub fn checklist_delete(conn: &Connection, id: i64) -> Result<(), String> {
+    conn.execute("DELETE FROM checklist WHERE id = ?1", [id])
+        .map_err(|e| format!("删除清单失败: {e}"))?;
+    Ok(())
+}
+
+/// 调度用：启用的清单项（含防重复键）
+pub struct ChecklistDue {
+    pub id: i64,
+    pub name: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub remind_start: bool,
+    pub remind_end: bool,
+    pub last_fired_key: String,
+}
+
+pub fn checklist_enabled(conn: &Connection) -> Result<Vec<ChecklistDue>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, start_time, end_time, remind_start, remind_end, COALESCE(last_fired_key, '')
+             FROM checklist WHERE enabled = 1",
+        )
+        .map_err(|e| format!("查询清单失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ChecklistDue {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                start_time: row.get(2)?,
+                end_time: row.get(3)?,
+                remind_start: row.get::<_, i64>(4)? != 0,
+                remind_end: row.get::<_, i64>(5)? != 0,
+                last_fired_key: row.get(6)?,
+            })
+        })
+        .map_err(|e| format!("查询清单失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取清单失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+pub fn checklist_mark_fired(conn: &Connection, id: i64, key: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE checklist SET last_fired_key = ?2 WHERE id = ?1",
+        rusqlite::params![id, key],
+    )
+    .map_err(|e| format!("更新提醒状态失败: {e}"))?;
+    Ok(())
 }

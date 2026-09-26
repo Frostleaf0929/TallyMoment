@@ -1,12 +1,23 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { darkTheme, NConfigProvider } from "naive-ui";
 import type { DayReport } from "./types";
 import { fmtDuration } from "./lib/format";
 import DayTimeline from "./components/DayTimeline.vue";
 import HourlyChart from "./components/HourlyChart.vue";
 import AppRanking from "./components/AppRanking.vue";
+import ChecklistCard from "./components/ChecklistCard.vue";
+import ReminderCard from "./components/ReminderCard.vue";
+
+// 提醒小窗与主面板共用同一个前端入口，按窗口标签分流
+let mode = "main";
+try {
+  if (getCurrentWebviewWindow().label === "reminder") mode = "reminder";
+} catch {
+  /* 浏览器直开时按主面板处理 */
+}
 
 const report = ref<DayReport | null>(null);
 const online = ref(false);
@@ -22,6 +33,7 @@ async function refresh() {
 }
 
 onMounted(() => {
+  if (mode !== "main") return;
   refresh();
   timer = window.setInterval(refresh, 5000);
 });
@@ -45,7 +57,8 @@ const statusText = () =>
 
 <template>
   <NConfigProvider :theme="darkTheme">
-    <main class="dash">
+    <ReminderCard v-if="mode === 'reminder'" />
+    <main v-else class="dash">
       <header class="top">
         <div class="brand">
           <span class="logo">拾刻</span>
@@ -94,6 +107,11 @@ const statusText = () =>
           <h2>应用排行</h2>
           <AppRanking :apps="report?.apps ?? []" />
         </div>
+      </section>
+
+      <section class="card wide">
+        <h2>我的清单（到点在右下角弹提醒）</h2>
+        <ChecklistCard />
       </section>
     </main>
   </NConfigProvider>
@@ -265,6 +283,5 @@ body {
   display: grid;
   grid-template-columns: 3fr 2fr;
   gap: 14px;
-  flex: 1;
 }
 </style>

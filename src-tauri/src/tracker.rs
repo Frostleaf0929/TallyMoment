@@ -6,7 +6,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use crate::storage;
+use crate::{reminder, storage};
 
 /// 空闲判定阈值：超过 60 秒无键鼠输入视为离开，停止计时
 const IDLE_THRESHOLD_MS: u32 = 60_000;
@@ -117,6 +117,8 @@ pub fn spawn(app: AppHandle) {
             refresh_tray(&app);
         }
 
+        check_checklist(&app, Local::now());
+
         let shared = app.state::<TrackerShared>();
         let paused = shared.paused.load(Ordering::Relaxed);
 
@@ -201,6 +203,39 @@ pub fn spawn(app: AppHandle) {
             }
         }
     });
+}
+
+/// 清单调度：当前 HH:MM 命中起止时间且今日未提醒过则弹窗（每秒检查，防重复键保证只发一次）
+fn check_checklist(app: &AppHandle, now: chrono::DateTime<chrono::Local>) {
+    let Some(Ok(rows)) = with_db(app, |db| storage::checklist_enabled(db)) else {
+        return;
+    };
+    let date = now.format("%Y-%m-%d").to_string();
+    let hhmm = now.format("%H:%M").to_string();
+    for r in rows {
+        let (kind, wanted) = if hhmm == r.start_time {
+            ("start", r.remind_start)
+        } else if hhmm == r.end_time {
+            ("end", r.remind_end)
+        } else {
+            continue;
+        };
+        if !wanted {
+            continue;
+        }
+        let key = format!("{}-{}-{}", r.id, date, kind);
+        if r.last_fired_key == key {
+            continue;
+        }
+        with_db(app, |db| storage::checklist_mark_fired(db, r.id, &key));
+        let message = if kind == "start" {
+            format!("该开始了：{}（{} – {}）", r.name, r.start_time, r.end_time)
+        } else {
+            format!("该收尾了：{}（{} – {}）", r.name, r.start_time, r.end_time)
+        };
+        reminder::show(app, &r.name, &message);
+        break; // 同一秒只弹一条，其余下秒继续
+    }
 }
 
 fn refresh_tray(app: &AppHandle) {

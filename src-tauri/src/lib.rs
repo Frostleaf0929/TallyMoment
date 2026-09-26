@@ -1,3 +1,4 @@
+mod reminder;
 mod storage;
 mod tracker;
 
@@ -108,6 +109,46 @@ fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
     })
 }
 
+#[tauri::command]
+fn checklist_list(app: tauri::AppHandle) -> Result<Vec<storage::ChecklistItem>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::checklist_list(&conn)
+}
+
+#[tauri::command]
+fn checklist_add(
+    app: tauri::AppHandle,
+    name: String,
+    start_time: String,
+    end_time: String,
+    remind_start: bool,
+    remind_end: bool,
+) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::checklist_add(&conn, &name, &start_time, &end_time, remind_start, remind_end)
+}
+
+#[tauri::command]
+fn checklist_set_enabled(app: tauri::AppHandle, id: i64, enabled: bool) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::checklist_set_enabled(&conn, id, enabled)
+}
+
+#[tauri::command]
+fn checklist_delete(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::checklist_delete(&conn, id)
+}
+
+#[tauri::command]
+fn close_reminder(app: tauri::AppHandle) {
+    reminder::close(&app);
+}
+
 // 关闭主窗口时不退出，而是隐藏到托盘（记录在后台继续）
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -140,7 +181,14 @@ pub fn run() {
             today: OnceLock::new(),
             pause: OnceLock::new(),
         })
-        .invoke_handler(tauri::generate_handler![today_report])
+        .invoke_handler(tauri::generate_handler![
+            today_report,
+            checklist_list,
+            checklist_add,
+            checklist_set_enabled,
+            checklist_delete,
+            close_reminder
+        ])
         .setup(|app| {
             let today_item =
                 MenuItem::with_id(app, "today", "今日累计 0 分钟", false, None::<&str>)?;
