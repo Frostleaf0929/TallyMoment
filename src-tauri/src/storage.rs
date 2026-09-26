@@ -848,6 +848,39 @@ pub fn input_for_date(conn: &Connection, date: &str) -> Result<(i64, i64), Strin
     .map_err(|e| format!("查询键鼠统计失败: {e}"))
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+/// 最近 N 天逐日键鼠计数（旧→新）
+pub struct InputDay {
+    pub date: String,
+    pub keys: i64,
+    pub clicks: i64,
+}
+
+pub fn input_daily(conn: &Connection, days: i32) -> Result<Vec<InputDay>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT date, SUM(key_count), SUM(click_count) FROM input_stats
+             GROUP BY date ORDER BY date DESC LIMIT ?1",
+        )
+        .map_err(|e| format!("查询键鼠趋势失败: {e}"))?;
+    let rows = stmt
+        .query_map([days], |r| {
+            Ok(InputDay {
+                date: r.get(0)?,
+                keys: r.get(1)?,
+                clicks: r.get(2)?,
+            })
+        })
+        .map_err(|e| format!("查询键鼠趋势失败: {e}"))?;
+    let mut out: Vec<InputDay> = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取键鼠趋势失败: {e}"))?);
+    }
+    out.reverse();
+    Ok(out)
+}
+
 /// 最近 N 天每日总时长（旧→新）
 pub fn recent_daily(conn: &Connection, days: i32) -> Result<Vec<(String, i64)>, String> {
     let mut stmt = conn

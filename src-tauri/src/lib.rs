@@ -196,12 +196,12 @@ fn recent_daily(app: tauri::AppHandle, days: i32) -> Result<Vec<DailyTotal>, Str
     })
 }
 
-/// 规则版每日洞察（纯本地，无 AI 依赖）
+/// 洞察报表（专注块/心流推断/频率区间）
 #[tauri::command]
-fn insights(app: tauri::AppHandle) -> Result<Vec<insights::Insight>, String> {
+fn insights_report(app: tauri::AppHandle) -> Result<insights::InsightReport, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    insights::compute(&conn)
+    insights::report(&conn)
 }
 
 #[tauri::command]
@@ -517,7 +517,7 @@ pub fn run() {
             pet_stats,
             day_report,
             recent_daily,
-            insights,
+            insights_report,
             toggle_pet
         ])
         .setup(|app| {

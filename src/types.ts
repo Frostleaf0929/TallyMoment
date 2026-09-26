@@ -46,8 +46,36 @@ export interface DailyTotal {
 
 export interface Insight {
   title: string;
-  detail: string;
+  analysis: string;
+  suggestion: string;
   tone: "good" | "warn" | "info";
+}
+
+export interface BlockView {
+  startTs: number;
+  endTs: number;
+  seconds: number;
+  span: number;
+  apps: string[];
+  switches: number;
+  state: "flow" | "focused" | "fragmented";
+}
+
+export interface SpanDay {
+  date: string;
+  firstTs: number;
+  lastTs: number;
+}
+
+export interface InsightReport {
+  blocks: BlockView[];
+  daily: { date: string; seconds: number }[];
+  inputDaily: { date: string; keys: number; clicks: number }[];
+  spans: SpanDay[];
+  flowSeconds: number;
+  focusedSeconds: number;
+  fragmentedSeconds: number;
+  insights: Insight[];
 }
 
 export interface Task {
