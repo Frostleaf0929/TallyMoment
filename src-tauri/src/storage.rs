@@ -30,14 +30,41 @@ pub struct SegSlice {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChecklistItem {
+pub struct Task {
     pub id: i64,
-    pub name: String,
-    pub start_time: String,
-    pub end_time: String,
-    pub remind_start: bool,
-    pub remind_end: bool,
+    pub content: String,
+    pub priority: i32,
+    pub due_ts: Option<i64>,
+    pub done: bool,
+    pub done_ts: Option<i64>,
+    pub created_ts: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderRule {
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+    pub mode: String,
+    pub interval_minutes: Option<i64>,
+    pub daily_times: Vec<String>,
+    pub sticky: bool,
+    pub card_duration_sec: i32,
+    pub accent_color: Option<String>,
     pub enabled: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoStats {
+    pub today_done: i64,
+    pub week_done: i64,
+    pub week_rate: i32,
+    pub ontime_rate: i32,
+    pub avg_minutes: i64,
+    /// 完成用时分布：<15分 / <1时 / <4时 / <1天 / ≥1天
+    pub buckets: Vec<i64>,
 }
 
 /// 数据库文件位置：绿色优先（exe 旁 Data/），不可写时回退 %APPDATA%\TallyMoment\Data
@@ -113,15 +140,28 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS checklist (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            name          TEXT NOT NULL,
-            start_time    TEXT NOT NULL,
-            end_time      TEXT NOT NULL,
-            remind_start  INTEGER NOT NULL DEFAULT 1,
-            remind_end    INTEGER NOT NULL DEFAULT 1,
-            enabled       INTEGER NOT NULL DEFAULT 1,
-            last_fired_key TEXT
+        CREATE TABLE IF NOT EXISTS tasks (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            content     TEXT NOT NULL,
+            priority    INTEGER NOT NULL DEFAULT 1,
+            due_ts      INTEGER,
+            done        INTEGER NOT NULL DEFAULT 0,
+            done_ts     INTEGER,
+            created_ts  INTEGER NOT NULL,
+            reminded_key TEXT
+        );
+        CREATE TABLE IF NOT EXISTS reminder_rules (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            title            TEXT NOT NULL,
+            body             TEXT NOT NULL DEFAULT '',
+            mode             TEXT NOT NULL,
+            interval_minutes INTEGER,
+            daily_times      TEXT NOT NULL DEFAULT '[]',
+            sticky           INTEGER NOT NULL DEFAULT 0,
+            card_duration_sec INTEGER NOT NULL DEFAULT 10,
+            accent_color     TEXT,
+            enabled          INTEGER NOT NULL DEFAULT 1,
+            last_fired_key   TEXT
         );
         CREATE TABLE IF NOT EXISTS input_stats (
             date        TEXT NOT NULL,
@@ -323,7 +363,7 @@ pub fn today_start_ts() -> i64 {
     midnight.map(|t| t.timestamp()).unwrap_or(now.timestamp())
 }
 
-// ---------- 清单 ----------
+// ---------- 待办任务 ----------
 
 fn valid_hhmm(s: &str) -> bool {
     let b = s.as_bytes();
@@ -333,126 +373,417 @@ fn valid_hhmm(s: &str) -> bool {
         && b[3..].iter().all(|c| c.is_ascii_digit())
 }
 
-fn checklist_row(row: &rusqlite::Row) -> rusqlite::Result<ChecklistItem> {
-    Ok(ChecklistItem {
+fn task_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
+    Ok(Task {
         id: row.get(0)?,
-        name: row.get(1)?,
-        start_time: row.get(2)?,
-        end_time: row.get(3)?,
-        remind_start: row.get::<_, i64>(4)? != 0,
-        remind_end: row.get::<_, i64>(5)? != 0,
-        enabled: row.get::<_, i64>(6)? != 0,
+        content: row.get(1)?,
+        priority: row.get(2)?,
+        due_ts: row.get(3)?,
+        done: row.get::<_, i64>(4)? != 0,
+        done_ts: row.get(5)?,
+        created_ts: row.get(6)?,
     })
 }
 
-const CHECKLIST_COLS: &str =
-    "id, name, start_time, end_time, remind_start, remind_end, enabled";
-
-pub fn checklist_list(conn: &Connection) -> Result<Vec<ChecklistItem>, String> {
+pub fn task_list(conn: &Connection) -> Result<Vec<Task>, String> {
     let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {CHECKLIST_COLS} FROM checklist ORDER BY start_time, id"
-        ))
-        .map_err(|e| format!("查询清单失败: {e}"))?;
+        .prepare(
+            "SELECT id, content, priority, due_ts, done, done_ts, created_ts FROM tasks
+             ORDER BY done ASC,
+                      CASE WHEN due_ts IS NULL THEN 1 ELSE 0 END ASC, due_ts ASC,
+                      priority DESC, created_ts DESC",
+        )
+        .map_err(|e| format!("查询任务失败: {e}"))?;
     let rows = stmt
-        .query_map([], checklist_row)
-        .map_err(|e| format!("查询清单失败: {e}"))?;
+        .query_map([], task_row)
+        .map_err(|e| format!("查询任务失败: {e}"))?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| format!("读取清单失败: {e}"))?);
+        out.push(r.map_err(|e| format!("读取任务失败: {e}"))?);
     }
     Ok(out)
 }
 
-/// 新增清单项（不支持跨天，要求 start < end）
-pub fn checklist_add(
-    conn: &Connection,
-    name: &str,
-    start_time: &str,
-    end_time: &str,
-    remind_start: bool,
-    remind_end: bool,
-) -> Result<(), String> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > 50 {
-        return Err("名称需为 1~50 个字符".into());
+pub fn task_add(conn: &Connection, content: &str, priority: i32, due_ts: Option<i64>) -> Result<(), String> {
+    let content = content.trim();
+    if content.is_empty() || content.chars().count() > 200 {
+        return Err("任务内容需为 1~200 个字符".into());
     }
-    if !valid_hhmm(start_time) || !valid_hhmm(end_time) {
-        return Err("时间格式需为 HH:MM".into());
-    }
-    if start_time >= end_time {
-        return Err("开始时间需早于结束时间（暂不支持跨天）".into());
+    if !(0..=2).contains(&priority) {
+        return Err("优先级非法".into());
     }
     conn.execute(
-        "INSERT INTO checklist(name, start_time, end_time, remind_start, remind_end) VALUES(?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO tasks(content, priority, due_ts, created_ts) VALUES(?1, ?2, ?3, ?4)",
+        rusqlite::params![content, priority, due_ts, Local::now().timestamp()],
+    )
+    .map_err(|e| format!("新增任务失败: {e}"))?;
+    Ok(())
+}
+
+pub fn task_update(
+    conn: &Connection,
+    id: i64,
+    content: &str,
+    priority: i32,
+    due_ts: Option<i64>,
+) -> Result<(), String> {
+    let content = content.trim();
+    if content.is_empty() || content.chars().count() > 200 {
+        return Err("任务内容需为 1~200 个字符".into());
+    }
+    if !(0..=2).contains(&priority) {
+        return Err("优先级非法".into());
+    }
+    conn.execute(
+        "UPDATE tasks SET content = ?2, priority = ?3, due_ts = ?4 WHERE id = ?1",
+        rusqlite::params![id, content, priority, due_ts],
+    )
+    .map_err(|e| format!("更新任务失败: {e}"))?;
+    Ok(())
+}
+
+pub fn task_set_done(conn: &Connection, id: i64, done: bool) -> Result<(), String> {
+    conn.execute(
+        "UPDATE tasks SET done = ?2, done_ts = ?3 WHERE id = ?1",
+        rusqlite::params![id, done as i64, if done { Some(Local::now().timestamp()) } else { None }],
+    )
+    .map_err(|e| format!("更新任务失败: {e}"))?;
+    Ok(())
+}
+
+pub fn task_delete(conn: &Connection, id: i64) -> Result<(), String> {
+    conn.execute("DELETE FROM tasks WHERE id = ?1", [id])
+        .map_err(|e| format!("删除任务失败: {e}"))?;
+    Ok(())
+}
+
+pub fn task_set_reminded(conn: &Connection, id: i64, key: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE tasks SET reminded_key = ?2 WHERE id = ?1",
+        rusqlite::params![id, key],
+    )
+    .map_err(|e| format!("更新任务提醒状态失败: {e}"))?;
+    Ok(())
+}
+
+/// 任务延后：截止时间顺延 seconds，并允许再次提醒
+pub fn task_push_due(conn: &Connection, id: i64, seconds: i64) -> Result<(), String> {
+    conn.execute(
+        "UPDATE tasks SET due_ts = due_ts + ?2, reminded_key = '' WHERE id = ?1 AND due_ts IS NOT NULL",
+        rusqlite::params![id, seconds],
+    )
+    .map_err(|e| format!("延后任务失败: {e}"))?;
+    Ok(())}
+
+/// 到期未提醒的任务（调度用）
+pub struct DueTask {
+    pub id: i64,
+    pub content: String,
+    pub due_ts: i64,
+}
+
+pub fn due_tasks(conn: &Connection, now: i64) -> Result<Vec<DueTask>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, content, due_ts FROM tasks
+             WHERE done = 0 AND due_ts IS NOT NULL AND due_ts <= ?1
+               AND COALESCE(reminded_key, '') <> CAST(due_ts AS TEXT)",
+        )
+        .map_err(|e| format!("查询到期任务失败: {e}"))?;
+    let rows = stmt
+        .query_map([now], |row| {
+            Ok(DueTask {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                due_ts: row.get(2)?,
+            })
+        })
+        .map_err(|e| format!("查询到期任务失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取到期任务失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 完成率统计
+pub fn todo_stats(conn: &Connection) -> Result<TodoStats, String> {
+    let now = Local::now();
+    let today0 = now
+        .with_hour(0).and_then(|t| t.with_minute(0))
+        .and_then(|t| t.with_second(0)).and_then(|t| t.with_nanosecond(0))
+        .ok_or("时间计算失败")?;
+    let today0 = today0.timestamp();
+    let week0 = today0 - 6 * 86_400;
+
+    let today_done: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tasks WHERE done = 1 AND done_ts >= ?1", [today0], |r| r.get(0))
+        .map_err(|e| format!("统计失败: {e}"))?;
+    let week_done: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tasks WHERE done = 1 AND done_ts >= ?1", [week0], |r| r.get(0))
+        .map_err(|e| format!("统计失败: {e}"))?;
+    let week_missed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE done = 0 AND due_ts IS NOT NULL AND due_ts >= ?1 AND due_ts <= ?2",
+            rusqlite::params![week0, now.timestamp()],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("统计失败: {e}"))?;
+    let week_rate = if week_done + week_missed > 0 {
+        (week_done * 100 / (week_done + week_missed)) as i32
+    } else {
+        -1
+    };
+    let (ontime_done, ontime_total): (i64, i64) = conn
+        .query_row(
+            "SELECT COALESCE(SUM(CASE WHEN done_ts <= due_ts THEN 1 ELSE 0 END), 0), COUNT(*)
+             FROM tasks WHERE done = 1 AND due_ts IS NOT NULL AND done_ts IS NOT NULL",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| format!("统计失败: {e}"))?;
+    let ontime_rate = if ontime_total > 0 {
+        (ontime_done * 100 / ontime_total) as i32
+    } else {
+        -1
+    };
+    let avg_minutes: i64 = conn
+        .query_row(
+            "SELECT COALESCE(AVG(done_ts - created_ts), 0) / 60 FROM tasks
+             WHERE done = 1 AND done_ts IS NOT NULL AND done_ts >= created_ts",
+            [],
+            |r| r.get::<_, f64>(0).map(|v| v as i64),
+        )
+        .map_err(|e| format!("统计失败: {e}"))?;
+
+    // 完成用时分布：<15分 / <1时 / <4时 / <1天 / ≥1天
+    let mut buckets = vec![0i64; 5];
+    let mut stmt = conn
+        .prepare("SELECT done_ts - created_ts FROM tasks WHERE done = 1 AND done_ts IS NOT NULL AND done_ts >= created_ts")
+        .map_err(|e| format!("统计失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, i64>(0))
+        .map_err(|e| format!("统计失败: {e}"))?;
+    for r in rows {
+        let secs: i64 = r.map_err(|e| format!("统计失败: {e}"))?;
+        let idx = if secs < 900 { 0 } else if secs < 3600 { 1 } else if secs < 14400 { 2 } else if secs < 86400 { 3 } else { 4 };
+        buckets[idx] += 1;
+    }
+
+    Ok(TodoStats {
+        today_done,
+        week_done,
+        week_rate,
+        ontime_rate,
+        avg_minutes,
+        buckets,
+    })
+}
+
+// ---------- 提醒规则（对标 Catrace timer） ----------
+
+fn rule_row(row: &rusqlite::Row) -> rusqlite::Result<ReminderRule> {
+    let daily: String = row.get(6)?;
+    Ok(ReminderRule {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        body: row.get(2)?,
+        mode: row.get(3)?,
+        interval_minutes: row.get(4)?,
+        daily_times: serde_json::from_str(&daily).unwrap_or_default(),
+        sticky: row.get::<_, i64>(5)? != 0,
+        card_duration_sec: row.get(7)?,
+        accent_color: row.get(8)?,
+        enabled: row.get::<_, i64>(9)? != 0,
+    })
+}
+
+const RULE_COLS: &str =
+    "id, title, body, mode, interval_minutes, sticky, daily_times, card_duration_sec, accent_color, enabled";
+
+pub fn rule_list(conn: &Connection) -> Result<Vec<ReminderRule>, String> {
+    let mut stmt = conn
+        .prepare(&format!("SELECT {RULE_COLS} FROM reminder_rules ORDER BY enabled DESC, id"))
+        .map_err(|e| format!("查询提醒规则失败: {e}"))?;
+    let rows = stmt
+        .query_map([], rule_row)
+        .map_err(|e| format!("查询提醒规则失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取提醒规则失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+fn validate_rule(
+    title: &str,
+    mode: &str,
+    interval_minutes: Option<i64>,
+    daily_times: &[String],
+    card_duration_sec: i32,
+) -> Result<(), String> {
+    let title = title.trim();
+    if title.is_empty() || title.chars().count() > 50 {
+        return Err("标题需为 1~50 个字符".into());
+    }
+    if mode != "interval" && mode != "daily" {
+        return Err("触发方式非法".into());
+    }
+    if mode == "interval" {
+        let m = interval_minutes.ok_or("间隔模式需要填写分钟数")?;
+        if !(1..=1440).contains(&m) {
+            return Err("间隔需在 1~1440 分钟".into());
+        }
+    }
+    if mode == "daily" {
+        if daily_times.is_empty() {
+            return Err("定点模式至少需要一个时间点".into());
+        }
+        if daily_times.len() > 8 {
+            return Err("时间点最多 8 个".into());
+        }
+        for t in daily_times {
+            if !valid_hhmm(t) {
+                return Err(format!("时间点 {t} 格式需为 HH:MM"));
+            }
+        }
+    }
+    if !(3..=600).contains(&card_duration_sec) {
+        return Err("停留时长需在 3~600 秒".into());
+    }
+    Ok(())
+}
+
+/// 新增规则；interval 模式把上次触发基线设为创建时刻（首次提醒在下一个间隔后）
+#[allow(clippy::too_many_arguments)]
+pub fn rule_add(
+    conn: &Connection,
+    title: &str,
+    body: &str,
+    mode: &str,
+    interval_minutes: Option<i64>,
+    daily_times: Vec<String>,
+    sticky: bool,
+    card_duration_sec: i32,
+    accent_color: Option<String>,
+) -> Result<(), String> {
+    validate_rule(title, mode, interval_minutes, &daily_times, card_duration_sec)?;
+    conn.execute(
+        "INSERT INTO reminder_rules(title, body, mode, interval_minutes, daily_times, sticky, card_duration_sec, accent_color, last_fired_key)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
-            name,
-            start_time,
-            end_time,
-            remind_start as i64,
-            remind_end as i64
+            title.trim(),
+            body.trim(),
+            mode,
+            interval_minutes,
+            serde_json::to_string(&daily_times).unwrap_or_else(|_| "[]".into()),
+            sticky as i64,
+            card_duration_sec,
+            accent_color,
+            Local::now().timestamp().to_string()
         ],
     )
-    .map_err(|e| format!("新增清单失败: {e}"))?;
+    .map_err(|e| format!("新增提醒规则失败: {e}"))?;
     Ok(())
 }
 
-pub fn checklist_set_enabled(conn: &Connection, id: i64, enabled: bool) -> Result<(), String> {
+#[allow(clippy::too_many_arguments)]
+pub fn rule_update(
+    conn: &Connection,
+    id: i64,
+    title: &str,
+    body: &str,
+    mode: &str,
+    interval_minutes: Option<i64>,
+    daily_times: Vec<String>,
+    sticky: bool,
+    card_duration_sec: i32,
+    accent_color: Option<String>,
+) -> Result<(), String> {
+    validate_rule(title, mode, interval_minutes, &daily_times, card_duration_sec)?;
     conn.execute(
-        "UPDATE checklist SET enabled = ?2 WHERE id = ?1",
+        "UPDATE reminder_rules SET title = ?2, body = ?3, mode = ?4, interval_minutes = ?5,
+         daily_times = ?6, sticky = ?7, card_duration_sec = ?8, accent_color = ?9 WHERE id = ?1",
+        rusqlite::params![
+            id,
+            title.trim(),
+            body.trim(),
+            mode,
+            interval_minutes,
+            serde_json::to_string(&daily_times).unwrap_or_else(|_| "[]".into()),
+            sticky as i64,
+            card_duration_sec,
+            accent_color
+        ],
+    )
+    .map_err(|e| format!("更新提醒规则失败: {e}"))?;
+    Ok(())
+}
+
+pub fn rule_set_enabled(conn: &Connection, id: i64, enabled: bool) -> Result<(), String> {
+    conn.execute(
+        "UPDATE reminder_rules SET enabled = ?2 WHERE id = ?1",
         rusqlite::params![id, enabled as i64],
     )
-    .map_err(|e| format!("更新清单失败: {e}"))?;
+    .map_err(|e| format!("更新提醒规则失败: {e}"))?;
     Ok(())
 }
 
-pub fn checklist_delete(conn: &Connection, id: i64) -> Result<(), String> {
-    conn.execute("DELETE FROM checklist WHERE id = ?1", [id])
-        .map_err(|e| format!("删除清单失败: {e}"))?;
+pub fn rule_delete(conn: &Connection, id: i64) -> Result<(), String> {
+    conn.execute("DELETE FROM reminder_rules WHERE id = ?1", [id])
+        .map_err(|e| format!("删除提醒规则失败: {e}"))?;
     Ok(())
 }
 
-/// 调度用：启用的清单项（含防重复键）
-pub struct ChecklistDue {
+/// 调度用：启用的规则（last_fired_key：interval 存上次触发时间戳，daily 存 {日期}-{HH:MM}）
+pub struct RuleDue {
     pub id: i64,
-    pub name: String,
-    pub start_time: String,
-    pub end_time: String,
-    pub remind_start: bool,
-    pub remind_end: bool,
+    pub title: String,
+    pub body: String,
+    pub mode: String,
+    pub interval_minutes: Option<i64>,
+    pub daily_times: Vec<String>,
+    pub sticky: bool,
+    pub card_duration_sec: i32,
+    pub accent_color: Option<String>,
     pub last_fired_key: String,
 }
 
-pub fn checklist_enabled(conn: &Connection) -> Result<Vec<ChecklistDue>, String> {
+pub fn rule_enabled(conn: &Connection) -> Result<Vec<RuleDue>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, name, start_time, end_time, remind_start, remind_end, COALESCE(last_fired_key, '')
-             FROM checklist WHERE enabled = 1",
-        )
-        .map_err(|e| format!("查询清单失败: {e}"))?;
+        .prepare(&format!(
+            "SELECT {RULE_COLS}, COALESCE(last_fired_key, '') FROM reminder_rules
+             WHERE enabled = 1 ORDER BY id"
+        ))
+        .map_err(|e| format!("查询提醒规则失败: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
-            Ok(ChecklistDue {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                start_time: row.get(2)?,
-                end_time: row.get(3)?,
-                remind_start: row.get::<_, i64>(4)? != 0,
-                remind_end: row.get::<_, i64>(5)? != 0,
-                last_fired_key: row.get(6)?,
+            let r = rule_row(row)?;
+            let last = row.get::<_, String>(10)?;
+            Ok(RuleDue {
+                id: r.id,
+                title: r.title,
+                body: r.body,
+                mode: r.mode,
+                interval_minutes: r.interval_minutes,
+                daily_times: r.daily_times,
+                sticky: r.sticky,
+                card_duration_sec: r.card_duration_sec,
+                accent_color: r.accent_color,
+                last_fired_key: last,
             })
         })
-        .map_err(|e| format!("查询清单失败: {e}"))?;
+        .map_err(|e| format!("查询提醒规则失败: {e}"))?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| format!("读取清单失败: {e}"))?);
+        out.push(r.map_err(|e| format!("读取提醒规则失败: {e}"))?);
     }
     Ok(out)
 }
 
-pub fn checklist_mark_fired(conn: &Connection, id: i64, key: &str) -> Result<(), String> {
+pub fn rule_mark_fired(conn: &Connection, id: i64, key: &str) -> Result<(), String> {
     conn.execute(
-        "UPDATE checklist SET last_fired_key = ?2 WHERE id = ?1",
+        "UPDATE reminder_rules SET last_fired_key = ?2 WHERE id = ?1",
         rusqlite::params![id, key],
     )
     .map_err(|e| format!("更新提醒状态失败: {e}"))?;
@@ -838,29 +1169,52 @@ pub fn export_json(conn: &Connection, dir: &std::path::Path, file_name: &str) ->
         daily.push(r.map_err(|e| format!("导出 daily 失败: {e}"))?);
     }
 
-    let mut checklist = Vec::new();
+    let mut tasks = Vec::new();
     let mut stmt = conn
-        .prepare(
-            "SELECT id, name, start_time, end_time, remind_start, remind_end, enabled, last_fired_key
-             FROM checklist ORDER BY id",
-        )
-        .map_err(|e| format!("导出 checklist 失败: {e}"))?;
+        .prepare("SELECT id, content, priority, due_ts, done, done_ts, created_ts FROM tasks ORDER BY id")
+        .map_err(|e| format!("导出 tasks 失败: {e}"))?;
     let rows = stmt
         .query_map([], |r| {
             Ok(json!({
                 "id": r.get::<_, i64>(0)?,
-                "name": r.get::<_, String>(1)?,
-                "startTime": r.get::<_, String>(2)?,
-                "endTime": r.get::<_, String>(3)?,
-                "remindStart": r.get::<_, i64>(4)? != 0,
-                "remindEnd": r.get::<_, i64>(5)? != 0,
-                "enabled": r.get::<_, i64>(6)? != 0,
-                "lastFiredKey": r.get::<_, Option<String>>(7)?,
+                "content": r.get::<_, String>(1)?,
+                "priority": r.get::<_, i32>(2)?,
+                "dueTs": r.get::<_, Option<i64>>(3)?,
+                "done": r.get::<_, i64>(4)? != 0,
+                "doneTs": r.get::<_, Option<i64>>(5)?,
+                "createdTs": r.get::<_, i64>(6)?,
             }))
         })
-        .map_err(|e| format!("导出 checklist 失败: {e}"))?;
+        .map_err(|e| format!("导出 tasks 失败: {e}"))?;
     for r in rows {
-        checklist.push(r.map_err(|e| format!("导出 checklist 失败: {e}"))?);
+        tasks.push(r.map_err(|e| format!("导出 tasks 失败: {e}"))?);
+    }
+
+    let mut rules = Vec::new();
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {RULE_COLS} FROM reminder_rules ORDER BY id"
+        ))
+        .map_err(|e| format!("导出 rules 失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            let daily: String = r.get(6)?;
+            Ok(json!({
+                "id": r.get::<_, i64>(0)?,
+                "title": r.get::<_, String>(1)?,
+                "body": r.get::<_, String>(2)?,
+                "mode": r.get::<_, String>(3)?,
+                "intervalMinutes": r.get::<_, Option<i64>>(4)?,
+                "sticky": r.get::<_, i64>(5)? != 0,
+                "dailyTimes": serde_json::from_str::<Vec<String>>(&daily).unwrap_or_default(),
+                "cardDurationSec": r.get::<_, i32>(7)?,
+                "accentColor": r.get::<_, Option<String>>(8)?,
+                "enabled": r.get::<_, i64>(9)? != 0,
+            }))
+        })
+        .map_err(|e| format!("导出 rules 失败: {e}"))?;
+    for r in rows {
+        rules.push(r.map_err(|e| format!("导出 rules 失败: {e}"))?);
     }
 
     let payload = json!({
@@ -871,7 +1225,8 @@ pub fn export_json(conn: &Connection, dir: &std::path::Path, file_name: &str) ->
         "segments": segments,
         "hourly": hourly,
         "daily": daily,
-        "checklist": checklist,
+        "tasks": tasks,
+        "rules": rules,
     });
 
     std::fs::create_dir_all(dir).map_err(|e| format!("创建导出目录失败: {e}"))?;
@@ -891,7 +1246,8 @@ pub fn restore_json(conn: &Connection, path: &str) -> Result<ImportSummary, Stri
         ("segments", "区间"),
         ("hourly_stats", "小时汇总"),
         ("daily_stats", "日汇总"),
-        ("checklist", "清单"),
+        ("tasks", "任务"),
+        ("reminder_rules", "提醒规则"),
     ] {
         let n: i64 = conn
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
@@ -999,27 +1355,52 @@ pub fn restore_json(conn: &Connection, path: &str) -> Result<ImportSummary, Stri
         summary.daily_rows += 1;
     }
 
-    let list = v.get("checklist").and_then(|x| x.as_array()).unwrap_or(&empty_arr);
-    for c in list {
-        let name = c.get("name").and_then(|x| x.as_str()).unwrap_or("");
-        if name.is_empty() {
+    let tasks_in = v.get("tasks").and_then(|x| x.as_array()).unwrap_or(&empty_arr);
+    for t in tasks_in {
+        let content = t.get("content").and_then(|x| x.as_str()).unwrap_or("");
+        if content.is_empty() {
             summary.skipped += 1;
             continue;
         }
         conn.execute(
-            "INSERT INTO checklist(name, start_time, end_time, remind_start, remind_end, enabled, last_fired_key)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO tasks(content, priority, due_ts, done, done_ts, created_ts) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
-                name,
-                c.get("startTime").and_then(|x| x.as_str()).unwrap_or("00:00"),
-                c.get("endTime").and_then(|x| x.as_str()).unwrap_or("00:00"),
-                c.get("remindStart").and_then(|x| x.as_bool()).unwrap_or(true) as i64,
-                c.get("remindEnd").and_then(|x| x.as_bool()).unwrap_or(true) as i64,
-                c.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true) as i64,
-                c.get("lastFiredKey").and_then(|x| x.as_str())
+                content,
+                t.get("priority").and_then(|x| x.as_i64()).unwrap_or(1) as i32,
+                t.get("dueTs").and_then(|x| x.as_i64()),
+                t.get("done").and_then(|x| x.as_bool()).unwrap_or(false) as i64,
+                t.get("doneTs").and_then(|x| x.as_i64()),
+                t.get("createdTs").and_then(|x| x.as_i64()).unwrap_or(0),
             ],
         )
-        .map_err(|e| format!("恢复清单失败: {e}"))?;
+        .map_err(|e| format!("恢复任务失败: {e}"))?;
+    }
+
+    let rules_in = v.get("rules").and_then(|x| x.as_array()).unwrap_or(&empty_arr);
+    for c in rules_in {
+        let title = c.get("title").and_then(|x| x.as_str()).unwrap_or("");
+        if title.is_empty() {
+            summary.skipped += 1;
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO reminder_rules(title, body, mode, interval_minutes, daily_times, sticky, card_duration_sec, accent_color, enabled)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                title,
+                c.get("body").and_then(|x| x.as_str()).unwrap_or(""),
+                c.get("mode").and_then(|x| x.as_str()).unwrap_or("daily"),
+                c.get("intervalMinutes").and_then(|x| x.as_i64()),
+                serde_json::to_string(
+                    &c.get("dailyTimes").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default()
+                ).unwrap_or_else(|_| "[]".into()),
+                c.get("sticky").and_then(|x| x.as_bool()).unwrap_or(false) as i64,
+                c.get("cardDurationSec").and_then(|x| x.as_i64()).unwrap_or(10) as i32,
+                c.get("accentColor").and_then(|x| x.as_str()),
+                c.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true) as i64,
+            ],
+        )
+        .map_err(|e| format!("恢复提醒规则失败: {e}"))?;
     }
 
     Ok(summary)
@@ -1100,7 +1481,8 @@ mod tests {
         let app_id = app_id_for(&conn, "test.exe", "Test", "C:/test.exe").unwrap();
         add_seconds(&conn, app_id, 1_700_000_000, 1_700_000_600).unwrap();
         write_segment(&conn, app_id, 1_700_000_000, 1_700_000_600, "测试区间").unwrap();
-        checklist_add(&conn, "测试清单", "08:00", "09:00", true, true).unwrap();
+        task_add(&conn, "测试任务", 1, None).unwrap();
+        rule_add(&conn, "测试规则", "", "interval", Some(30), vec![], false, 10, None).unwrap();
 
         let exported = export_json(&conn, &dir, "export-test.json").unwrap();
 
@@ -1110,7 +1492,7 @@ mod tests {
         assert_eq!(s.apps, 1);
         assert_eq!(s.segments, 1);
 
-        for t in ["apps", "segments", "hourly_stats", "daily_stats", "checklist"] {
+        for t in ["apps", "segments", "hourly_stats", "daily_stats", "tasks", "reminder_rules"] {
             let a: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap();
             let b: i64 = conn2.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap();
             assert_eq!(a, b, "表 {t} 行数应一致");

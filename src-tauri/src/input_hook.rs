@@ -43,7 +43,7 @@ mod imp {
         unsafe { windows::Win32::System::SystemInformation::GetTickCount() }
     }
 
-    fn emit(kind: &str) {
+    fn emit(kind: &str, vk: u32) {
         let now = now_tick();
         let last = LAST_EMIT_MS.load(Ordering::Relaxed);
         if now.wrapping_sub(last) < 16 {
@@ -51,7 +51,8 @@ mod imp {
         }
         LAST_EMIT_MS.store(now, Ordering::Relaxed);
         if let Some(app) = APP.get() {
-            let _ = app.emit("pet-input", kind);
+            // 只带键码（用于桌宠逐键选帧），不带内容、不落库
+            let _ = app.emit("pet-input", serde_json::json!({ "kind": kind, "vk": vk }));
         }
     }
 
@@ -59,9 +60,9 @@ mod imp {
         if code >= 0 {
             let msg = wparam.0 as u32;
             if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
-                let _ = (lparam.0 as *const KBDLLHOOKSTRUCT).read();
+                let kbd = (lparam.0 as *const KBDLLHOOKSTRUCT).read();
                 KEY_COUNT.fetch_add(1, Ordering::Relaxed);
-                emit("key");
+                emit("key", kbd.vkCode);
             }
         }
         // 首参数在 modern Windows 上被忽略，传 None 即可
@@ -71,10 +72,16 @@ mod imp {
     unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code >= 0 {
             let msg = wparam.0 as u32;
-            if msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN {
+            let btn = match msg {
+                WM_LBUTTONDOWN => 1u32,
+                WM_RBUTTONDOWN => 2u32,
+                WM_MBUTTONDOWN => 4u32,
+                _ => 0,
+            };
+            if btn != 0 {
                 let _ = (lparam.0 as *const MSLLHOOKSTRUCT).read();
                 CLICK_COUNT.fetch_add(1, Ordering::Relaxed);
-                emit("click");
+                emit("click", btn);
             }
         }
         CallNextHookEx(None, code, wparam, lparam)

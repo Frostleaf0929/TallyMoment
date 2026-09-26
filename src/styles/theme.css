@@ -101,6 +101,12 @@
   -webkit-backdrop-filter: none;
 }
 
+/* 提醒窗与桌宠窗：页面必须全透明，让窗口透明生效（修复关卡后的黑框） */
+html[data-mode="reminder"] body,
+html[data-mode="pet"] body {
+  background: transparent !important;
+}
+
 /* 柔和滚动条 */
 ::-webkit-scrollbar {
   width: 8px;

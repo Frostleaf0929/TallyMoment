@@ -205,38 +205,177 @@ fn insights(app: tauri::AppHandle) -> Result<Vec<insights::Insight>, String> {
 }
 
 #[tauri::command]
-fn checklist_list(app: tauri::AppHandle) -> Result<Vec<storage::ChecklistItem>, String> {
+fn task_list(app: tauri::AppHandle) -> Result<Vec<storage::Task>, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    storage::checklist_list(&conn)
+    storage::task_list(&conn)
 }
 
 #[tauri::command]
-fn checklist_add(
+fn task_add(app: tauri::AppHandle, content: String, priority: i32, due_ts: Option<i64>) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::task_add(&conn, &content, priority, due_ts)
+}
+
+#[tauri::command]
+fn task_update(
     app: tauri::AppHandle,
-    name: String,
-    start_time: String,
-    end_time: String,
-    remind_start: bool,
-    remind_end: bool,
+    id: i64,
+    content: String,
+    priority: i32,
+    due_ts: Option<i64>,
 ) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    storage::checklist_add(&conn, &name, &start_time, &end_time, remind_start, remind_end)
+    storage::task_update(&conn, id, &content, priority, due_ts)
 }
 
 #[tauri::command]
-fn checklist_set_enabled(app: tauri::AppHandle, id: i64, enabled: bool) -> Result<(), String> {
+fn task_set_done(app: tauri::AppHandle, id: i64, done: bool) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    storage::checklist_set_enabled(&conn, id, enabled)
+    storage::task_set_done(&conn, id, done)
 }
 
 #[tauri::command]
-fn checklist_delete(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+fn task_delete(app: tauri::AppHandle, id: i64) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    storage::checklist_delete(&conn, id)
+    storage::task_delete(&conn, id)
+}
+
+#[tauri::command]
+fn todo_stats(app: tauri::AppHandle) -> Result<storage::TodoStats, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::todo_stats(&conn)
+}
+
+#[tauri::command]
+fn rule_list(app: tauri::AppHandle) -> Result<Vec<storage::ReminderRule>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::rule_list(&conn)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn rule_add(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+    mode: String,
+    interval_minutes: Option<i64>,
+    daily_times: Vec<String>,
+    sticky: bool,
+    card_duration_sec: i32,
+    accent_color: Option<String>,
+) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::rule_add(
+        &conn,
+        &title,
+        &body,
+        &mode,
+        interval_minutes,
+        daily_times,
+        sticky,
+        card_duration_sec,
+        accent_color,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn rule_update(
+    app: tauri::AppHandle,
+    id: i64,
+    title: String,
+    body: String,
+    mode: String,
+    interval_minutes: Option<i64>,
+    daily_times: Vec<String>,
+    sticky: bool,
+    card_duration_sec: i32,
+    accent_color: Option<String>,
+) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::rule_update(
+        &conn,
+        id,
+        &title,
+        &body,
+        &mode,
+        interval_minutes,
+        daily_times,
+        sticky,
+        card_duration_sec,
+        accent_color,
+    )
+}
+
+#[tauri::command]
+fn rule_set_enabled(app: tauri::AppHandle, id: i64, enabled: bool) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::rule_set_enabled(&conn, id, enabled)
+}
+
+#[tauri::command]
+fn rule_delete(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::rule_delete(&conn, id)
+}
+
+/// 提醒卡按钮回传：规则稍后 / 任务完成与延后
+#[tauri::command]
+fn reminder_action(app: tauri::AppHandle, kind: String, ref_id: i64, action: String) -> Result<(), String> {
+    match kind.as_str() {
+        "rule" => {
+            if action == "snooze5" {
+                tracker::snooze_rule(ref_id, chrono::Local::now().timestamp() + 300);
+            }
+            Ok(())
+        }
+        "task" => {
+            let db = app.state::<Db>();
+            let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+            match action.as_str() {
+                "done" => storage::task_set_done(&conn, ref_id, true),
+                "snooze10" => storage::task_push_due(&conn, ref_id, 600),
+                _ => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+/// 提醒窗按内容高度自适应（前端上报）
+#[tauri::command]
+fn reminder_resize(app: tauri::AppHandle, height: f64) {
+    reminder::resize(&app, height);
+}
+
+/// 提醒窗前端就绪后拉取积压的提醒，并由 Rust 侧显示窗口（绕开前端权限）
+#[tauri::command]
+fn reminder_pending(app: tauri::AppHandle) -> Vec<reminder::Payload> {
+    eprintln!("[reminder] frontend fetched pending queue");
+    if let Some(w) = app.get_webview_window("reminder") {
+        let _ = w.show();
+    }
+    reminder::take_pending()
+}
+
+/// 前端事件路径下也由 Rust 侧负责显示
+#[tauri::command]
+fn reminder_show_window(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("reminder") {
+        let _ = w.show();
+    }
 }
 
 #[tauri::command]
@@ -356,10 +495,21 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             today_report,
-            checklist_list,
-            checklist_add,
-            checklist_set_enabled,
-            checklist_delete,
+            task_list,
+            task_add,
+            task_update,
+            task_set_done,
+            task_delete,
+            todo_stats,
+            rule_list,
+            rule_add,
+            rule_update,
+            rule_set_enabled,
+            rule_delete,
+            reminder_action,
+            reminder_resize,
+            reminder_pending,
+            reminder_show_window,
             close_reminder,
             import_tai,
             export_json,

@@ -49,3 +49,52 @@ export interface Insight {
   detail: string;
   tone: "good" | "warn" | "info";
 }
+
+export interface Task {
+  id: number;
+  content: string;
+  priority: number;
+  dueTs: number | null;
+  done: boolean;
+  doneTs: number | null;
+  createdTs: number;
+}
+
+export interface ReminderRule {
+  id: number;
+  title: string;
+  body: string;
+  mode: "interval" | "daily";
+  intervalMinutes: number | null;
+  dailyTimes: string[];
+  sticky: boolean;
+  cardDurationSec: number;
+  accentColor: string | null;
+  enabled: boolean;
+}
+
+export interface TodoStats {
+  todayDone: number;
+  weekDone: number;
+  weekRate: number;
+  ontimeRate: number;
+  avgMinutes: number;
+  buckets: number[];
+}
+
+export interface ReminderAction {
+  id: string;
+  label: string;
+}
+
+export interface ReminderPayload {
+  id: string;
+  kind: "rule" | "task";
+  refId: number;
+  title: string;
+  body: string;
+  sticky: boolean;
+  durationMs: number;
+  accent: string | null;
+  actions: ReminderAction[];
+}

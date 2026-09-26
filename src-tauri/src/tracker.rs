@@ -2,6 +2,7 @@ use active_win_pos_rs::get_active_window;
 use chrono::Local;
 use rusqlite::Connection;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -129,7 +130,7 @@ pub fn spawn(app: AppHandle) {
             }
         }
 
-        check_checklist(&app, Local::now());
+        check_reminders(&app, Local::now());
 
         let shared = app.state::<TrackerShared>();
         let paused = shared.paused.load(Ordering::Relaxed);
@@ -231,36 +232,82 @@ pub fn spawn(app: AppHandle) {
     });
 }
 
-/// 清单调度：当前 HH:MM 命中起止时间且今日未提醒过则弹窗（每秒检查，防重复键保证只发一次）
-fn check_checklist(app: &AppHandle, now: chrono::DateTime<chrono::Local>) {
-    let Some(Ok(rows)) = with_db(app, |db| storage::checklist_enabled(db)) else {
-        return;
-    };
+/// 规则稍后提醒登记（rule_id -> 生效时间戳）
+static SNOOZE: OnceLock<Mutex<HashMap<i64, i64>>> = OnceLock::new();
+
+pub fn snooze_rule(id: i64, until: i64) {
+    let map = SNOOZE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut m) = map.lock() {
+        m.insert(id, until);
+    }
+}
+
+fn snoozed_until(id: i64) -> Option<i64> {
+    let map = SNOOZE.get_or_init(|| Mutex::new(HashMap::new()));
+    map.lock().ok().and_then(|m| m.get(&id).copied())
+}
+
+/// 提醒调度：规则（间隔/定点）+ 到期任务；每秒检查，键去重
+fn check_reminders(app: &AppHandle, now: chrono::DateTime<chrono::Local>) {
+    let ts = now.timestamp();
     let date = now.format("%Y-%m-%d").to_string();
     let hhmm = now.format("%H:%M").to_string();
+
+    let Some(Ok(rows)) = with_db(app, |db| storage::rule_enabled(db)) else {
+        return;
+    };
     for r in rows {
-        let (kind, wanted) = if hhmm == r.start_time {
-            ("start", r.remind_start)
-        } else if hhmm == r.end_time {
-            ("end", r.remind_end)
-        } else {
-            continue;
+        let fire_key: Option<String> = match r.mode.as_str() {
+            "interval" => {
+                let last = r.last_fired_key.parse::<i64>().unwrap_or(0);
+                let interval = r.interval_minutes.unwrap_or(0) * 60;
+                let snooze_ok = snoozed_until(r.id).map(|s| ts >= s).unwrap_or(true);
+                if interval > 0 && ts >= last + interval && snooze_ok {
+                    Some(ts.to_string())
+                } else {
+                    None
+                }
+            }
+            "daily" => r
+                .daily_times
+                .iter()
+                .find(|t| **t == hhmm)
+                .map(|t| format!("{date}-{t}")),
+            _ => None,
         };
-        if !wanted {
-            continue;
-        }
-        let key = format!("{}-{}-{}", r.id, date, kind);
+        let Some(key) = fire_key else { continue };
         if r.last_fired_key == key {
             continue;
         }
-        with_db(app, |db| storage::checklist_mark_fired(db, r.id, &key));
-        let message = if kind == "start" {
-            format!("该开始了：{}（{} – {}）", r.name, r.start_time, r.end_time)
-        } else {
-            format!("该收尾了：{}（{} – {}）", r.name, r.start_time, r.end_time)
-        };
-        reminder::show(app, &r.name, &message);
-        break; // 同一秒只弹一条，其余下秒继续
+        with_db(app, |db| storage::rule_mark_fired(db, r.id, &key));
+        let mut payload = reminder::Payload::new("rule", r.id, &r.title, &r.body);
+        payload.sticky = r.sticky;
+        payload.duration_ms = r.card_duration_sec as u64 * 1000;
+        payload.accent = r.accent_color.clone();
+        payload.actions = vec![
+            reminder::ActionDef::new("ack", "知道了"),
+            reminder::ActionDef::new("snooze5", "5 分钟后"),
+        ];
+        reminder::show(app, payload);
+        break; // 同一秒只弹一张，其余下秒继续
+    }
+
+    // 到期任务提醒
+    let Some(Ok(due)) = with_db(app, |db| storage::due_tasks(db, ts)) else {
+        return;
+    };
+    for t in due {
+        let key = t.due_ts.to_string();
+        let mut payload = reminder::Payload::new("task", t.id, "任务到期", &t.content);
+        payload.duration_ms = 30_000;
+        payload.actions = vec![
+            reminder::ActionDef::new("done", "完成"),
+            reminder::ActionDef::new("snooze10", "10 分钟后"),
+            reminder::ActionDef::new("dismiss", "忽略"),
+        ];
+        reminder::show(app, payload);
+        with_db(app, |db| storage::task_set_reminded(db, t.id, &key));
+        break;
     }
 }
 

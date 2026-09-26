@@ -4,13 +4,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { darkTheme, NConfigProvider, type GlobalTheme } from "naive-ui";
 import Icon from "./components/Icon.vue";
-import ChecklistCard from "./components/ChecklistCard.vue";
-import DataCard from "./components/DataCard.vue";
 import PetView from "./components/PetView.vue";
-import ReminderCard from "./components/ReminderCard.vue";
+import ToastStack from "./components/ToastStack.vue";
 import TodayPage from "./pages/TodayPage.vue";
 import HistoryPage from "./pages/HistoryPage.vue";
 import InsightsPage from "./pages/InsightsPage.vue";
+import TodoPage from "./pages/TodoPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 
 // 提醒小窗/桌宠与主面板共用同一个前端入口，按窗口标签分流
@@ -22,13 +21,15 @@ try {
 } catch {
   /* 浏览器直开时按主面板处理 */
 }
+// 标记到 <html>，供 theme.css 让提醒/桌宠窗体透明
+document.documentElement.dataset.mode = mode;
 
-type Tab = "today" | "history" | "insights" | "checklist" | "data" | "settings";
+type Tab = "today" | "history" | "insights" | "todo" | "data" | "settings";
 const tabs: { key: Tab; label: string; icon: string }[] = [
   { key: "today", label: "今日", icon: "clock" },
   { key: "history", label: "历史", icon: "doc" },
   { key: "insights", label: "洞察", icon: "graph" },
-  { key: "checklist", label: "清单", icon: "checklist" },
+  { key: "todo", label: "待办", icon: "checklist" },
   { key: "data", label: "数据", icon: "database" },
 ];
 const active = ref<Tab>("today");
@@ -101,7 +102,7 @@ onUnmounted(() => clearInterval(timer));
 
 <template>
   <NConfigProvider :theme="naiveTheme">
-    <ReminderCard v-if="mode === 'reminder'" />
+    <ToastStack v-if="mode === 'reminder'" />
     <PetView v-else-if="mode === 'pet'" />
     <div v-else class="shell" :class="{ 'glass-off': !glass }">
       <aside class="side" :class="{ collapsed }">
@@ -141,15 +142,7 @@ onUnmounted(() => clearInterval(timer));
         <TodayPage v-show="active === 'today'" />
         <HistoryPage v-show="active === 'history'" />
         <InsightsPage v-show="active === 'insights'" />
-        <div v-show="active === 'checklist'" class="page">
-          <header class="phead">
-            <h1>清单</h1>
-            <span class="sub">任务、提醒与完成率</span>
-          </header>
-          <div class="glass-card card">
-            <ChecklistCard />
-          </div>
-        </div>
+        <TodoPage v-show="active === 'todo'" />
         <div v-show="active === 'data'" class="page">
           <header class="phead">
             <h1>数据</h1>
