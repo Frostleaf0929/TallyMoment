@@ -104,6 +104,11 @@ fn foreground() -> Option<(String, String, String, String)> {
 
 /// 追踪主循环：每秒一次，独立线程
 pub fn spawn(app: AppHandle) {
+    // 自排除：不记录 tallymoment 自己
+    let self_key = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_lowercase()));
+
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
         let now = Local::now().timestamp();
@@ -148,6 +153,16 @@ pub fn spawn(app: AppHandle) {
             }
             continue;
         };
+
+        if self_key.as_ref() == Some(&app_key) {
+            // 前台是自己：不计时
+            if let Ok(mut guard) = shared.session.lock() {
+                if let Some(s) = guard.take() {
+                    with_db(&app, |db| close_session(db, &s, now));
+                }
+            }
+            continue;
+        }
 
         let Ok(mut guard) = shared.session.lock() else {
             continue;

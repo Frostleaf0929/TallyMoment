@@ -1,6 +1,7 @@
 mod storage;
 mod tracker;
 
+use chrono::Timelike as _;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -12,23 +13,99 @@ use tauri::{
 use tracker::{Db, TrackerShared, TrayMenu};
 
 #[derive(Serialize)]
-struct TodaySummary {
+#[serde(rename_all = "camelCase")]
+struct CurrentApp {
+    display_name: String,
     seconds: i64,
-    paused: bool,
-    recording: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DayReport {
+    date: String,
+    total_seconds: i64,
+    app_count: usize,
+    recording: bool,
+    paused: bool,
+    current: Option<CurrentApp>,
+    apps: Vec<storage::AppUsage>,
+    hourly: Vec<storage::HourSlice>,
+    segments: Vec<storage::SegSlice>,
+}
+
+/// 今日回顾报表：库内数据 + 进行中会话实时合并，前端一次拉全
 #[tauri::command]
-fn today_summary(app: tauri::AppHandle) -> TodaySummary {
-    let seconds = tracker::today_total(&app);
+fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
     let shared = app.state::<TrackerShared>();
     let paused = shared.paused.load(Ordering::Relaxed);
-    let recording = shared.session.lock().map(|g| g.is_some()).unwrap_or(false);
-    TodaySummary {
-        seconds,
-        paused,
-        recording,
+    let session = shared.session.lock().map_err(|_| "会话锁不可用")?;
+    let now = chrono::Local::now().timestamp();
+
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let date = storage::today_date();
+    let day_start = storage::today_start_ts();
+    let day_end = day_start + 86_400;
+
+    let mut apps = storage::today_app_usage(&conn, &date)?;
+    let mut hourly = storage::today_hourly(&conn, &date)?;
+    let mut segments = storage::today_segments(&conn, day_start, day_end)?;
+
+    // 进行中的会话并入报表，让面板实时
+    let mut current = None;
+    let cur_hour = chrono::Local::now().hour() as i32;
+    if let Some(s) = session.as_ref() {
+        let secs = (now - s.seg_start).max(0);
+        let display = apps
+            .iter()
+            .find(|a| a.name == s.app_key)
+            .map(|a| a.display_name.clone())
+            .unwrap_or_else(|| s.app_key.trim_end_matches(".exe").to_string());
+        match apps.iter_mut().find(|a| a.name == s.app_key) {
+            Some(a) => a.seconds += secs,
+            None => apps.push(storage::AppUsage {
+                name: s.app_key.clone(),
+                display_name: display.clone(),
+                seconds: secs,
+            }),
+        }
+        match hourly
+            .iter_mut()
+            .find(|h| h.hour == cur_hour && h.app_name == s.app_key)
+        {
+            Some(h) => h.seconds += secs,
+            None => hourly.push(storage::HourSlice {
+                hour: cur_hour,
+                app_name: s.app_key.clone(),
+                seconds: secs,
+            }),
+        }
+        segments.push(storage::SegSlice {
+            app_name: s.app_key.clone(),
+            start_ts: s.seg_start,
+            end_ts: now,
+            title: s.title.clone(),
+        });
+        current = Some(CurrentApp {
+            display_name: display,
+            seconds: secs,
+        });
     }
+    apps.sort_by(|a, b| b.seconds.cmp(&a.seconds));
+    let total_seconds = apps.iter().map(|a| a.seconds).sum::<i64>();
+    let app_count = apps.len();
+    let recording = session.is_some() && !paused;
+    Ok(DayReport {
+        date,
+        total_seconds,
+        app_count,
+        recording,
+        paused,
+        current,
+        apps,
+        hourly,
+        segments,
+    })
 }
 
 // 关闭主窗口时不退出，而是隐藏到托盘（记录在后台继续）
@@ -63,7 +140,7 @@ pub fn run() {
             today: OnceLock::new(),
             pause: OnceLock::new(),
         })
-        .invoke_handler(tauri::generate_handler![today_summary])
+        .invoke_handler(tauri::generate_handler![today_report])
         .setup(|app| {
             let today_item =
                 MenuItem::with_id(app, "today", "今日累计 0 分钟", false, None::<&str>)?;

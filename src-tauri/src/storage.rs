@@ -1,6 +1,32 @@
 use chrono::{Local, TimeZone, Timelike};
 use rusqlite::Connection;
+use serde::Serialize;
 use std::path::PathBuf;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUsage {
+    pub name: String,
+    pub display_name: String,
+    pub seconds: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HourSlice {
+    pub hour: i32,
+    pub app_name: String,
+    pub seconds: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SegSlice {
+    pub app_name: String,
+    pub start_ts: i64,
+    pub end_ts: i64,
+    pub title: String,
+}
 
 /// 数据库文件位置：绿色优先（exe 旁 Data/），不可写时回退 %APPDATA%\TallyMoment\Data
 pub fn resolve_db_path() -> Result<PathBuf, String> {
@@ -177,24 +203,26 @@ pub fn today_seconds(conn: &Connection) -> Result<i64, String> {
     .map_err(|e| format!("查询今日汇总失败: {e}"))
 }
 
-#[allow(dead_code)]
 pub fn today_date() -> String {
     Local::now().format("%Y-%m-%d").to_string()
 }
 
-#[allow(dead_code)]
-pub fn today_app_seconds(conn: &Connection) -> Result<Vec<(String, i64)>, String> {
-    let today = today_date();
+/// 今日应用排行（按秒降序）
+pub fn today_app_usage(conn: &Connection, date: &str) -> Result<Vec<AppUsage>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT COALESCE(a.display_name, a.name), s.seconds
+            "SELECT a.name, COALESCE(a.display_name, a.name), s.seconds
              FROM daily_stats s JOIN apps a ON a.id = s.app_id
              WHERE s.date = ?1 ORDER BY s.seconds DESC",
         )
         .map_err(|e| format!("查询失败: {e}"))?;
     let rows = stmt
-        .query_map([&today], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        .query_map([date], |row| {
+            Ok(AppUsage {
+                name: row.get(0)?,
+                display_name: row.get(1)?,
+                seconds: row.get(2)?,
+            })
         })
         .map_err(|e| format!("查询失败: {e}"))?;
     let mut out = Vec::new();
@@ -204,8 +232,58 @@ pub fn today_app_seconds(conn: &Connection) -> Result<Vec<(String, i64)>, String
     Ok(out)
 }
 
-/// 本地今天的 0 点时间戳（用于判断当前会话是否跨天）
-#[allow(dead_code)]
+/// 今日小时分布（hour 0-23，按应用细分）
+pub fn today_hourly(conn: &Connection, date: &str) -> Result<Vec<HourSlice>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.hour, a.name, s.seconds
+             FROM hourly_stats s JOIN apps a ON a.id = s.app_id
+             WHERE s.date = ?1 ORDER BY s.hour, s.seconds DESC",
+        )
+        .map_err(|e| format!("查询失败: {e}"))?;
+    let rows = stmt
+        .query_map([date], |row| {
+            Ok(HourSlice {
+                hour: row.get(0)?,
+                app_name: row.get(1)?,
+                seconds: row.get(2)?,
+            })
+        })
+        .map_err(|e| format!("查询失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 今日区间明细（时间线用），按开始时间升序
+pub fn today_segments(conn: &Connection, day_start: i64, day_end: i64) -> Result<Vec<SegSlice>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.name, s.start_ts, s.end_ts, s.title
+             FROM segments s JOIN apps a ON a.id = s.app_id
+             WHERE s.start_ts >= ?1 AND s.start_ts < ?2 ORDER BY s.start_ts",
+        )
+        .map_err(|e| format!("查询失败: {e}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params![day_start, day_end], |row| {
+            Ok(SegSlice {
+                app_name: row.get(0)?,
+                start_ts: row.get(1)?,
+                end_ts: row.get(2)?,
+                title: row.get(3)?,
+            })
+        })
+        .map_err(|e| format!("查询失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 本地今天的 0 点时间戳（区间查询边界）
 pub fn today_start_ts() -> i64 {
     let now = Local::now();
     let midnight = now

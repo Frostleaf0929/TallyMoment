@@ -1,23 +1,20 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { darkTheme, NConfigProvider } from "naive-ui";
+import type { DayReport } from "./types";
+import { fmtDuration } from "./lib/format";
+import DayTimeline from "./components/DayTimeline.vue";
+import HourlyChart from "./components/HourlyChart.vue";
+import AppRanking from "./components/AppRanking.vue";
 
-const stack = ["Tauri 2", "Vue 3", "TypeScript", "Pinia", "Naive UI", "ECharts"];
-
-const seconds = ref(0);
-const paused = ref(false);
-const recording = ref(false);
+const report = ref<DayReport | null>(null);
 const online = ref(false);
 let timer: number | undefined;
 
 async function refresh() {
   try {
-    const s = await invoke<{ seconds: number; paused: boolean; recording: boolean }>(
-      "today_summary"
-    );
-    seconds.value = s.seconds;
-    paused.value = s.paused;
-    recording.value = s.recording;
+    report.value = await invoke<DayReport>("today_report");
     online.value = true;
   } catch {
     online.value = false;
@@ -26,34 +23,80 @@ async function refresh() {
 
 onMounted(() => {
   refresh();
-  timer = window.setInterval(refresh, 3000);
+  timer = window.setInterval(refresh, 5000);
 });
 onUnmounted(() => clearInterval(timer));
 
-const minutes = () => Math.floor(seconds.value / 60);
-const statusText = () => (!online.value ? "未连接" : paused.value ? "已暂停" : "记录中");
+const dateLabel = () =>
+  new Date().toLocaleDateString("zh-CN", {
+    month: "long",
+    day: "numeric",
+    weekday: "long",
+  });
+const statusText = () =>
+  !online.value
+    ? "未连接"
+    : report.value?.paused
+      ? "已暂停"
+      : report.value?.recording
+        ? "记录中"
+        : "待机";
 </script>
 
 <template>
-  <main class="landing">
-    <div class="badge">M1 · 核心时间记录</div>
-    <h1>拾刻</h1>
-    <p class="sub">TallyMoment</p>
-    <p class="slogan">拾起每一刻，看清每一天</p>
+  <NConfigProvider :theme="darkTheme">
+    <main class="dash">
+      <header class="top">
+        <div class="brand">
+          <span class="logo">拾刻</span>
+          <span class="en">TallyMoment</span>
+        </div>
+        <div class="meta">
+          <span class="date">{{ dateLabel() }}</span>
+          <span class="chip" :class="{ live: report?.recording && !report?.paused }">
+            <span class="dot"></span>{{ statusText() }}
+          </span>
+        </div>
+      </header>
 
-    <div class="status">
-      <div class="pulse" :class="{ off: paused || !online }"></div>
-      <span>{{ statusText() }}</span>
-      <span class="divider">·</span>
-      <span class="num">{{ minutes() }}</span>
-      <span>分钟今日</span>
-    </div>
+      <section class="cards">
+        <div class="card stat">
+          <p class="label">今日总时长</p>
+          <p class="value accent">{{ fmtDuration(report?.totalSeconds ?? 0) }}</p>
+        </div>
+        <div class="card stat">
+          <p class="label">使用应用</p>
+          <p class="value">{{ report?.appCount ?? 0 }} <small>个</small></p>
+        </div>
+        <div class="card stat">
+          <p class="label">当前使用</p>
+          <p class="value small">
+            {{ report?.current?.displayName?.replace(/\.exe$/i, "") ?? "—" }}
+          </p>
+        </div>
+        <div class="card stat">
+          <p class="label">记录状态</p>
+          <p class="value small">{{ statusText() }}</p>
+        </div>
+      </section>
 
-    <div class="stack">
-      <span v-for="s in stack" :key="s">{{ s }}</span>
-    </div>
-    <p class="hint">关闭窗口会最小化到托盘，记录不会中断 · 托盘菜单可暂停记录</p>
-  </main>
+      <section class="card wide">
+        <h2>今日时间线</h2>
+        <DayTimeline :segments="report?.segments ?? []" />
+      </section>
+
+      <section class="grid2">
+        <div class="card">
+          <h2>24 小时分布</h2>
+          <HourlyChart :slices="report?.hourly ?? []" />
+        </div>
+        <div class="card">
+          <h2>应用排行</h2>
+          <AppRanking :apps="report?.apps ?? []" />
+        </div>
+      </section>
+    </main>
+  </NConfigProvider>
 </template>
 
 <style>
@@ -78,74 +121,76 @@ body {
 </style>
 
 <style scoped>
-.landing {
+.dash {
   min-height: 100vh;
+  padding: 18px 22px 22px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
+  gap: 14px;
   background:
-    radial-gradient(600px 300px at 20% 0%, rgba(99, 102, 241, 0.16), transparent 60%),
-    radial-gradient(600px 300px at 85% 100%, rgba(16, 185, 129, 0.12), transparent 60%),
+    radial-gradient(700px 320px at 15% -5%, rgba(99, 102, 241, 0.12), transparent 60%),
+    radial-gradient(700px 320px at 90% 105%, rgba(16, 185, 129, 0.08), transparent 60%),
     #0f1117;
 }
 
-.badge {
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: #a5b4fc;
-  border: 1px solid rgba(99, 102, 241, 0.35);
-  background: rgba(99, 102, 241, 0.1);
-  border-radius: 999px;
-  padding: 4px 14px;
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
-h1 {
-  margin: 18px 0 0;
-  font-size: 56px;
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.logo {
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
 }
 
-.sub {
-  margin: 0;
-  font-size: 15px;
-  letter-spacing: 0.5em;
-  color: #8b93a7;
+.en {
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  color: #6b7280;
   text-transform: uppercase;
 }
 
-.slogan {
-  margin: 14px 0 0;
-  color: #b6bdcc;
-}
-
-.status {
+.meta {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 24px;
-  padding: 10px 20px;
+  gap: 14px;
+}
+
+.date {
+  font-size: 12px;
+  color: #8b93a7;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #9aa3b8;
   border: 1px solid #2a2f3d;
-  background: rgba(22, 26, 36, 0.8);
-  border-radius: 12px;
-  color: #b6bdcc;
+  background: #161a24;
+  border-radius: 999px;
+  padding: 4px 12px;
 }
 
-.pulse {
-  width: 9px;
-  height: 9px;
+.chip .dot {
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: #34d399;
-  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
-  animation: pulse 2s infinite;
+  background: #6b7280;
 }
 
-.pulse.off {
-  background: #6b7280;
-  animation: none;
-  box-shadow: none;
+.chip.live .dot {
+  background: #34d399;
+  animation: pulse 2s infinite;
 }
 
 @keyframes pulse {
@@ -153,39 +198,73 @@ h1 {
     box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5);
   }
   70% {
-    box-shadow: 0 0 0 8px rgba(52, 211, 153, 0);
+    box-shadow: 0 0 0 6px rgba(52, 211, 153, 0);
   }
   100% {
     box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
   }
 }
 
-.num {
-  color: #34d399;
-  font-weight: 700;
-  font-size: 18px;
+.cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
 }
 
-.stack {
-  display: flex;
-  gap: 8px;
-  margin-top: 26px;
-  flex-wrap: wrap;
-  justify-content: center;
+.card {
+  border: 1px solid #232936;
+  background: rgba(22, 26, 36, 0.72);
+  border-radius: 14px;
+  padding: 16px 18px;
 }
 
-.stack span {
-  font-size: 12px;
+.card.wide {
+  padding-bottom: 12px;
+}
+
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
   color: #9aa3b8;
-  border: 1px solid #2a2f3d;
-  background: #161a24;
-  border-radius: 6px;
-  padding: 4px 10px;
+  letter-spacing: 0.04em;
 }
 
-.hint {
-  margin-top: 30px;
+.stat .label {
+  margin: 0 0 8px;
   font-size: 12px;
-  color: #5c6474;
+  color: #6b7280;
+}
+
+.stat .value {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: #e8eaf2;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat .value.accent {
+  color: #34d399;
+}
+
+.stat .value.small {
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat small {
+  font-size: 12px;
+  font-weight: 400;
+  color: #6b7280;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 14px;
+  flex: 1;
 }
 </style>
