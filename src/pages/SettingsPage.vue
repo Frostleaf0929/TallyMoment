@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { onMounted, ref } from "vue";
 import { NSwitch } from "naive-ui";
+import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import Icon from "../components/Icon.vue";
 
 type ThemePref = "dark" | "light" | "system";
@@ -25,6 +27,26 @@ const themes: { key: ThemePref; label: string; icon: string }[] = [
   { key: "light", label: "浅色", icon: "sun" },
   { key: "system", label: "跟随系统", icon: "settings" },
 ];
+
+const autoStart = ref(false);
+
+async function toggleAutoStart(v: boolean) {
+  try {
+    if (v) await enable();
+    else await disable();
+    autoStart.value = v;
+  } catch {
+    autoStart.value = false;
+  }
+}
+
+onMounted(async () => {
+  try {
+    autoStart.value = await isEnabled();
+  } catch {
+    autoStart.value = false;
+  }
+});
 
 const accents: { key: string; color: string; label: string }[] = [
   { key: "indigo", color: "#7b84ec", label: "靛蓝" },
@@ -82,6 +104,17 @@ const accents: { key: string; color: string; label: string }[] = [
           <p class="rd">半透明卡片与侧栏（低配设备可关闭）</p>
         </div>
         <NSwitch :value="glass" @update:value="() => emit('toggleGlass')" />
+      </div>
+    </div>
+
+    <div class="glass-card card">
+      <h2>系统</h2>
+      <div class="row">
+        <div>
+          <p class="rt">开机自启动</p>
+          <p class="rd">登录 Windows 后自动在后台运行并开始记录</p>
+        </div>
+        <NSwitch :value="autoStart" @update:value="toggleAutoStart" />
       </div>
     </div>
 

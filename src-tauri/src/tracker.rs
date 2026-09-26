@@ -118,9 +118,8 @@ pub fn spawn(app: AppHandle) {
         std::thread::sleep(Duration::from_secs(1));
         let now = Local::now().timestamp();
 
-        if now % TRAY_REFRESH_SECS == 0 {
-            refresh_tray(&app);
-            // 键鼠计数增量落库（M6）
+        // 键鼠增量每 5 秒落库（强杀/崩溃最多丢 5 秒）
+        if now % 5 == 0 {
             let (dk, dc) = input_hook::flush_delta();
             if dk > 0 || dc > 0 {
                 let dt = Local::now();
@@ -128,6 +127,10 @@ pub fn spawn(app: AppHandle) {
                 let hour = dt.hour() as i32;
                 with_db(&app, |db| storage::add_input_stats(db, &date, hour, dk, dc));
             }
+        }
+
+        if now % TRAY_REFRESH_SECS == 0 {
+            refresh_tray(&app);
         }
 
         check_reminders(&app, Local::now());

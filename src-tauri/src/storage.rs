@@ -792,6 +792,243 @@ pub fn rule_mark_fired(conn: &Connection, id: i64, key: &str) -> Result<(), Stri
 
 // ---------- 导入 / 导出 ----------
 
+// ---------- Tai 对齐导出 / 数据删除 ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSummary {
+    pub segments: usize,
+    pub hourly: usize,
+    pub daily: usize,
+    pub input: usize,
+    pub apps: usize,
+}
+
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// 生成 Tai 能直接打开的 data.db（App/DailyLog/HoursLog 三表；Tai 启动自检会自动补齐其余表）
+fn export_tai_db(conn: &Connection, db_path: &std::path::Path) -> Result<(), String> {
+    let tai = Connection::open(db_path).map_err(|e| format!("创建 Tai 库失败: {e}"))?;
+    tai.execute_batch(
+        r#"CREATE TABLE "App" ([ID] INTEGER PRIMARY KEY, [Name] nvarchar NULL DEFAULT '', [Alias] nvarchar NULL DEFAULT '', [Description] nvarchar NULL DEFAULT '', [File] nvarchar NULL DEFAULT '', [CategoryID] int NULL DEFAULT 0, [IconFile] nvarchar NULL DEFAULT '', [TotalTime] int NULL DEFAULT 0);
+CREATE TABLE "DailyLog" ([ID] INTEGER PRIMARY KEY, [Date] datetime NULL, [Time] int NULL DEFAULT 0, [AppModelID] int NULL DEFAULT 0);
+CREATE TABLE "HoursLog" ([ID] INTEGER PRIMARY KEY, [DataTime] datetime NULL, [Time] int NULL DEFAULT 0, [AppModelID] int NULL DEFAULT 0);"#,
+    )
+    .map_err(|e| format!("建 Tai 表失败: {e}"))?;
+
+    let mut apps: Vec<(i64, String, String, String, i64)> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.id, a.name, COALESCE(a.display_name, a.name), COALESCE(a.exe_path, ''),
+                        COALESCE((SELECT SUM(seconds) FROM daily_stats d WHERE d.app_id = a.id), 0)
+                 FROM apps a ORDER BY a.id",
+            )
+            .map_err(|e| format!("读取应用失败: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            })
+            .map_err(|e| format!("读取应用失败: {e}"))?;
+        for r in rows {
+            apps.push(r.map_err(|e| format!("读取应用失败: {e}"))?);
+        }
+    }
+    for (id, name, display, exe, total) in &apps {
+        tai.execute(
+            "INSERT INTO \"App\" (ID, Name, Alias, Description, File, TotalTime) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![id, name, display, display, exe, total],
+        )
+        .map_err(|e| format!("写入 Tai App 失败: {e}"))?;
+    }
+
+    let mut stmt = conn
+        .prepare("SELECT date, app_id, seconds FROM daily_stats ORDER BY date, app_id")
+        .map_err(|e| format!("读取日汇总失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|e| format!("读取日汇总失败: {e}"))?;
+    let mut daily_rows = Vec::new();
+    for r in rows {
+        daily_rows.push(r.map_err(|e| format!("读取日汇总失败: {e}"))?);
+    }
+    for (i, (date, app_id, secs)) in daily_rows.iter().enumerate() {
+        tai.execute(
+            "INSERT INTO \"DailyLog\" (ID, Date, Time, AppModelID) VALUES(?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                (i + 1) as i64,
+                format!("{date} 00:00:00"),
+                secs,
+                app_id
+            ],
+        )
+        .map_err(|e| format!("写入 Tai DailyLog 失败: {e}"))?;
+    }
+
+    let mut stmt = conn
+        .prepare("SELECT date, hour, app_id, seconds FROM hourly_stats ORDER BY date, hour, app_id")
+        .map_err(|e| format!("读取小时汇总失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i32>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(|e| format!("读取小时汇总失败: {e}"))?;
+    let mut hourly_rows = Vec::new();
+    for r in rows {
+        hourly_rows.push(r.map_err(|e| format!("读取小时汇总失败: {e}"))?);
+    }
+    for (i, (date, hour, app_id, secs)) in hourly_rows.iter().enumerate() {
+        tai.execute(
+            "INSERT INTO \"HoursLog\" (ID, DataTime, Time, AppModelID) VALUES(?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                (i + 1) as i64,
+                format!("{date} {hour:02}:00:00"),
+                secs,
+                app_id
+            ],
+        )
+        .map_err(|e| format!("写入 Tai HoursLog 失败: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Tai 同列 CSV 导出（每日/时段；列：日期,应用,描述,时长,分类；UTF-8 带 BOM，同 Tai）
+fn write_tai_csv(
+    conn: &Connection,
+    path: &std::path::Path,
+    granularity: &str,
+) -> Result<(), String> {
+    let (date_sel, table) = if granularity == "daily" {
+        ("s.date", "daily_stats")
+    } else {
+        ("s.date || ' ' || printf('%02d:00:00', s.hour)", "hourly_stats")
+    };
+    let sql = format!(
+        "SELECT {t} AS t, COALESCE(a.display_name, a.name), COALESCE(a.display_name, a.name), s.seconds
+         FROM {tb} s JOIN apps a ON a.id = s.app_id ORDER BY t",
+        t = date_sel,
+        tb = table
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("读取 CSV 数据失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(|e| format!("读取 CSV 数据失败: {e}"))?;
+    let mut out = String::from("\u{FEFF}日期,应用,描述,时长,分类\r\n");
+    for r in rows {
+        let (t, name, desc, secs) = r.map_err(|e| format!("读取 CSV 数据失败: {e}"))?;
+        out.push_str(&format!(
+            "{},{},{},{},{}\r\n",
+            csv_escape(&t),
+            csv_escape(&name),
+            csv_escape(&desc),
+            secs,
+            "未分类"
+        ));
+    }
+    std::fs::write(path, out).map_err(|e| format!("写 CSV 失败: {e}"))?;
+    Ok(())
+}
+
+/// Tai 对齐导出：data.db + 每日/时段两个 CSV，返回生成的文件路径
+pub fn export_tai(
+    conn: &Connection,
+    dir: &std::path::Path,
+    base: &str,
+) -> Result<Vec<String>, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败: {e}"))?;
+    let db_path = dir.join(format!("{base}.db"));
+    export_tai_db(conn, &db_path)?;
+    let csv_daily = dir.join(format!("{base}-每日.csv"));
+    let csv_hours = dir.join(format!("{base}-时段.csv"));
+    write_tai_csv(conn, &csv_daily, "daily")?;
+    write_tai_csv(conn, &csv_hours, "hours")?;
+    Ok(vec![
+        db_path.to_string_lossy().to_string(),
+        csv_daily.to_string_lossy().to_string(),
+        csv_hours.to_string_lossy().to_string(),
+    ])
+}
+
+/// 删除时间记录数据：scope = "today" | "all"；app_id 可选（仅删该应用）
+pub fn delete_range(
+    conn: &Connection,
+    scope: &str,
+    app_id: Option<i64>,
+) -> Result<DeleteSummary, String> {
+    let mut sum = DeleteSummary {
+        segments: 0,
+        hourly: 0,
+        daily: 0,
+        input: 0,
+        apps: 0,
+    };
+    let app_cond = app_id
+        .map(|a| format!(" AND app_id = {a}"))
+        .unwrap_or_default();
+    let run = |sql: String| -> Result<usize, String> {
+        conn.execute(&sql, [])
+            .map_err(|e| format!("删除失败: {e}"))
+    };
+    match scope {
+        "today" => {
+            let today = today_date();
+            sum.segments = run(format!(
+                "DELETE FROM segments WHERE start_ts >= {}{app_cond}",
+                today_start_ts()
+            ))?;
+            sum.hourly = run(format!(
+                "DELETE FROM hourly_stats WHERE date = '{today}'{app_cond}"
+            ))?;
+            sum.daily = run(format!(
+                "DELETE FROM daily_stats WHERE date = '{today}'{app_cond}"
+            ))?;
+            sum.input = run(format!("DELETE FROM input_stats WHERE date = '{today}'"))?;
+        }
+        "all" => {
+            sum.segments = run(format!("DELETE FROM segments{app_cond}"))?;
+            sum.hourly = run(format!("DELETE FROM hourly_stats WHERE 1=1{app_cond}"))?;
+            sum.daily = run(format!("DELETE FROM daily_stats WHERE 1=1{app_cond}"))?;
+            sum.input = run("DELETE FROM input_stats".to_string())?;
+            sum.apps = run(format!("DELETE FROM apps WHERE 1=1{app_cond}"))?;
+        }
+        _ => return Err("删除范围非法".into()),
+    }
+    Ok(sum)
+}
+
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportSummary {
@@ -1548,5 +1785,65 @@ mod tests {
         let dst = tmp_db("ours2.db");
         let conn = open(&dst).unwrap();
         assert!(import_tai_data(src_path.to_str().unwrap(), &conn).is_err());
+    }
+}
+
+#[cfg(test)]
+mod tai_export_tests {
+    use super::*;
+
+    #[test]
+    fn tai_export_creates_compatible_db_and_csv() {
+        let dir = std::env::temp_dir().join(format!("tm-tai-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ours = dir.join("ours.db");
+        let _ = std::fs::remove_file(&ours);
+        let conn = open(&ours).unwrap();
+        let app_id = app_id_for(&conn, "test.exe", "测试应用", "C:/test.exe").unwrap();
+        add_seconds(&conn, app_id, 1_700_000_000, 1_700_000_600).unwrap();
+        write_segment(&conn, app_id, 1_700_000_000, 1_700_000_600, "t").unwrap();
+
+        let files = export_tai(&conn, &dir, "Tai数据").unwrap();
+        assert_eq!(files.len(), 3);
+
+        // 打开生成的 Tai 库并校验
+        let tai = Connection::open(&dir.join("Tai数据.db")).unwrap();
+        let app_count: i64 = tai
+            .query_row("SELECT COUNT(*) FROM \"App\"", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(app_count, 1);
+        let (total, dcount): (i64, i64) = tai
+            .query_row(
+                "SELECT TotalTime, (SELECT COUNT(*) FROM \"DailyLog\") FROM \"App\" WHERE ID = ?1",
+                [app_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(total, 600);
+        assert_eq!(dcount, 1);
+        let date_text: String = tai
+            .query_row("SELECT Date FROM \"DailyLog\" LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert!(date_text.ends_with("00:00:00"), "Date 应为 datetime 文本");
+        let hcount: i64 = tai
+            .query_row("SELECT COUNT(*) FROM \"HoursLog\"", [], |r| r.get(0))
+            .unwrap();
+        assert!(hcount >= 1);
+
+        // CSV 校验
+        let csv = std::fs::read_to_string(dir.join("Tai数据-每日.csv")).unwrap();
+        assert!(csv.starts_with('\u{feff}'));
+        assert!(csv.contains("日期,应用,描述,时长,分类"));
+        assert!(csv.contains("测试应用"));
+
+        // 删除：全部时间记录
+        let sum = delete_range(&conn, "all", None).unwrap();
+        assert!(sum.segments >= 1 && sum.daily >= 1 && sum.apps >= 1);
+        for t in ["segments", "daily_stats", "apps"] {
+            let left: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(left, 0, "{t} 应为空");
+        }
     }
 }

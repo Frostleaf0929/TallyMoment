@@ -378,6 +378,32 @@ fn reminder_show_window(app: tauri::AppHandle) {
     }
 }
 
+/// Tai 对齐导出：data.db + 每日/时段 CSV（path 为用户选择的 .db 位置）
+#[tauri::command]
+fn export_tai(app: tauri::AppHandle, path: String) -> Result<Vec<String>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let p = std::path::PathBuf::from(&path);
+    let dir = p.parent().ok_or("导出路径异常")?.to_path_buf();
+    let base = p
+        .file_stem()
+        .map(|f| f.to_string_lossy().to_string())
+        .ok_or("导出路径异常")?;
+    storage::export_tai(&conn, &dir, &base)
+}
+
+/// 删除时间记录数据（scope: today | all；app_id 可选）
+#[tauri::command]
+fn delete_data(
+    app: tauri::AppHandle,
+    scope: String,
+    app_id: Option<i64>,
+) -> Result<storage::DeleteSummary, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::delete_range(&conn, &scope, app_id)
+}
+
 #[tauri::command]
 fn close_reminder(app: tauri::AppHandle) {
     reminder::close(&app);
@@ -482,6 +508,10 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_opener::init())
         .manage(Db(Mutex::new(db)))
         .manage(TrackerShared {
@@ -510,6 +540,8 @@ pub fn run() {
             reminder_resize,
             reminder_pending,
             reminder_show_window,
+            export_tai,
+            delete_data,
             close_reminder,
             import_tai,
             export_json,

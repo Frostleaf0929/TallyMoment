@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { darkTheme, NConfigProvider, type GlobalTheme } from "naive-ui";
 import Icon from "./components/Icon.vue";
+import DataCard from "./components/DataCard.vue";
 import PetView from "./components/PetView.vue";
 import ToastStack from "./components/ToastStack.vue";
 import TodayPage from "./pages/TodayPage.vue";
