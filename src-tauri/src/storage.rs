@@ -961,6 +961,110 @@ fn write_tai_csv(
     Ok(())
 }
 
+/// Tai 同款 xlsx 表格导出（每日/时段两个工作表，列同 CSV）
+fn write_tai_xlsx(conn: &Connection, path: &std::path::Path) -> Result<(), String> {
+    use rust_xlsxwriter::Workbook;
+
+    // 先把两份行数据从 SQLite 取出
+    let mut daily_rows: Vec<(String, String, String, i64)> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT s.date, COALESCE(a.display_name, a.name), COALESCE(a.display_name, a.name), s.seconds
+                 FROM daily_stats s JOIN apps a ON a.id = s.app_id ORDER BY s.date",
+            )
+            .map_err(|e| format!("读取日汇总失败: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| format!("读取日汇总失败: {e}"))?;
+        for r in rows {
+            daily_rows.push(r.map_err(|e| format!("读取日汇总失败: {e}"))?);
+        }
+    }
+    let mut hours_rows: Vec<(String, String, String, i64)> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT s.date || ' ' || printf('%02d:00:00', s.hour), COALESCE(a.display_name, a.name),
+                        COALESCE(a.display_name, a.name), s.seconds
+                 FROM hourly_stats s JOIN apps a ON a.id = s.app_id
+                 ORDER BY s.date, s.hour",
+            )
+            .map_err(|e| format!("读取小时汇总失败: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| format!("读取小时汇总失败: {e}"))?;
+        for r in rows {
+            hours_rows.push(r.map_err(|e| format!("读取小时汇总失败: {e}"))?);
+        }
+    }
+
+    let headers = ["日期", "应用", "描述", "时长", "分类"];
+    let mut wb = Workbook::new();
+    {
+        let sheet = wb.add_worksheet();
+        sheet
+            .set_name("每日")
+            .map_err(|e| format!("设置工作表失败: {e}"))?;
+        for (c, h) in headers.iter().enumerate() {
+            sheet
+                .write(0, c as u16, *h)
+                .map_err(|e| format!("写表头失败: {e}"))?;
+        }
+        for (r, (d, n, ds, secs)) in daily_rows.iter().enumerate() {
+            let row = (r + 1) as u32;
+            sheet.write(row, 0, d).map_err(|e| format!("写入失败: {e}"))?;
+            sheet.write(row, 1, n).map_err(|e| format!("写入失败: {e}"))?;
+            sheet.write(row, 2, ds).map_err(|e| format!("写入失败: {e}"))?;
+            sheet
+                .write(row, 3, *secs)
+                .map_err(|e| format!("写入失败: {e}"))?;
+            sheet
+                .write(row, 4, "未分类")
+                .map_err(|e| format!("写入失败: {e}"))?;
+        }
+    }
+    {
+        let sheet = wb.add_worksheet();
+        sheet
+            .set_name("时段")
+            .map_err(|e| format!("设置工作表失败: {e}"))?;
+        for (c, h) in headers.iter().enumerate() {
+            sheet
+                .write(0, c as u16, *h)
+                .map_err(|e| format!("写表头失败: {e}"))?;
+        }
+        for (r, (t, n, ds, secs)) in hours_rows.iter().enumerate() {
+            let row = (r + 1) as u32;
+            sheet.write(row, 0, t).map_err(|e| format!("写入失败: {e}"))?;
+            sheet.write(row, 1, n).map_err(|e| format!("写入失败: {e}"))?;
+            sheet.write(row, 2, ds).map_err(|e| format!("写入失败: {e}"))?;
+            sheet
+                .write(row, 3, *secs)
+                .map_err(|e| format!("写入失败: {e}"))?;
+            sheet
+                .write(row, 4, "未分类")
+                .map_err(|e| format!("写入失败: {e}"))?;
+        }
+    }
+    wb.save(path).map_err(|e| format!("保存 xlsx 失败: {e}"))?;
+    Ok(())
+}
+
 /// Tai 对齐导出：data.db + 每日/时段两个 CSV，返回生成的文件路径
 pub fn export_tai(
     conn: &Connection,
@@ -972,10 +1076,13 @@ pub fn export_tai(
     export_tai_db(conn, &db_path)?;
     let csv_daily = dir.join(format!("{base}-每日.csv"));
     let csv_hours = dir.join(format!("{base}-时段.csv"));
+    let xlsx_path = dir.join(format!("{base}.xlsx"));
     write_tai_csv(conn, &csv_daily, "daily")?;
     write_tai_csv(conn, &csv_hours, "hours")?;
+    write_tai_xlsx(conn, &xlsx_path)?;
     Ok(vec![
         db_path.to_string_lossy().to_string(),
+        xlsx_path.to_string_lossy().to_string(),
         csv_daily.to_string_lossy().to_string(),
         csv_hours.to_string_lossy().to_string(),
     ])
@@ -1804,7 +1911,10 @@ mod tai_export_tests {
         write_segment(&conn, app_id, 1_700_000_000, 1_700_000_600, "t").unwrap();
 
         let files = export_tai(&conn, &dir, "Tai数据").unwrap();
-        assert_eq!(files.len(), 3);
+        assert_eq!(files.len(), 4);
+        let xlsx_path = dir.join("Tai数据.xlsx");
+        let meta = std::fs::metadata(&xlsx_path).unwrap();
+        assert!(meta.len() > 200, "xlsx 应有实际内容");
 
         // 打开生成的 Tai 库并校验
         let tai = Connection::open(&dir.join("Tai数据.db")).unwrap();

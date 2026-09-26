@@ -27,6 +27,7 @@ active-win-pos-rs = "0.10"
 chrono = "0.4"
 tauri-plugin-dialog = "2.7.3"
 tauri-plugin-autostart = "2.5.1"
+rust_xlsxwriter = "0.99.1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

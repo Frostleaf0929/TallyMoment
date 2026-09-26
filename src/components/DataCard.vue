@@ -110,7 +110,7 @@ async function doDelete() {
       <p class="t">导出 Tai 格式</p>
       <p class="d">
         生成一个 Tai 能直接使用的 data.db（放进 Tai 的 Data 目录即可）+ 与 Tai 导出文件同列结构的
-        每日/时段 CSV，共 3 个文件
+        每日/时段 CSV，共 4 个文件（data.db + xlsx 表格 + 2 个 CSV）
       </p>
       <NButton size="small" secondary :loading="busy === 'tai'" @click="exportTai">
         选择位置并导出
