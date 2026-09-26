@@ -13,11 +13,16 @@
     "windows": [
       {
         "title": "拾刻 · TallyMoment",
-        "width": 1000,
-        "height": 650,
+        "width": 1080,
+        "height": 700,
         "minWidth": 860,
         "minHeight": 560,
-        "center": true
+        "center": true,
+        "transparent": true,
+        "windowEffects": {
+          "effects": ["acrylic", "mica"],
+          "state": "followsWindowActiveState"
+        }
       }
     ],
     "security": {

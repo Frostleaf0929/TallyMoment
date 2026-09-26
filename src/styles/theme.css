@@ -1,0 +1,118 @@
+/* ============================================================
+   拾刻 · 设计 Token 体系（单一真源）
+   风格：极简 · Windows Fluent 底蕴 · 毛玻璃 · 柔和去饱和配色
+   图标：Solar Line Duotone (CC BY 4.0, 480 Design — via Iconify)
+   ============================================================ */
+
+:root {
+  /* 表面 */
+  --bg: #0f1116;
+  --bg-glass: rgba(20, 24, 31, 0.58);
+  --surface: rgba(255, 255, 255, 0.045);
+  --surface-hover: rgba(255, 255, 255, 0.08);
+  --surface-solid: #161a21;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.13);
+
+  /* 文字 */
+  --text: #dde1e9;
+  --text-muted: #8a91a0;
+  --text-faint: #5a626e;
+
+  /* 强调色（默认靛蓝，个性化页可切换） */
+  --accent: #7b84ec;
+  --accent-soft: rgba(123, 132, 236, 0.14);
+  --accent-text: #aeb5f2;
+  --accent-border: rgba(123, 132, 236, 0.38);
+
+  /* 语义色（去饱和） */
+  --good: #6fb59a;
+  --good-soft: rgba(111, 181, 154, 0.14);
+  --warn: #d3a95e;
+  --warn-soft: rgba(211, 169, 94, 0.14);
+  --info: #7d92cf;
+  --info-soft: rgba(125, 146, 207, 0.14);
+  --danger: #c9797b;
+  --danger-soft: rgba(201, 121, 123, 0.14);
+
+  /* 形状 */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-full: 999px;
+
+  /* 阴影 */
+  --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.22);
+  --shadow-soft: 0 4px 14px rgba(0, 0, 0, 0.16);
+
+  /* 毛玻璃 */
+  --glass-blur: 26px;
+}
+
+/* ---------- 浅色主题 ---------- */
+[data-theme="light"] {
+  --bg: #eef0f4;
+  --bg-glass: rgba(255, 255, 255, 0.6);
+  --surface: rgba(255, 255, 255, 0.66);
+  --surface-hover: rgba(255, 255, 255, 0.9);
+  --surface-solid: #ffffff;
+  --border: rgba(20, 30, 50, 0.09);
+  --border-strong: rgba(20, 30, 50, 0.16);
+  --text: #242a35;
+  --text-muted: #626b7d;
+  --text-faint: #98a0af;
+  --accent: #6a74e0;
+  --accent-soft: rgba(106, 116, 224, 0.12);
+  --accent-text: #5560d4;
+  --accent-border: rgba(106, 116, 224, 0.35);
+  --good: #4f9e83;
+  --good-soft: rgba(79, 158, 131, 0.12);
+  --warn: #b8893c;
+  --warn-soft: rgba(184, 137, 60, 0.13);
+  --info: #6a83c4;
+  --info-soft: rgba(106, 131, 196, 0.12);
+  --danger: #bd6266;
+  --danger-soft: rgba(189, 98, 102, 0.12);
+  --shadow-card: 0 10px 30px rgba(30, 40, 70, 0.1);
+  --shadow-soft: 0 4px 14px rgba(30, 40, 70, 0.07);
+}
+
+/* ---------- 强调色切换 ---------- */
+[data-accent="teal"]   { --accent: #58b3c4; --accent-soft: rgba(88,179,196,0.14); --accent-text: #8fd0dd; --accent-border: rgba(88,179,196,0.38); }
+[data-accent="green"]  { --accent: #6fb59a; --accent-soft: rgba(111,181,154,0.14); --accent-text: #93cfba; --accent-border: rgba(111,181,154,0.38); }
+[data-accent="violet"] { --accent: #a08fe0; --accent-soft: rgba(160,143,224,0.14); --accent-text: #c0b4ee; --accent-border: rgba(160,143,224,0.38); }
+[data-accent="amber"]  { --accent: #d3a35e; --accent-soft: rgba(211,163,94,0.15); --accent-text: #e5c08b; --accent-border: rgba(211,163,94,0.4); }
+[data-accent="rose"]   { --accent: #d3859b; --accent-soft: rgba(211,133,155,0.14); --accent-text: #e7a8b8; --accent-border: rgba(211,133,155,0.4); }
+
+/* ---------- 通用组件类 ---------- */
+.glass-card {
+  background: var(--bg-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+}
+
+/* 毛玻璃关闭：退化为实底 */
+.glass-off .glass-card {
+  background: var(--surface-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 柔和滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(20, 30, 50, 0.18);
+}

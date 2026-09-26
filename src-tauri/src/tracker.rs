@@ -110,6 +110,8 @@ pub fn spawn(app: AppHandle) {
     let self_key = std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_lowercase()));
+    // 切换防抖：新应用需连续 2 秒在前台才确认切换（过滤 Alt-Tab 掠过的瞬态）
+    let mut pending: Option<(String, String, String, String, i64)> = None;
 
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
@@ -181,22 +183,36 @@ pub fn spawn(app: AppHandle) {
         };
 
         let same_app = guard.as_ref().map(|s| s.app_key == app_key).unwrap_or(false);
-        if !same_app {
-            if let Some(old) = guard.take() {
-                with_db(&app, |db| close_session(db, &old, now));
-            }
-            match with_db(&app, |db| storage::app_id_for(db, &app_key, &display, &exe)) {
-                Some(Ok(app_id)) => {
-                    *guard = Some(Session {
-                        app_id,
-                        app_key,
-                        title,
-                        seg_start: now,
-                    });
+        if same_app {
+            // 回到原应用：撤销未确认的候选
+            pending = None;
+        } else if let Some((pk, pd, pe, pt, pts)) = pending.as_ref() {
+            if *pk == app_key {
+                // 连续第 2 秒仍在新应用 → 确认切换
+                let (k2, d2, e2, t2, ts0) = (pk.clone(), pd.clone(), pe.clone(), pt.clone(), *pts);
+                if let Some(old) = guard.take() {
+                    with_db(&app, |db| close_session(db, &old, ts0));
                 }
-                Some(Err(e)) => eprintln!("[tracker] 应用登记失败: {e}"),
-                None => eprintln!("[tracker] 数据库忙，本秒未记录"),
+                match with_db(&app, |db| storage::app_id_for(db, &k2, &d2, &e2)) {
+                    Some(Ok(app_id)) => {
+                        *guard = Some(Session {
+                            app_id,
+                            app_key: k2,
+                            title: t2,
+                            seg_start: ts0,
+                        });
+                    }
+                    Some(Err(e)) => eprintln!("[tracker] 应用登记失败: {e}"),
+                    None => eprintln!("[tracker] 数据库忙，本秒未记录"),
+                }
+                pending = None;
+            } else {
+                // 又跳到别的应用：换候选重新计时
+                pending = Some((app_key.clone(), display.clone(), exe.clone(), title.clone(), now));
             }
+        } else {
+            // 首次出现的新应用候选
+            pending = Some((app_key.clone(), display.clone(), exe.clone(), title.clone(), now));
         }
 
         // 检查点：会话超过 5 分钟先落库，再原地续段

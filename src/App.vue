@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { darkTheme, NConfigProvider } from "naive-ui";
+import { darkTheme, NConfigProvider, type GlobalTheme } from "naive-ui";
+import Icon from "./components/Icon.vue";
 import ChecklistCard from "./components/ChecklistCard.vue";
 import DataCard from "./components/DataCard.vue";
 import PetView from "./components/PetView.vue";
@@ -10,6 +11,7 @@ import ReminderCard from "./components/ReminderCard.vue";
 import TodayPage from "./pages/TodayPage.vue";
 import HistoryPage from "./pages/HistoryPage.vue";
 import InsightsPage from "./pages/InsightsPage.vue";
+import SettingsPage from "./pages/SettingsPage.vue";
 
 // 提醒小窗/桌宠与主面板共用同一个前端入口，按窗口标签分流
 let mode = "main";
@@ -21,15 +23,57 @@ try {
   /* 浏览器直开时按主面板处理 */
 }
 
-type Tab = "today" | "history" | "insights" | "checklist" | "data";
-const tabs: { key: Tab; label: string }[] = [
-  { key: "today", label: "今日" },
-  { key: "history", label: "历史" },
-  { key: "insights", label: "洞察" },
-  { key: "checklist", label: "清单" },
-  { key: "data", label: "数据" },
+type Tab = "today" | "history" | "insights" | "checklist" | "data" | "settings";
+const tabs: { key: Tab; label: string; icon: string }[] = [
+  { key: "today", label: "今日", icon: "clock" },
+  { key: "history", label: "历史", icon: "doc" },
+  { key: "insights", label: "洞察", icon: "graph" },
+  { key: "checklist", label: "清单", icon: "checklist" },
+  { key: "data", label: "数据", icon: "database" },
 ];
 const active = ref<Tab>("today");
+
+/* ---------- 个性化（主题/强调色/毛玻璃/侧栏），持久化到 localStorage ---------- */
+type ThemePref = "dark" | "light" | "system";
+const themePref = ref<ThemePref>((localStorage.getItem("ui.theme") as ThemePref) || "dark");
+const accent = ref(localStorage.getItem("ui.accent") || "indigo");
+const glass = ref(localStorage.getItem("ui.glass") !== "off");
+const collapsed = ref(localStorage.getItem("ui.side") === "collapsed");
+const systemDark = ref(true);
+let media: MediaQueryList | undefined;
+
+const isDark = () =>
+  themePref.value === "dark" || (themePref.value === "system" && systemDark.value);
+const naiveTheme = ref<GlobalTheme | null>(darkTheme);
+
+watchEffect(() => {
+  const root = document.documentElement;
+  root.dataset.theme = isDark() ? "dark" : "light";
+  root.dataset.accent = accent.value;
+  document.body.classList.toggle("glass-off", !glass.value);
+  naiveTheme.value = isDark() ? darkTheme : null;
+  localStorage.setItem("ui.theme", themePref.value);
+  localStorage.setItem("ui.accent", accent.value);
+  localStorage.setItem("ui.glass", glass.value ? "on" : "off");
+});
+
+function toggleCollapse() {
+  collapsed.value = !collapsed.value;
+  localStorage.setItem("ui.side", collapsed.value ? "collapsed" : "expanded");
+}
+
+function toggleGlass() {
+  glass.value = !glass.value;
+}
+
+const petVisible = ref(true);
+async function togglePet() {
+  try {
+    petVisible.value = await invoke<boolean>("toggle_pet");
+  } catch {
+    /* 忽略 */
+  }
+}
 
 const online = ref(false);
 let timer: number | undefined;
@@ -45,6 +89,10 @@ async function ping() {
 
 onMounted(() => {
   if (mode !== "main") return;
+  media = window.matchMedia("(prefers-color-scheme: dark)");
+  systemDark.value = media.matches;
+  const onScheme = (e: MediaQueryListEvent) => (systemDark.value = e.matches);
+  media.addEventListener("change", onScheme);
   ping();
   timer = window.setInterval(ping, 10000);
 });
@@ -52,14 +100,14 @@ onUnmounted(() => clearInterval(timer));
 </script>
 
 <template>
-  <NConfigProvider :theme="darkTheme">
+  <NConfigProvider :theme="naiveTheme">
     <ReminderCard v-if="mode === 'reminder'" />
     <PetView v-else-if="mode === 'pet'" />
-    <div v-else class="shell">
-      <aside class="side">
+    <div v-else class="shell" :class="{ 'glass-off': !glass }">
+      <aside class="side" :class="{ collapsed }">
         <div class="brand">
           <span class="logo">拾刻</span>
-          <span class="en">TallyMoment</span>
+          <span v-if="!collapsed" class="en">TallyMoment</span>
         </div>
         <nav class="nav">
           <button
@@ -67,14 +115,26 @@ onUnmounted(() => clearInterval(timer));
             :key="t.key"
             class="nav-item"
             :class="{ active: active === t.key }"
+            :title="t.label"
             @click="active = t.key"
           >
-            {{ t.label }}
+            <Icon :name="t.icon" :size="19" />
+            <span v-if="!collapsed" class="nav-label">{{ t.label }}</span>
           </button>
         </nav>
-        <div class="foot">
-          <span class="dot" :class="{ live: online }"></span>
-          <span>{{ online ? "记录运行中" : "未连接" }}</span>
+        <div class="side-foot">
+          <button class="nav-item" title="个性化" @click="active = 'settings'">
+            <Icon name="palette" :size="19" />
+            <span v-if="!collapsed" class="nav-label">个性化</span>
+          </button>
+          <button class="nav-item" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="toggleCollapse">
+            <Icon :name="collapsed ? 'expand' : 'collapse'" :size="19" />
+            <span v-if="!collapsed" class="nav-label">收起</span>
+          </button>
+          <div class="status" :title="online ? '记录服务正常' : '未连接'">
+            <span class="dot" :class="{ live: online }"></span>
+            <span v-if="!collapsed">{{ online ? "记录中" : "未连接" }}</span>
+          </div>
         </div>
       </aside>
       <main class="content">
@@ -84,21 +144,24 @@ onUnmounted(() => clearInterval(timer));
         <div v-show="active === 'checklist'" class="page">
           <header class="phead">
             <h1>清单</h1>
-            <span class="sub">到点在右下角弹提醒</span>
+            <span class="sub">任务、提醒与完成率</span>
           </header>
-          <div class="card">
+          <div class="glass-card card">
             <ChecklistCard />
           </div>
         </div>
         <div v-show="active === 'data'" class="page">
           <header class="phead">
             <h1>数据</h1>
-            <span class="sub">导入 / 导出 / 恢复</span>
+            <span class="sub">导出 / 恢复 / 删除</span>
           </header>
-          <div class="card">
+          <div class="glass-card card">
             <DataCard />
           </div>
         </div>
+        <SettingsPage v-show="active === 'settings'" v-model:theme-pref="themePref"
+          v-model:accent="accent" v-model:glass="glass" v-model:pet-visible="petVisible"
+          @toggle-glass="toggleGlass" @toggle-pet="togglePet" />
       </main>
     </div>
   </NConfigProvider>
@@ -106,61 +169,82 @@ onUnmounted(() => clearInterval(timer));
 
 <style>
 :root {
-  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  color-scheme: dark;
+  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei",
+    system-ui, sans-serif;
   font-size: 16px;
-  color: #e8eaf2;
-  background-color: #0f1117;
+  color: var(--text);
+  background-color: transparent;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
 
-* {
-  box-sizing: border-box;
-}
-
 body {
   margin: 0;
+  background: var(--bg);
+  transition: background 0.2s;
+}
+
+/* 毛玻璃关闭时完全实底，遮住窗口特效 */
+body.glass-off {
+  background: var(--bg);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
 }
 </style>
 
 <style scoped>
 .shell {
   display: flex;
-  min-height: 100vh;
-  background: #0f1117;
+  height: 100vh;
 }
 
 .side {
   flex: none;
-  width: 148px;
+  width: 200px;
   display: flex;
   flex-direction: column;
-  padding: 18px 12px;
-  border-right: 1px solid #1c212d;
-  background:
-    radial-gradient(240px 200px at 0% 0%, rgba(99, 102, 241, 0.1), transparent 65%),
-    #0d0f15;
+  padding: 16px 10px 14px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  transition: width 0.18s ease;
+  overflow: hidden;
+}
+
+.glass-off .side {
+  background: var(--surface-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.side.collapsed {
+  width: 64px;
 }
 
 .brand {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 8px 18px;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px 16px;
+  white-space: nowrap;
 }
 
 .logo {
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 700;
   letter-spacing: 0.14em;
 }
 
 .en {
   font-size: 9px;
-  letter-spacing: 0.28em;
-  color: #4b5563;
+  letter-spacing: 0.26em;
+  color: var(--text-faint);
   text-transform: uppercase;
 }
 
@@ -171,59 +255,85 @@ body {
 }
 
 .nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   text-align: left;
   border: 0;
   background: transparent;
-  color: #9aa3b8;
+  color: var(--text-muted);
   font-size: 14px;
   font-family: inherit;
   padding: 9px 12px;
-  border-radius: 9px;
+  border-radius: var(--r-md);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.side.collapsed .nav-item {
+  justify-content: center;
+  padding: 9px 0;
 }
 
 .nav-item:hover {
-  color: #e8eaf2;
-  background: #161a24;
+  color: var(--text);
+  background: var(--surface-hover);
 }
 
 .nav-item.active {
-  color: #c7d2fe;
-  background: rgba(99, 102, 241, 0.16);
+  color: var(--accent-text);
+  background: var(--accent-soft);
 }
 
-.foot {
+.nav-label {
+  overflow: hidden;
+}
+
+.side-foot {
   margin-top: auto;
   display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
-  color: #6b7280;
-  padding: 0 8px;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.foot .dot {
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 8px 12px 2px;
+  white-space: nowrap;
+}
+
+.side.collapsed .status {
+  justify-content: center;
+  padding: 8px 0 2px;
+}
+
+.status .dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #6b7280;
+  background: var(--text-faint);
+  flex: none;
 }
 
-.foot .dot.live {
-  background: #34d399;
+.status .dot.live {
+  background: var(--good);
   animation: pulse 2s infinite;
 }
 
 @keyframes pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5);
+    box-shadow: 0 0 0 0 rgba(111, 181, 154, 0.5);
   }
   70% {
-    box-shadow: 0 0 0 6px rgba(52, 211, 153, 0);
+    box-shadow: 0 0 0 6px rgba(111, 181, 154, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
+    box-shadow: 0 0 0 0 rgba(111, 181, 154, 0);
   }
 }
 
@@ -232,9 +342,6 @@ body {
   min-width: 0;
   padding: 18px 22px 22px;
   overflow-y: auto;
-  background:
-    radial-gradient(700px 320px at 85% -5%, rgba(99, 102, 241, 0.08), transparent 60%),
-    #0f1117;
 }
 
 .page {
@@ -257,13 +364,10 @@ body {
 
 .sub {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-muted);
 }
 
 .card {
-  border: 1px solid #232936;
-  background: rgba(22, 26, 36, 0.72);
-  border-radius: 14px;
   padding: 16px 18px;
 }
 </style>

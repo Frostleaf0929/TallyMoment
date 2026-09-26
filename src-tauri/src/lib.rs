@@ -20,6 +20,9 @@ use tracker::{Db, TrackerShared, TrayMenu};
 struct CurrentApp {
     display_name: String,
     seconds: i64,
+    start_ts: i64,
+    /// focused | fragmented | rest | paused
+    status: String,
 }
 
 #[derive(Serialize)]
@@ -31,6 +34,8 @@ struct DayReport {
     recording: bool,
     paused: bool,
     current: Option<CurrentApp>,
+    /// 今日第几个专注块（含进行中）
+    block_index: usize,
     keys: i64,
     clicks: i64,
     apps: Vec<storage::AppUsage>,
@@ -91,11 +96,30 @@ fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
             end_ts: now,
             title: s.title.clone(),
         });
+        // 状态推断：近 30 分钟内切换 ≥6 次视为碎片化
+        let recent_switches = segments
+            .iter()
+            .filter(|g| g.end_ts > now - 1800)
+            .count();
+        let status = if paused {
+            "paused"
+        } else if recent_switches >= 6 {
+            "fragmented"
+        } else {
+            "focused"
+        };
         current = Some(CurrentApp {
             display_name: display,
             seconds: secs,
+            start_ts: s.seg_start,
+            status: status.into(),
         });
     }
+    // 有意义的专注块：只统计 ≥20 秒的段
+    let block_index = segments
+        .iter()
+        .filter(|g| g.end_ts - g.start_ts >= 20)
+        .count();
     apps.sort_by(|a, b| b.seconds.cmp(&a.seconds));
     let total_seconds = apps.iter().map(|a| a.seconds).sum::<i64>();
     let app_count = apps.len();
@@ -108,6 +132,7 @@ fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
         recording,
         paused,
         current,
+        block_index,
         keys,
         clicks,
         apps,
@@ -144,6 +169,7 @@ fn day_report(app: tauri::AppHandle, date: String) -> Result<DayReport, String> 
         recording: false,
         paused: false,
         current: None,
+        block_index: segments.len(),
         keys,
         clicks,
         apps,
@@ -280,6 +306,20 @@ fn pet_stats() -> (u64, u64) {
     input_hook::stats()
 }
 
+/// 切换桌宠显隐（托盘与个性化页共用）
+#[tauri::command]
+fn toggle_pet(app: tauri::AppHandle) -> bool {
+    if let Some(w) = app.get_webview_window("pet") {
+        let vis = w.is_visible().unwrap_or(false);
+        let _ = if vis { w.hide() } else { w.show() };
+        if let Some(p) = app.state::<TrayMenu>().pet.get() {
+            let _ = p.set_checked(!vis);
+        }
+        return !vis;
+    }
+    false
+}
+
 // 关闭主窗口时不退出，而是隐藏到托盘（记录在后台继续）
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -327,7 +367,8 @@ pub fn run() {
             pet_stats,
             day_report,
             recent_daily,
-            insights
+            insights,
+            toggle_pet
         ])
         .setup(|app| {
             let today_item =

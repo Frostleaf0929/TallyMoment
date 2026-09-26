@@ -1,19 +1,20 @@
+// 柔和去饱和应用色板（v2：配合热力时间线与柔和图表）
 const PALETTE = [
-  "#6366f1",
-  "#10b981",
-  "#f59e0b",
-  "#ec4899",
-  "#06b6d4",
-  "#8b5cf6",
-  "#ef4444",
-  "#84cc16",
-  "#f97316",
-  "#14b8a6",
+  "#7b84ec",
+  "#6fb59a",
+  "#c9a06a",
+  "#c98ba0",
+  "#6ba3c9",
+  "#9d8fc9",
+  "#c98a8a",
+  "#8fb37e",
+  "#c9b06a",
+  "#7aa3b5",
 ];
 
 const cache = new Map<string, string>();
 
-/** 按应用名稳定分配调色板颜色 */
+/** 按应用名稳定分配柔和色 */
 export function colorFor(key: string): string {
   const hit = cache.get(key);
   if (hit) return hit;

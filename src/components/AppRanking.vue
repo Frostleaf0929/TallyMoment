@@ -65,7 +65,7 @@ const shown = computed(() =>
 
 .name {
   font-size: 13px;
-  color: #d3d8e4;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -73,7 +73,7 @@ const shown = computed(() =>
 
 .time {
   font-size: 12px;
-  color: #8b93a7;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -83,7 +83,7 @@ const shown = computed(() =>
 }
 
 .empty {
-  color: #5c6474;
+  color: var(--text-faint);
   font-size: 13px;
   text-align: center;
   padding: 16px 0;

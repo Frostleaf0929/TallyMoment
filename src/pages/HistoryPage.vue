@@ -3,7 +3,7 @@ import { onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { DailyTotal, DayReport } from "../types";
 import { fmtDuration } from "../lib/format";
-import DayTimeline from "../components/DayTimeline.vue";
+import HeatTimeline from "../components/HeatTimeline.vue";
 import HourlyChart from "../components/HourlyChart.vue";
 import AppRanking from "../components/AppRanking.vue";
 
@@ -86,7 +86,7 @@ onMounted(loadDays);
 
       <section class="card wide">
         <h2>时间线</h2>
-        <DayTimeline :segments="report.segments" />
+        <HeatTimeline :segments="report.segments" />
       </section>
 
       <section class="grid2">
@@ -135,7 +135,7 @@ onMounted(loadDays);
 }
 
 .day {
-  border: 1px solid #232936;
+  border: 1px solid var(--border);
   background: #161a24;
   color: #9aa3b8;
   border-radius: 10px;
@@ -175,7 +175,7 @@ onMounted(loadDays);
 }
 
 .card {
-  border: 1px solid #232936;
+  border: 1px solid var(--border);
   background: rgba(22, 26, 36, 0.72);
   border-radius: 14px;
   padding: 16px 18px;
@@ -227,7 +227,7 @@ onMounted(loadDays);
 }
 
 .empty {
-  color: #5c6474;
+  color: var(--text-faint);
   font-size: 13px;
 }
 </style>

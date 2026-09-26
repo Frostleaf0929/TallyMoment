@@ -2,12 +2,19 @@
 import * as echarts from "echarts";
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import type { HourSlice } from "../types";
-import { colorFor } from "../lib/colors";
 
 const props = defineProps<{ slices: HourSlice[] }>();
 
 const el = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
+
+function hexAlpha(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
 
 function render() {
   if (!el.value) return;
@@ -21,6 +28,11 @@ function render() {
   const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
   const top = new Set(ranked.slice(0, 7).map(([k]) => k));
 
+  // Tai 式柔和阶梯：同色系（强调色）按排名降透明度
+  const accent =
+    getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#7b84ec";
+  const ladder = [1, 0.72, 0.54, 0.4, 0.3, 0.22, 0.16];
+
   const seriesMap = new Map<string, number[]>();
   for (const s of props.slices) {
     const key = top.has(s.appName) ? s.appName : "其他";
@@ -28,23 +40,26 @@ function render() {
     arr[s.hour] += Math.round(s.seconds / 60);
     seriesMap.set(key, arr);
   }
+  let rank = 0;
   const series = [...seriesMap.entries()]
     .sort((a, b) => {
       const ta = totals.get(a[0]) ?? Infinity;
       const tb = totals.get(b[0]) ?? Infinity;
       return tb - ta;
     })
-    .map(([key, data]) => ({
-      name: key.replace(/\.exe$/i, ""),
-      type: "bar" as const,
-      stack: "day",
-      barWidth: "62%",
-      itemStyle: {
-        color: key === "其他" ? "#4b5563" : colorFor(key),
-        borderRadius: key === seriesMap.keys().next().value ? [4, 4, 0, 0] : 0,
-      },
-      data,
-    }));
+    .map(([key, data]) => {
+      const color =
+        key === "其他" ? "#4b5563" : hexAlpha(accent, ladder[Math.min(rank, ladder.length - 1)]);
+      rank++;
+      return {
+        name: key.replace(/\.exe$/i, ""),
+        type: "bar" as const,
+        stack: "day",
+        barWidth: "62%",
+        itemStyle: { color },
+        data,
+      };
+    });
 
   chart.setOption(
     {

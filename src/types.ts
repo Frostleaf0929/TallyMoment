@@ -1,6 +1,8 @@
 export interface CurrentApp {
   displayName: string;
   seconds: number;
+  startTs: number;
+  status: "focused" | "fragmented" | "rest" | "paused";
 }
 
 export interface AppUsage {
@@ -29,6 +31,7 @@ export interface DayReport {
   recording: boolean;
   paused: boolean;
   current: CurrentApp | null;
+  blockIndex: number;
   keys: number;
   clicks: number;
   apps: AppUsage[];
