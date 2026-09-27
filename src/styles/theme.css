@@ -44,8 +44,8 @@
   /* 语义色（去饱和） */
   --good: #6fb59a;
   --good-soft: rgba(111, 181, 154, 0.14);
-  --warn: #b98bab;
-  --warn-soft: rgba(185, 139, 171, 0.16);
+  --warn: #d3a95e;
+  --warn-soft: rgba(211, 169, 94, 0.14);
   --info: #7d92cf;
   --info-soft: rgba(125, 146, 207, 0.14);
   --danger: #c9797b;
@@ -93,8 +93,8 @@
   --chart-tip-border: #2a2f3d;
   --chart-tip-text: #e8eaf2;
 
-  /* 窗口外框颜色 */
-  --frame: rgba(255, 255, 255, 0.14);
+  /* 窗口外框颜色（Tai 那种浅色带） */
+  --frame: rgba(255, 255, 255, 0.1);
 }
 
 /* ---------- 浅色主题 ---------- */
@@ -122,8 +122,8 @@
   --accent-border: rgba(106, 116, 224, 0.35);
   --good: #4f9e83;
   --good-soft: rgba(79, 158, 131, 0.12);
-  --warn: #9c6f8e;
-  --warn-soft: rgba(156, 111, 142, 0.14);
+  --warn: #b8893c;
+  --warn-soft: rgba(184, 137, 60, 0.13);
   --info: #6a83c4;
   --info-soft: rgba(106, 131, 196, 0.12);
   --danger: #bd6266;
@@ -140,7 +140,7 @@
   --chart-tip-bg: #ffffff;
   --chart-tip-border: rgba(20, 30, 50, 0.14);
   --chart-tip-text: #242a35;
-  --frame: rgba(20, 30, 50, 0.16);
+  --frame: rgba(20, 30, 50, 0.12);
 }
 
 /* ---------- 强调色切换 ---------- */
@@ -245,8 +245,8 @@ html[data-mode="pet"] body {
 
 /* 窗口外框：2px，与侧栏共用同一条边，避免"三块拼接"的观感 */
 .shell-frame {
-  border: 2px solid var(--frame);
-  border-radius: 12px;
+  border: 5px solid var(--frame);
+  border-radius: 14px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
 }
 

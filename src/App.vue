@@ -538,11 +538,11 @@ body.glass-off {
 }
 
 .wb {
-  width: 32px;
-  height: 26px;
+  width: 30px;
+  height: 24px;
   border: 0;
-  background: var(--surface);
-  color: var(--text-muted);
+  background: transparent;
+  color: var(--text-faint);
   border-radius: 6px;
   cursor: pointer;
   display: inline-flex;

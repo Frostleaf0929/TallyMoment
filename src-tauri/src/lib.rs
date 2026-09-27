@@ -648,6 +648,18 @@ fn pet_model_assets(
     pet_settings::model_assets_in(&models, &id, &mode)
 }
 
+/// 桌宠窗口上报 Live2D 渲染状态（成功/失败原因），供设置页回显
+#[tauri::command]
+fn pet_live2d_report(ok: bool, msg: String) {
+    pet_settings::live2d_report(ok, &msg);
+}
+
+/// 读取最近一次 Live2D 状态
+#[tauri::command]
+fn pet_live2d_status() -> Option<pet_settings::Live2dStatus> {
+    pet_settings::live2d_status()
+}
+
 /// 读取 Live2D 模型包（含 model3.json 与全部引用文件）
 #[tauri::command]
 fn pet_model_live2d(
@@ -887,6 +899,8 @@ pub fn run() {
             pet_model_rename,
             pet_model_assets,
             pet_model_live2d,
+            pet_live2d_report,
+            pet_live2d_status,
             close_reminder,
             import_tai,
             export_json,

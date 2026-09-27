@@ -27,6 +27,10 @@ export default defineConfig(() => ({
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
+      // 4. Windows 上原生文件事件会间歇性漏掉（表现为"改了没生效、HMR 不发"），
+      //    改轮询后可靠；代价是很小的 CPU 占用
+      usePolling: true,
+      interval: 300,
     },
   },
 }));

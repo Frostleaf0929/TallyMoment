@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::storage;
@@ -738,6 +739,31 @@ pub fn base64_encode(data: &[u8]) -> String {
         }
     }
     out
+}
+
+// ---------- Live2D 运行状态（桌宠窗口上报，设置页回显，便于排查） ----------
+
+static LIVE2D_STATUS: Mutex<Option<(bool, String)>> = Mutex::new(None);
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Live2dStatus {
+    pub ok: bool,
+    pub msg: String,
+}
+
+pub fn live2d_report(ok: bool, msg: &str) {
+    if let Ok(mut g) = LIVE2D_STATUS.lock() {
+        *g = Some((ok, msg.to_string()));
+    }
+}
+
+pub fn live2d_status() -> Option<Live2dStatus> {
+    LIVE2D_STATUS
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .map(|(ok, msg)| Live2dStatus { ok, msg })
 }
 
 // ---------- Live2D 素材直读（Cubism Core for Web + pixi-live2d-display） ----------

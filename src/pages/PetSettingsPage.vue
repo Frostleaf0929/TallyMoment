@@ -37,6 +37,7 @@ const emit = defineEmits<{
 const settings = ref<PetSettings | null>(null);
 const models = ref<ModelInfo[]>([]);
 const importing = ref(false);
+const live2d = ref<{ ok: boolean; msg: string } | null>(null);
 const msg = ref("");
 const errMsg = ref("");
 
@@ -60,6 +61,7 @@ async function load() {
     localScale.value = settings.value.scale;
     localOpacity.value = settings.value.opacity;
     models.value = await invoke("pet_models_list");
+    live2d.value = await invoke<{ ok: boolean; msg: string } | null>("pet_live2d_status");
   } catch (e) {
     errMsg.value = String(e).replace(/^.*Error: /, "");
   }
@@ -248,13 +250,21 @@ onMounted(load);
     <section class="glass-card">
       <h2>模型</h2>
       <div class="mlist">
-        <div v-for="m in models" :key="m.id" class="mrow" :class="{ active: m.active }">
+        <div
+          v-for="m in models"
+          :key="m.id"
+          class="mrow"
+          :class="{ active: m.active }"
+          :title="m.active ? '使用中' : '单击切换到此模型；双击名字可改名'"
+          @click="editingId !== m.id && !m.active && setActive(m.id)"
+        >
           <span class="mdot"></span>
           <template v-if="editingId === m.id">
             <input
               v-model="editName"
               class="medit"
               maxlength="40"
+              @click.stop
               @keyup.enter="commitRename"
               @keyup.esc="editingId = ''"
             />
@@ -262,7 +272,9 @@ onMounted(load);
             <NButton size="tiny" quaternary @click="editingId = ''">取消</NButton>
           </template>
           <template v-else>
-            <span class="mname" :title="`${m.name}（双击改名）`" @dblclick="startRename(m)">{{ m.name }}</span>
+            <span class="mname" :title="`${m.name}（双击文字可改名）`" @dblclick.stop="startRename(m)">{{
+              m.name
+            }}</span>
             <span class="mtag">{{ modeLabel[m.mode] ?? m.mode }}</span>
             <span v-if="m.live2d" class="mtag live2d" title="含 Live2D 素材：静态图只是兜底，需要 Live2D 运行时">
               Live2D
@@ -270,8 +282,14 @@ onMounted(load);
             <span v-if="m.builtin" class="mtag builtin">内置</span>
             <span v-if="m.active" class="mtag using">使用中</span>
             <div class="macts">
-              <NButton size="tiny" quaternary @click="startRename(m)">改名</NButton>
-              <NButton v-if="!m.active" size="tiny" type="primary" secondary @click="setActive(m.id)">
+              <NButton size="tiny" quaternary @click.stop="startRename(m)">改名</NButton>
+              <NButton
+                v-if="!m.active"
+                size="tiny"
+                type="primary"
+                secondary
+                @click.stop="setActive(m.id)"
+              >
                 使用
               </NButton>
               <NPopconfirm v-if="!m.builtin" @positive-click="removeModel(m.id)">
@@ -295,6 +313,17 @@ onMounted(load);
         <span v-if="!importing" class="ihint">支持 Mver 模型包（img/ + config.json 或 bongocat.skin.json）</span>
       </div>
       <BallLoader v-if="importing" label="正在导入模型…" />
+      <div v-if="live2d" class="l2dbox" :class="live2d.ok ? 'okbox' : 'badbox'">
+        <p class="l2dline">
+          <b>Live2D 渲染</b>
+          <span>{{ live2d.ok ? "正常（桌宠窗口用的是 Live2D 模型）" : "未启用/失败" }}</span>
+        </p>
+        <p v-if="!live2d.ok && live2d.msg" class="l2dmsg">{{ live2d.msg }}</p>
+        <p v-if="!live2d.ok" class="l2dhint">
+          桌宠窗口正在用静态分层图兜底。把上面这行提示发我，我按错误继续修。
+        </p>
+      </div>
+      <p v-else class="rd more">还没有桌宠窗口上报 Live2D 状态（切一次模型或重启桌宠后再看这里）。</p>
       <p class="rd more">
         点模型名或「改名」可以自由命名（只改显示名，不动磁盘目录）；同一个模型重复导入会被自动识别，不会装两遍。
       </p>
@@ -451,8 +480,8 @@ onMounted(load);
 }
 
 .medit {
-  flex: 1;
-  min-width: 0;
+  flex: none;
+  width: 168px;
   border: 1px solid var(--accent-border);
   background: var(--surface-solid);
   color: var(--text);
@@ -542,6 +571,47 @@ onMounted(load);
   margin: 0;
   font-size: 12px;
   color: var(--good);
+}
+
+.l2dbox {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 9px 12px;
+  background: var(--surface);
+}
+
+.l2dbox.okbox {
+  border-color: var(--accent-border);
+}
+
+.l2dbox.badbox {
+  border-color: var(--danger);
+}
+
+.l2dline {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.l2dline span {
+  color: var(--text-muted);
+}
+
+.l2dmsg {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--danger);
+  word-break: break-all;
+}
+
+.l2dhint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-faint);
 }
 
 .err {

@@ -151,6 +151,7 @@ async function mountLive2d(bundle: Live2dBundle) {
   model.anchor.set(0.5, 0.5);
   model.position.set(BASE_W / 2, BASE_H / 2 + 10);
   (app.stage as { addChild: (c: unknown) => void }).addChild(model);  live2dOn.value = true;
+  void invoke("pet_live2d_report", { ok: true, msg: "" });
 }
 
 /** 按键时让 Live2D 模型换个表情（有冷却，避免连发） */
@@ -268,8 +269,11 @@ async function buildModel(id: string, mode: PetSettingsView["mode"]) {
       return;
     }
   } catch (e) {
-    live2dMsg.value = String(e).replace(/^.*Error: /, "");
-    live2dMsg.value = "";
+    const m = String(e).replace(/^.*Error: /, "");
+    live2dMsg.value = m;
+    // 上报给主窗口，设置页能直接看到原因
+    void invoke("pet_live2d_report", { ok: false, msg: m });
+    loadErr.value = "Live2D 失败：" + m;
   }
   destroyLive2d();
 
