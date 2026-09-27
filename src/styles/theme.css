@@ -3,35 +3,39 @@
    风格：极简 · Windows Fluent 底蕴 · 毛玻璃 · 柔和去饱和配色
    图标：Solar Line Duotone (CC BY 4.0, 480 Design — via Iconify)
 
-   批次 6 增补（参考 dsh-dream-skin 的分层做法）：
-   - 背景层（--wall-*）：窗口内自绘的柔光底，让「玻璃模糊」滑杆真的有东西可糊
-   - 图表配色（--chart-*）：图表跟随深浅主题，不再恒用深色线
-   - 卡片分界（--card-border/--card-shadow）：深色也看得出层次
+   批次 6 第二批（参考 dsh-dream-skin 的分层与预设做法）：
+   - 三层结构：背景层(.wall) → 半透明令牌 → 只给叶子卡片加 backdrop-filter
+   - 材质预设：毛玻璃 / 液态玻璃（只改风格：tone / 填充 / 模糊系数，不动滑杆数值）
+   - 透明度假组：界面底色 / 侧边栏 / 卡片 / 玻璃模糊（收在一处，不散落）
+   - 动效强度 --motion：0 = 关闭，1 = 标准，最高 1.6 = 大胆（卡片悬停放大/上浮）
+   - 图表配色 --chart-*：跟随深浅主题
    ============================================================ */
 
 :root {
   /* 表面 */
   --bg: #0f1116;
-  /* 界面底色（rgb 分量，供 rgba() 拼不透明度；--bg-alpha 由个性化页写入） */
   --bg-rgb: 15, 17, 22;
-  --bg-alpha: 0.8;
+  --side-rgb: 20, 24, 31;
+  /* 三层透明度（个性化页写入） */
+  --bg-alpha: 0.8;   /* 界面底色（画布） */
+  --side-alpha: 0.5; /* 侧边栏 */
+  --card-alpha: 1;   /* 卡片（乘在 --bg-glass 之上） */
   --bg-glass: rgba(20, 24, 31, 0.58);
   --surface: rgba(255, 255, 255, 0.045);
   --surface-hover: rgba(255, 255, 255, 0.08);
   --surface-solid: #161a21;
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.13);
-
-  /* 卡片分界：深色下靠描边 + 阴影拉开层次 */
   --card-border: rgba(255, 255, 255, 0.1);
   --card-shadow: 0 10px 30px rgba(0, 0, 0, 0.34), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --card-shadow-hover: 0 20px 48px rgba(0, 0, 0, 0.46);
 
   /* 文字 */
   --text: #dde1e9;
   --text-muted: #8a91a0;
   --text-faint: #5a626e;
 
-  /* 强调色（默认靛蓝，个性化页可切换） */
+  /* 强调色（皮肤/个性化页可切换） */
   --accent: #7b84ec;
   --accent-soft: rgba(123, 132, 236, 0.14);
   --accent-text: #aeb5f2;
@@ -57,16 +61,24 @@
   --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.22);
   --shadow-soft: 0 4px 14px rgba(0, 0, 0, 0.16);
 
-  /* 毛玻璃：卡片模糊（个性化页滑杆写入）与背景层模糊 */
+  /* 毛玻璃 */
   --glass-blur: 26px;
   --wall-blur: 18px;
 
-  /* 背景层柔光（跟随强调色，深浅主题各自可读） */
+  /* 背景层柔光（跟随强调色） */
   --wall-a: rgba(123, 132, 236, 0.2);
   --wall-b: rgba(125, 146, 207, 0.16);
   --wall-c: rgba(160, 143, 224, 0.14);
+  --wall-image: none;
+  --wall-image-opacity: 1;
 
-  /* 图表配色（跟随主题） */
+  /* 动效强度（个性化页写入 0~1.6） */
+  --motion: 1;
+  --dur: 190ms;
+  --hover-lift: 4px;
+  --hover-scale: 1.014;
+
+  /* 图表配色 */
   --chart-axis: #2a2f3d;
   --chart-label: #5c6474;
   --chart-split: #1c212d;
@@ -80,7 +92,9 @@
 [data-theme="light"] {
   --bg: #eef0f4;
   --bg-rgb: 255, 255, 255;
+  --side-rgb: 255, 255, 255;
   --bg-alpha: 0.78;
+  --side-alpha: 0.5;
   --bg-glass: rgba(255, 255, 255, 0.66);
   --surface: rgba(255, 255, 255, 0.66);
   --surface-hover: rgba(255, 255, 255, 0.9);
@@ -89,6 +103,7 @@
   --border-strong: rgba(20, 30, 50, 0.16);
   --card-border: rgba(20, 30, 50, 0.07);
   --card-shadow: 0 10px 30px rgba(30, 40, 70, 0.12);
+  --card-shadow-hover: 0 20px 46px rgba(30, 40, 70, 0.2);
   --text: #242a35;
   --text-muted: #626b7d;
   --text-faint: #98a0af;
@@ -130,23 +145,62 @@
 [data-theme="light"][data-accent="amber"]  { --accent-text: #96682a; }
 [data-theme="light"][data-accent="rose"]   { --accent-text: #b25a76; }
 
+/* ---------- 自定义强调色（取色器，个性化页写 --accent* 时带上 data-accent="custom"） ---------- */
+[data-accent="custom"] { --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* ---------- 玻璃材质预设（只改风格，不动滑杆数值） ---------- */
+[data-material="frosted"] .glass-card {
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+}
+
+[data-material="liquid"] .glass-card {
+  /* 液态玻璃：更薄、更强折射感与亮度 */
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
+  border-color: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
 /* ---------- 通用组件类 ---------- */
 .glass-card {
   position: relative;
-  background: var(--bg-glass);
+  background: color-mix(in srgb, var(--bg-glass) calc(var(--card-alpha) * 100%), transparent);
   backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
   border: 1px solid var(--card-border);
   border-radius: var(--r-lg);
   box-shadow: var(--card-shadow);
+  transition: transform var(--dur) cubic-bezier(0.22, 0.61, 0.36, 1),
+    box-shadow var(--dur) ease, border-color var(--dur) ease, background var(--dur) ease;
+}
+
+/* 卡片悬停：上浮 + 放大 + 强调色描边（动效强度由 --motion 控制，0 = 关闭） */
+.glass-card:hover {
+  transform: translateY(calc(-1 * var(--hover-lift))) scale(var(--hover-scale));
+  box-shadow: var(--card-shadow-hover);
+  border-color: var(--accent-border);
+  z-index: 1;
+}
+
+/* 侧栏与内容区共用同一套材质（不再各自刷一种底色 → 三个板块像一个整体） */
+.side-glass {
+  background: rgba(var(--side-rgb), var(--side-alpha));
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+}
+
+[data-material="liquid"] .side-glass {
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
 }
 
 /* backdrop-filter 会创建 containing block：容器本身不做玻璃，玻璃只加到叶子卡片上
    （这条来自 dsh-dream-skin 的踩坑记录：给承载 fixed 弹层的大容器加模糊会把弹层"困"进容器） */
 
 /* 毛玻璃关闭：退化为实底 */
-.glass-off .glass-card {
-  background: var(--surface-solid);
+.glass-off .glass-card,
+.glass-off .side {
+  background: color-mix(in srgb, var(--surface-solid) calc(var(--card-alpha) * 100%), transparent);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   border-color: var(--border);
@@ -179,7 +233,7 @@ html[data-mode="pet"] body {
   background: rgba(20, 30, 50, 0.18);
 }
 
-/* ---------- 图表自绘图例：放图表上方，避免压到绘图区 ---------- */
+/* ---------- 图表自绘图例 ---------- */
 .chart-legend {
   display: flex;
   flex-wrap: wrap;
@@ -203,17 +257,21 @@ html[data-mode="pet"] body {
   flex: none;
 }
 
-/* ---------- 背景层柔光：让"玻璃模糊"滑杆真的有东西可糊 ---------- */
+/* ---------- 背景层：柔光 + 壁纸（让"玻璃模糊"真的有东西可糊） ---------- */
 .wall {
   position: absolute;
   inset: -60px;
   z-index: 0;
   pointer-events: none;
   background-color: rgba(var(--bg-rgb), var(--bg-alpha));
-  background-image:
+  background-image: var(--wall-image),
     radial-gradient(58% 48% at 16% 8%, var(--wall-a), transparent 70%),
     radial-gradient(52% 42% at 88% 16%, var(--wall-b), transparent 72%),
     radial-gradient(70% 58% at 62% 104%, var(--wall-c), transparent 76%);
+  background-size: cover, auto, auto, auto;
+  background-position: center, center, center, center;
+  background-repeat: no-repeat;
+  opacity: var(--wall-image-opacity);
   filter: blur(var(--wall-blur));
 }
 

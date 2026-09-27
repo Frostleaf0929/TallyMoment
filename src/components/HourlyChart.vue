@@ -12,6 +12,17 @@ const props = withDefaults(
 
 const el = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
+let ro: ResizeObserver | null = null;
+
+/** 容器尺寸同步：页面用 v-show 隐藏时 clientWidth 为 0，
+ *  此时初始化 ECharts 会得到一张 100px 宽的图（表现为"图表只有左半边、标签挤在一起"），
+ *  所以宽度不够时先不初始化，交给 ResizeObserver 在真正可见时再来。 */
+function syncSize() {
+  if (!el.value) return;
+  if (el.value.clientWidth < 8) return;
+  if (!chart) render();
+  else chart.resize();
+}
 
 /** 全天累计前 7 名，其余合并「其他」 */
 const seriesData = computed(() => {
@@ -42,7 +53,7 @@ const seriesData = computed(() => {
 });
 
 function render() {
-  if (!el.value) return;
+  if (!el.value || el.value.clientWidth < 8) return;
   if (!chart) chart = echarts.init(el.value);
   const c = chartColors();
   const series = seriesData.value;
@@ -93,9 +104,14 @@ function onResize() {
 onMounted(() => {
   render();
   window.addEventListener("resize", onResize);
+  if (el.value) {
+    ro = new ResizeObserver(() => syncSize());
+    ro.observe(el.value);
+  }
 });
 onUnmounted(() => {
   window.removeEventListener("resize", onResize);
+  ro?.disconnect();
   chart?.dispose();
   chart = null;
 });

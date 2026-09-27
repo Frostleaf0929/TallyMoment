@@ -247,6 +247,16 @@ function onInput(p: { kind: string; vk: number }) {
   }
 }
 
+/** 真缩放：窗口大小 = 设计尺寸 × k，整层用 transform 缩放，
+ *  而不是像以前那样固定 372px 布局、窗口一小就把桌宠裁掉一半 */
+const k = ref(1);
+
+function updateScale() {
+  const w = window.innerWidth || BASE_W;
+  k.value = Math.max(0.2, w / BASE_W);
+}
+const BASE_W = 372;
+
 async function startDrag() {
   try {
     await getCurrentWebviewWindow().startDragging();
@@ -274,6 +284,8 @@ function onMouseUp() {
 }
 
 onMounted(async () => {
+  updateScale();
+  window.addEventListener("resize", updateScale);
   await loadSettings();
   refresh();
   pollTimer = window.setInterval(refresh, 5000);
@@ -295,6 +307,7 @@ onUnmounted(() => {
   unlistenSettings?.();
   clearInterval(pollTimer);
   if (revertTimer) clearTimeout(revertTimer);
+  window.removeEventListener("resize", updateScale);
   revokeAssets();
   window.removeEventListener("mouseup", onMouseUp);
 });
@@ -302,20 +315,22 @@ onUnmounted(() => {
 
 <template>
   <div class="pet" @mousedown="startDrag" @mouseup="onMouseUp">
-    <div class="stage" :class="{ mirror: settings?.mirror }" :style="{ opacity: (settings?.opacity ?? 100) / 100 }">
-      <img v-if="layerBg" class="layer" :src="layerBg" alt="" draggable="false" />
-      <img v-if="layerCat" class="layer" :src="layerCat" alt="" draggable="false" />
-      <img v-if="layerLeft" class="layer" :src="layerLeft" alt="" draggable="false" />
-      <img v-if="layerRight" class="layer" :src="layerRight" alt="" draggable="false" />
-      <img v-if="layerFace" class="layer" :src="layerFace" alt="" draggable="false" />
-    </div>
-    <div class="badge">
-      <span>{{ fmtDuration(seconds) }}</span>
-      <span class="sep">·</span>
-      <span title="自启动以来键入次数">{{ keys }} 键</span>
-      <span class="sep">·</span>
-      <span title="自启动以来点击次数">{{ clicks }} 击</span>
-      <span v-if="loadErr" class="sep" :title="loadErr">· 模型异常</span>
+    <div class="scaler" :style="{ transform: `scale(${k})`, opacity: (settings?.opacity ?? 100) / 100 }">
+      <div class="stage" :class="{ mirror: settings?.mirror }">
+        <img v-if="layerBg" class="layer" :src="layerBg" alt="" draggable="false" />
+        <img v-if="layerCat" class="layer" :src="layerCat" alt="" draggable="false" />
+        <img v-if="layerLeft" class="layer" :src="layerLeft" alt="" draggable="false" />
+        <img v-if="layerRight" class="layer" :src="layerRight" alt="" draggable="false" />
+        <img v-if="layerFace" class="layer" :src="layerFace" alt="" draggable="false" />
+      </div>
+      <div class="badge">
+        <span>{{ fmtDuration(seconds) }}</span>
+        <span class="sep">·</span>
+        <span title="自启动以来键入次数">{{ keys }} 键</span>
+        <span class="sep">·</span>
+        <span title="自启动以来点击次数">{{ clicks }} 击</span>
+        <span v-if="loadErr" class="sep" :title="loadErr">· 模型异常</span>
+      </div>
     </div>
   </div>
 </template>
@@ -332,16 +347,27 @@ html[data-mode="pet"] body {
 <style scoped>
 .pet {
   height: 100vh;
+  width: 100vw;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-end;
+  align-items: flex-end;
+  justify-content: center;
+  overflow: hidden;
   user-select: none;
-  -webkit-app-region: drag;
+}
+
+/* 固定设计尺寸 372×226，整体 transform 缩放 → 真缩放而非裁剪 */
+.scaler {
+  position: relative;
+  width: 372px;
+  height: 226px;
+  transform-origin: bottom center;
+  flex: none;
 }
 
 .stage {
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: 0;
   width: 372px;
   aspect-ratio: 612 / 354;
   transition: transform 0.15s;
@@ -360,10 +386,13 @@ html[data-mode="pet"] body {
 }
 
 .badge {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-top: -4px;
   font-size: 11px;
   color: #cfd5e2;
   background: rgba(15, 17, 23, 0.82);
@@ -371,6 +400,7 @@ html[data-mode="pet"] body {
   border-radius: 999px;
   padding: 2px 10px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .sep {

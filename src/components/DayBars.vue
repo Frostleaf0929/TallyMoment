@@ -31,6 +31,16 @@ const props = withDefaults(
 
 const el = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
+let ro: ResizeObserver | null = null;
+
+/** 隐藏页面里 clientWidth 为 0，此时初始化会得到一张 100px 宽的图
+ *  （表现为"图表只有左半边、x 轴标签挤成一团"），所以宽度不够先不建图。 */
+function syncSize() {
+  if (!el.value) return;
+  if (el.value.clientWidth < 8) return;
+  if (!chart) render();
+  else chart.resize();
+}
 
 /** ECharts 画在 canvas 上，不认 CSS 变量 → 统一在这里解析成真实色值 */
 function resolveColor(c: string): string {
@@ -40,7 +50,7 @@ function resolveColor(c: string): string {
 }
 
 function render() {
-  if (!el.value) return;
+  if (!el.value || el.value.clientWidth < 8) return;
   if (!chart) chart = echarts.init(el.value);
   const c = chartColors();
   const multi = props.series.length > 1;
@@ -95,9 +105,14 @@ function onResize() {
 onMounted(() => {
   render();
   window.addEventListener("resize", onResize);
+  if (el.value) {
+    ro = new ResizeObserver(() => syncSize());
+    ro.observe(el.value);
+  }
 });
 onUnmounted(() => {
   window.removeEventListener("resize", onResize);
+  ro?.disconnect();
   chart?.dispose();
   chart = null;
 });

@@ -16,6 +16,15 @@ import SettingsPage from "./pages/SettingsPage.vue";
 import PersonalizePage from "./pages/PersonalizePage.vue";
 import PetSettingsPage from "./pages/PetSettingsPage.vue";
 import { appsTopN, isLight } from "./lib/uiState";
+import {
+  applyAppearance,
+  glass,
+  isDark,
+  saveAppearance,
+  systemDark,
+  wallImageUrl,
+  wallKind,
+} from "./lib/appearance";
 
 // 提醒小窗/桌宠与主面板共用同一个前端入口，按窗口标签分流
 let mode = "main";
@@ -26,7 +35,6 @@ try {
 } catch {
   /* 浏览器直开时按主面板处理 */
 }
-// 标记到 <html>，供 theme.css 让提醒/桌宠窗体透明
 document.documentElement.dataset.mode = mode;
 
 type Tab =
@@ -48,44 +56,14 @@ const tabs: { key: Tab; label: string; icon: string }[] = [
   { key: "personalize", label: "个性化", icon: "palette" },
 ];
 const active = ref<Tab>("today");
-
-/* ---------- 外观（主题/强调色/毛玻璃），持久化到 localStorage ---------- */
-type ThemePref = "dark" | "light" | "system";
-/** 外观参数版本：改默认值后要让旧值一次性失效，否则老用户永远看不到新观感 */
-const UI_VERSION = "2";
-const staleUi = localStorage.getItem("ui.v") !== UI_VERSION;
-const themePref = ref<ThemePref>((localStorage.getItem("ui.theme") as ThemePref) || "dark");
-const accent = ref(localStorage.getItem("ui.accent") || "indigo");
-const glass = ref(localStorage.getItem("ui.glass") !== "off");
-/** 玻璃模糊强度（px）与界面底色不透明度（%）
- *  模糊同时作用于卡片玻璃与背景柔光层——否则整屏都是纯色，模糊看不出变化 */
-const blur = ref(Number(localStorage.getItem("ui.blur") ?? 26));
-const bgAlpha = ref(staleUi ? 80 : Number(localStorage.getItem("ui.bgAlpha") ?? 80));
 const collapsed = ref(localStorage.getItem("ui.side") === "collapsed");
-const systemDark = ref(true);
-let media: MediaQueryList | undefined;
 
-const dark = () =>
-  themePref.value === "dark" || (themePref.value === "system" && systemDark.value);
 const naiveTheme = ref<GlobalTheme | null>(darkTheme);
-
 watchEffect(() => {
-  const root = document.documentElement;
-  const isDarkNow = dark();
-  root.dataset.theme = isDarkNow ? "dark" : "light";
-  root.dataset.accent = accent.value;
-  root.style.setProperty("--glass-blur", `${blur.value}px`);
-  root.style.setProperty("--wall-blur", `${Math.round(blur.value * 0.7)}px`);
-  root.style.setProperty("--bg-alpha", String(bgAlpha.value / 100));
-  document.body.classList.toggle("glass-off", !glass.value);
-  naiveTheme.value = isDarkNow ? darkTheme : null;
-  isLight.value = !isDarkNow;
-  localStorage.setItem("ui.theme", themePref.value);
-  localStorage.setItem("ui.accent", accent.value);
-  localStorage.setItem("ui.glass", glass.value ? "on" : "off");
-  localStorage.setItem("ui.blur", String(blur.value));
-  localStorage.setItem("ui.bgAlpha", String(bgAlpha.value));
-  localStorage.setItem("ui.v", UI_VERSION);
+  applyAppearance();
+  saveAppearance();
+  naiveTheme.value = isDark() ? darkTheme : null;
+  isLight.value = !isDark();
 });
 
 function toggleCollapse() {
@@ -102,7 +80,7 @@ async function togglePet() {
   }
 }
 
-/* ---------- 自绘标题栏（系统标题栏不跟随应用主题，会与界面"分割"开） ---------- */
+/* ---------- 窗口控制（权限已在 capabilities 显式声明） ---------- */
 const win = (() => {
   try {
     return getCurrentWebviewWindow();
@@ -111,8 +89,8 @@ const win = (() => {
   }
 })();
 const maximized = ref(false);
+const winErr = ref("");
 
-/** 标题栏拖拽：走 Tauri 的 startDragging（与桌宠窗同一套，已实测可用） */
 async function startDrag(e: MouseEvent) {
   if (e.buttons !== 1) return;
   try {
@@ -123,29 +101,34 @@ async function startDrag(e: MouseEvent) {
 }
 
 async function minimizeWin() {
+  winErr.value = "";
   try {
     await win?.minimize();
-  } catch {
-    /* 忽略 */
-  }
-}
-async function toggleMaxWin() {
-  try {
-    await win?.toggleMaximize();
-    maximized.value = (await win?.isMaximized()) ?? false;
-  } catch {
-    /* 忽略 */
-  }
-}
-async function closeWin() {
-  try {
-    await win?.close();
-  } catch {
-    /* 忽略 */
+  } catch (e) {
+    winErr.value = String(e);
   }
 }
 
-/* ---------- 运行状态：记录中 / 已暂停 / 未连接 ---------- */
+async function toggleMaxWin() {
+  winErr.value = "";
+  try {
+    await win?.toggleMaximize();
+    maximized.value = (await win?.isMaximized()) ?? false;
+  } catch (e) {
+    winErr.value = String(e);
+  }
+}
+
+async function closeWin() {
+  winErr.value = "";
+  try {
+    await win?.close();
+  } catch (e) {
+    winErr.value = String(e);
+  }
+}
+
+/* ---------- 运行状态 ---------- */
 const online = ref(false);
 const paused = ref(false);
 let timer: number | undefined;
@@ -167,12 +150,26 @@ const status = computed(() => {
   return { text: "记录中", tone: "live" };
 });
 
+async function loadWallpaper() {
+  if (wallKind.value !== "image") return;
+  try {
+    const w = await invoke<{ mime: string; data: string } | null>("wallpaper_get");
+    if (!w) return;
+    const bin = atob(w.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    if (wallImageUrl.value) URL.revokeObjectURL(wallImageUrl.value);
+    wallImageUrl.value = URL.createObjectURL(new Blob([bytes], { type: w.mime }));
+  } catch {
+    /* 忽略 */
+  }
+}
+
 onMounted(async () => {
   if (mode !== "main") return;
-  media = window.matchMedia("(prefers-color-scheme: dark)");
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
   systemDark.value = media.matches;
-  const onScheme = (e: MediaQueryListEvent) => (systemDark.value = e.matches);
-  media.addEventListener("change", onScheme);
+  media.addEventListener("change", (e) => (systemDark.value = e.matches));
   ping();
   timer = window.setInterval(ping, 5000);
   try {
@@ -181,7 +178,7 @@ onMounted(async () => {
       online.value = true;
     });
   } catch {
-    /* 浏览器直开（无 Tauri 后端）时忽略 */
+    /* 浏览器直开时忽略 */
   }
   try {
     const p = await invoke<{ appsTopN: number }>("prefs_get");
@@ -189,6 +186,7 @@ onMounted(async () => {
   } catch {
     /* 用默认值 */
   }
+  await loadWallpaper();
 });
 onUnmounted(() => {
   clearInterval(timer);
@@ -203,87 +201,81 @@ onUnmounted(() => {
     <div v-else class="shell" :class="{ 'glass-off': !glass }">
       <div class="wall" aria-hidden="true"></div>
 
-      <header class="titlebar">
-        <div class="tb-drag" @mousedown="startDrag" @dblclick="toggleMaxWin">
-          <span class="tb-logo">拾刻</span>
-          <span class="tb-title">TallyMoment</span>
-          <span class="tb-status" :class="status.tone">
-            <span class="dot"></span>{{ status.text }}
-          </span>
-        </div>
-        <div class="tb-btns">
-          <button class="tb-btn" title="最小化" @click="minimizeWin">
-            <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="1.2" /></svg>
-          </button>
-          <button class="tb-btn" :title="maximized ? '还原' : '最大化'" @click="toggleMaxWin">
-            <svg width="12" height="12" viewBox="0 0 12 12">
-              <rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
-            </svg>
-          </button>
-          <button class="tb-btn close" title="关闭（收进托盘，记录继续）" @click="closeWin">
-            <svg width="12" height="12" viewBox="0 0 12 12">
-              <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.2" />
-            </svg>
-          </button>
-        </div>
-      </header>
-
-      <div class="body">
-        <aside class="side" :class="{ collapsed }">
-          <nav class="nav">
-            <button
-              v-for="t in tabs"
-              :key="t.key"
-              class="nav-item"
-              :class="{ active: active === t.key }"
-              :title="t.label"
-              @click="active = t.key"
-            >
-              <Icon :name="t.icon" :size="19" />
-              <span v-if="!collapsed" class="nav-label">{{ t.label }}</span>
-            </button>
-          </nav>
-          <div class="side-foot">
-            <button class="nav-item" title="设置" @click="active = 'settings'">
-              <Icon name="settings" :size="19" />
-              <span v-if="!collapsed" class="nav-label">设置</span>
-            </button>
-            <button class="nav-item" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="toggleCollapse">
-              <Icon :name="collapsed ? 'expand' : 'collapse'" :size="19" />
-              <span v-if="!collapsed" class="nav-label">收起</span>
-            </button>
-          </div>
-        </aside>
-        <main class="content">
-          <TodayPage v-show="active === 'today'" />
-          <HistoryPage v-show="active === 'history'" />
-          <InsightsPage v-show="active === 'insights'" />
-          <TodoPage v-show="active === 'todo'" />
-          <div v-show="active === 'data'" class="page">
-            <header class="phead">
-              <h1>数据</h1>
-              <span class="sub">导出 / 恢复 / 删除</span>
-            </header>
-            <div class="glass-card card">
-              <DataCard />
-            </div>
-          </div>
-          <PetSettingsPage
-            v-show="active === 'petsettings'"
-            v-model:pet-visible="petVisible"
-            @toggle-pet="togglePet"
-          />
-          <PersonalizePage
-            v-show="active === 'personalize'"
-            v-model:theme-pref="themePref"
-            v-model:accent="accent"
-            v-model:glass="glass"
-            v-model:blur="blur"
-            v-model:bg-alpha="bgAlpha"
-          />
-          <SettingsPage v-show="active === 'settings'" />
-        </main>
+      <!-- 窗口控制：悬浮在右上角，不占一整条标题栏，避免多出一道"割裂面" -->
+      <div class="winbtns">
+        <button class="wb" title="最小化" @click="minimizeWin">
+          <svg width="11" height="11" viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="1.2" /></svg>
+        </button>
+        <button class="wb" :title="maximized ? '还原' : '最大化'" @click="toggleMaxWin">
+          <svg width="11" height="11" viewBox="0 0 12 12">
+            <rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+          </svg>
+        </button>
+        <button class="wb close" title="关闭（收进托盘，记录继续）" @click="closeWin">
+          <svg width="11" height="11" viewBox="0 0 12 12">
+            <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.2" />
+          </svg>
+        </button>
       </div>
+
+      <aside class="side" :class="{ collapsed }">
+        <div class="brand" @mousedown="startDrag" @dblclick="toggleMaxWin">
+          <span class="logo">拾刻</span>
+          <span v-if="!collapsed" class="en">TallyMoment</span>
+        </div>
+
+        <nav class="nav">
+          <button
+            v-for="t in tabs"
+            :key="t.key"
+            class="nav-item"
+            :class="{ active: active === t.key }"
+            :title="t.label"
+            @click="active = t.key"
+          >
+            <Icon :name="t.icon" :size="19" />
+            <span v-if="!collapsed" class="nav-label">{{ t.label }}</span>
+          </button>
+        </nav>
+
+        <div class="side-foot">
+          <button class="nav-item" :class="{ active: active === 'settings' }" title="设置" @click="active = 'settings'">
+            <Icon name="settings" :size="19" />
+            <span v-if="!collapsed" class="nav-label">设置</span>
+          </button>
+          <button class="nav-item" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="toggleCollapse">
+            <Icon :name="collapsed ? 'expand' : 'collapse'" :size="19" />
+            <span v-if="!collapsed" class="nav-label">收起</span>
+          </button>
+          <div class="status" :class="status.tone" :title="status.text">
+            <span class="dot"></span>
+            <span v-if="!collapsed">{{ status.text }}</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="content">
+        <TodayPage v-show="active === 'today'" />
+        <HistoryPage v-show="active === 'history'" />
+        <InsightsPage v-show="active === 'insights'" />
+        <TodoPage v-show="active === 'todo'" />
+        <div v-show="active === 'data'" class="page">
+          <header class="phead">
+            <h1>数据</h1>
+            <span class="sub">导出 / 恢复 / 删除</span>
+          </header>
+          <div class="glass-card card">
+            <DataCard />
+          </div>
+        </div>
+        <PetSettingsPage
+          v-show="active === 'petsettings'"
+          v-model:pet-visible="petVisible"
+          @toggle-pet="togglePet"
+        />
+        <PersonalizePage v-show="active === 'personalize'" @wallpaper-changed="loadWallpaper" />
+        <SettingsPage v-show="active === 'settings'" />
+      </main>
     </div>
   </NConfigProvider>
 </template>
@@ -318,147 +310,39 @@ body.glass-off {
 </style>
 
 <style scoped>
+/* 整窗一块材质：侧栏与内容区都直接贴在 .wall 背景层上，不再各自刷一层底 */
 .shell {
   position: relative;
   display: flex;
-  flex-direction: column;
   height: 100vh;
   overflow: hidden;
   border-radius: 10px;
   border: 1px solid var(--card-border);
 }
 
-.body {
+.side {
   position: relative;
   z-index: 1;
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-
-/* ---------- 自绘标题栏 ---------- */
-.titlebar {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  height: 36px;
-  flex: none;
-  padding-left: 12px;
-  background: var(--bg-glass);
-  background: color-mix(in srgb, var(--bg-glass) 88%, transparent);
-  border-bottom: 1px solid var(--card-border);
-}
-
-.tb-drag {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  height: 100%;
-  cursor: default;
-}
-
-.tb-logo {
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-}
-
-.tb-title {
-  font-size: 9px;
-  letter-spacing: 0.22em;
-  color: var(--text-faint);
-  text-transform: uppercase;
-}
-
-.tb-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: 10px;
-  font-size: 10.5px;
-  color: var(--text-faint);
-}
-
-.tb-status .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-faint);
-}
-
-.tb-status.live {
-  color: var(--good);
-}
-.tb-status.live .dot {
-  background: var(--good);
-  animation: pulse 2s infinite;
-}
-.tb-status.paused {
-  color: var(--warn);
-}
-.tb-status.paused .dot {
-  background: var(--warn);
-}
-
-.tb-btns {
-  display: flex;
-  height: 100%;
-}
-
-.tb-btn {
-  width: 44px;
-  height: 100%;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, color 0.15s;
-}
-
-.tb-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.tb-btn.close:hover {
-  background: var(--danger);
-  color: #fff;
-}
-
-@keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(111, 181, 154, 0.5);
-  }
-  70% {
-    box-shadow: 0 0 0 6px rgba(111, 181, 154, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(111, 181, 154, 0);
-  }
-}
-
-/* ---------- 侧栏 ---------- */
-.side {
   flex: none;
   width: 200px;
   display: flex;
   flex-direction: column;
-  padding: 14px 10px 12px;
+  padding: 10px 10px 12px;
   border-right: 1px solid var(--card-border);
-  background: var(--bg-glass);
+  /* 与卡片同一套材质：背景层透上来 + 同一档模糊 */
+  background: rgba(var(--side-rgb), var(--side-alpha));
   backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
-  transition: width 0.18s ease;
+  transition: width 0.2s ease;
   overflow: hidden;
 }
 
+[data-material="liquid"] .side {
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
+}
+
 .glass-off .side {
-  background: var(--surface-solid);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -467,13 +351,39 @@ body.glass-off {
   width: 64px;
 }
 
+/* 品牌行兼作拖拽区（没有独立标题栏了） */
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  height: 40px;
+  padding: 6px 10px 8px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.logo {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.en {
+  font-size: 9px;
+  letter-spacing: 0.24em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+
 .nav {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  margin-top: 4px;
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -486,15 +396,44 @@ body.glass-off {
   padding: 9px 12px;
   border-radius: var(--r-md);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, transform 0.15s;
+  transition: background var(--dur), color var(--dur), transform var(--dur);
   white-space: nowrap;
 }
 
-/* 微动效（参考 uiverse quick-fish-43 的 hover 放大 + 品牌色填充思路） */
+/* 视觉引导：整块侧栏左侧的竖线随激活项移动（对标 Tai 的竖向指示条） */
+.side::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--border-strong) 12%,
+    var(--border-strong) 88%,
+    transparent
+  );
+}
+
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 20px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-soft);
+}
+
 .nav-item:hover {
   color: var(--text);
   background: var(--surface-hover);
-  transform: translateX(2px);
+  transform: translateX(calc(2px * var(--motion)));
 }
 
 .nav-item.active {
@@ -522,12 +461,103 @@ body.glass-off {
   gap: 3px;
 }
 
-/* ---------- 内容区 ---------- */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 8px 12px 2px;
+  white-space: nowrap;
+}
+
+.side.collapsed .status {
+  justify-content: center;
+  padding: 8px 0 2px;
+}
+
+.status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex: none;
+}
+
+.status.live {
+  color: var(--good);
+}
+.status.live .dot {
+  background: var(--good);
+  animation: pulse 2s infinite;
+}
+.status.paused {
+  color: var(--warn);
+}
+.status.paused .dot {
+  background: var(--warn);
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(111, 181, 154, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(111, 181, 154, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(111, 181, 154, 0);
+  }
+}
+
 .content {
+  position: relative;
+  z-index: 1;
   flex: 1;
   min-width: 0;
-  padding: 16px 20px 20px;
+  /* 顶部留出悬浮按钮的高度，卡片不会撞上按钮 */
+  padding: 38px 20px 20px;
   overflow-y: auto;
+}
+
+/* ---------- 悬浮窗口控制按钮 ---------- */
+.winbtns {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 5;
+  display: flex;
+  gap: 2px;
+  border-radius: var(--r-sm);
+  transition: background var(--dur);
+}
+
+.wb {
+  width: 30px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur), color var(--dur);
+}
+
+.winbtns:hover .wb {
+  color: var(--text-muted);
+}
+
+.wb:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.wb.close:hover {
+  background: var(--danger);
+  color: #fff;
 }
 
 .page {

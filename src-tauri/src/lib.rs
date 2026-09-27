@@ -255,6 +255,42 @@ fn prefs_get(app: tauri::AppHandle) -> Result<storage::Prefs, String> {
     Ok(storage::prefs_get(&conn))
 }
 
+/// 设置壁纸（复制进数据目录）
+#[tauri::command]
+fn wallpaper_set(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::wallpaper_set(&conn, &path)
+}
+
+/// 读取当前壁纸（base64）
+#[tauri::command]
+fn wallpaper_get(app: tauri::AppHandle) -> Result<Option<storage::WallpaperFile>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::wallpaper_get(&conn)
+}
+
+/// 移除壁纸
+#[tauri::command]
+fn wallpaper_clear(app: tauri::AppHandle) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::wallpaper_clear(&conn)
+}
+
+/// 导出主题包 JSON 到用户选定路径
+#[tauri::command]
+fn theme_export(path: String, json: String) -> Result<(), String> {
+    storage::theme_export(&path, &json)
+}
+
+/// 读取主题包 JSON
+#[tauri::command]
+fn theme_import(path: String) -> Result<String, String> {
+    storage::theme_import(&path)
+}
+
 /// 界面偏好保存（排行条数 5~20）
 #[tauri::command]
 fn prefs_set(app: tauri::AppHandle, apps_top_n: i64) -> Result<storage::Prefs, String> {
@@ -852,6 +888,11 @@ pub fn run() {
             app_period_report,
             prefs_get,
             prefs_set,
+            wallpaper_set,
+            wallpaper_get,
+            wallpaper_clear,
+            theme_export,
+            theme_import,
             data_info,
             open_data_dir,
             set_window_effect,

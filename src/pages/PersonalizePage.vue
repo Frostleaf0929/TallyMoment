@@ -1,34 +1,43 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { NSlider, NSwitch } from "naive-ui";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { NSwitch } from "naive-ui";
 import Icon from "../components/Icon.vue";
+import SettingSlider from "../components/SettingSlider.vue";
+import {
+  accent,
+  accentIsPreset,
+  applySkin,
+  activeSkinKey,
+  bgAlpha,
+  blur,
+  cardAlpha,
+  exportPack,
+  glass,
+  importPack,
+  material,
+  motion,
+  sideAlpha,
+  skins,
+  themePref,
+  wallKind,
+  wallImageUrl,
+  type ThemePack,
+} from "../lib/appearance";
 
-type ThemePref = "dark" | "light" | "system";
+const emit = defineEmits<{ (e: "wallpaper-changed"): void }>();
 
-const props = defineProps<{
-  themePref: ThemePref;
-  accent: string;
-  glass: boolean;
-  blur: number;
-  bgAlpha: number;
-}>();
+const msg = ref("");
+const err = ref("");
 
-const emit = defineEmits<{
-  (e: "update:themePref", v: ThemePref): void;
-  (e: "update:accent", v: string): void;
-  (e: "update:glass", v: boolean): void;
-  (e: "update:blur", v: number): void;
-  (e: "update:bgAlpha", v: number): void;
-}>();
-
-const themes: { key: ThemePref; label: string; icon: string }[] = [
+const themes: { key: "dark" | "light" | "system"; label: string; icon: string }[] = [
   { key: "dark", label: "深色", icon: "moon" },
   { key: "light", label: "浅色", icon: "sun" },
   { key: "system", label: "跟随系统", icon: "settings" },
 ];
 
-const accents: { key: string; color: string; label: string }[] = [
+const accentPresets: { key: string; color: string; label: string }[] = [
   { key: "indigo", color: "#7b84ec", label: "靛蓝" },
   { key: "teal", color: "#58b3c4", label: "青" },
   { key: "green", color: "#6fb59a", label: "薄荷" },
@@ -37,173 +46,295 @@ const accents: { key: string; color: string; label: string }[] = [
   { key: "rose", color: "#d3859b", label: "蔷薇" },
 ];
 
-/* ---------- 窗口特效（持久化在后端 settings 表） ---------- */
-const effectKind = ref("acrylic");
-const effectMsg = ref("");
-/** 本地即时值：拖动中先反馈，松手（dragend）与 200ms 防抖后落盘
- *  注意：naive-ui 的 Slider 只发 update:value / dragend，没有 change 事件 */
-const localBlur = ref(props.blur);
-const localAlpha = ref(props.bgAlpha);
-let blurTimer: number | undefined;
-let alphaTimer: number | undefined;
-
-function onBlurInput(v: number) {
-  localBlur.value = v;
-  if (blurTimer) clearTimeout(blurTimer);
-  blurTimer = window.setTimeout(() => emit("update:blur", localBlur.value), 200);
-}
-
-function onAlphaInput(v: number) {
-  localAlpha.value = v;
-  if (alphaTimer) clearTimeout(alphaTimer);
-  alphaTimer = window.setTimeout(() => emit("update:bgAlpha", localAlpha.value), 200);
-}
-
-function commitBlur() {
-  if (blurTimer) clearTimeout(blurTimer);
-  emit("update:blur", localBlur.value);
-}
-
-function commitAlpha() {
-  if (alphaTimer) clearTimeout(alphaTimer);
-  emit("update:bgAlpha", localAlpha.value);
-}
-
-const effects: { key: string; label: string; desc: string }[] = [
-  { key: "acrylic", label: "亚克力", desc: "Windows 11 原生，最通透（窗口失焦时系统会自动减淡）" },
-  { key: "mica", label: "云母", desc: "更含蓄的桌面取样，适合长时间看" },
-  { key: "blur", label: "经典模糊", desc: "旧版 Aero 模糊，失焦也保留" },
-  { key: "none", label: "关闭", desc: "关闭窗口特效，只用界面内部的模糊" },
+const materials: { key: "frosted" | "liquid"; label: string; desc: string }[] = [
+  { key: "frosted", label: "毛玻璃", desc: "奶霜质感，文字更清晰" },
+  { key: "liquid", label: "液态玻璃", desc: "更薄更透，折射感强，更显壁纸" },
 ];
 
-async function pickEffect(kind: string) {
-  effectMsg.value = "";
-  try {
-    await invoke("set_window_effect", { kind });
-    effectKind.value = kind;
-    effectMsg.value = kind === "none" ? "已关闭窗口特效" : "窗口特效已切换";
-  } catch (e) {
-    effectMsg.value = String(e).replace(/^.*Error: /, "");
+const wallKinds: { key: "none" | "gradient" | "image"; label: string }[] = [
+  { key: "none", label: "无" },
+  { key: "gradient", label: "柔光渐变" },
+  { key: "image", label: "本地图片" },
+];
+
+const currentSkin = computed(() => activeSkinKey());
+
+/** 取色器：预设色块选中时显示该预设的实际色值，拖动即切到自定义色 */
+const pickerValue = computed({
+  get: () => {
+    const hit = accentPresets.find((a) => a.key === accent.value);
+    return hit ? hit.color : accent.value;
+  },
+  set: (v: string) => (accent.value = v),
+});
+
+const accentLabel = computed(() =>
+  accentIsPreset.value
+    ? accentPresets.find((a) => a.key === accent.value)?.label ?? "预设"
+    : "自定义"
+);
+
+function pickSkin(key: string) {
+  const s = skins.find((x) => x.key === key);
+  if (s) {
+    applySkin(s);
+    msg.value = `已应用皮肤「${s.label}」`;
+    err.value = "";
   }
 }
 
-onMounted(async () => {
+function randomAccent() {
+  const list = accentPresets.map((a) => a.color);
+  accent.value = list[Math.floor(Math.random() * list.length)];
+  msg.value = "已随机换一个强调色";
+}
+
+async function pickWallpaper() {
+  msg.value = "";
+  err.value = "";
   try {
-    effectKind.value = await invoke<string>("window_effect_get");
-  } catch {
-    /* 后端未就绪时按默认 */
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      title: "选择壁纸图片",
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }],
+    });
+    if (!picked || Array.isArray(picked)) return;
+    await invoke("wallpaper_set", { path: picked });
+    wallKind.value = "image";
+    emit("wallpaper-changed");
+    msg.value = "壁纸已设置（只保存在本机数据目录）";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
   }
-});
+}
+
+async function clearWallpaper() {
+  msg.value = "";
+  err.value = "";
+  try {
+    await invoke("wallpaper_clear");
+    if (wallImageUrl.value) URL.revokeObjectURL(wallImageUrl.value);
+    wallImageUrl.value = null;
+    wallKind.value = "gradient";
+    msg.value = "已移除壁纸，回到柔光渐变";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+async function exportTheme() {
+  msg.value = "";
+  err.value = "";
+  try {
+    const picked = await save({
+      title: "导出主题包",
+      defaultPath: "tallymoment-theme.json",
+      filters: [{ name: "主题包", extensions: ["json"] }],
+    });
+    if (!picked) return;
+    const json = JSON.stringify(exportPack(), null, 2);
+    await invoke("theme_export", { path: picked, json });
+    msg.value = "主题包已导出（壁纸图片不包含在内）";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+async function importTheme() {
+  msg.value = "";
+  err.value = "";
+  try {
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      title: "选择主题包",
+      filters: [{ name: "主题包", extensions: ["json"] }],
+    });
+    if (!picked || Array.isArray(picked)) return;
+    const txt = await invoke<string>("theme_import", { path: picked });
+    const problem = importPack(JSON.parse(txt) as ThemePack);
+    if (problem) {
+      err.value = problem;
+      return;
+    }
+    emit("wallpaper-changed");
+    msg.value = "主题包已导入并应用";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
 </script>
 
 <template>
   <div class="page">
     <header class="phead">
       <h1>个性化</h1>
-      <span class="sub">外观与毛玻璃效果</span>
+      <span class="sub">皮肤预设 · 壁纸 · 玻璃材质 · 透明度 · 动效</span>
     </header>
 
+    <!-- 皮肤预设 -->
     <div class="glass-card card">
-      <h2>主题</h2>
-      <div class="seg">
+      <h2>皮肤预设</h2>
+      <div class="skins">
         <button
-          v-for="t in themes"
-          :key="t.key"
-          class="seg-item"
-          :class="{ active: themePref === t.key }"
-          @click="emit('update:themePref', t.key)"
+          v-for="s in skins"
+          :key="s.key"
+          class="skin"
+          :class="{ active: currentSkin === s.key }"
+          :title="s.label"
+          @click="pickSkin(s.key)"
         >
-          <Icon :name="t.icon" :size="16" />
-          <span>{{ t.label }}</span>
+          <span class="preview" :style="{ background: s.swatch[0] }">
+            <span class="pv-card" :style="{ background: s.swatch[1] }">
+              <span class="pv-bar" :style="{ background: s.swatch[2] }"></span>
+              <span class="pv-bar short" :style="{ background: s.swatch[2], opacity: 0.6 }"></span>
+            </span>
+          </span>
+          <span class="sname">{{ s.label }}</span>
+          <span v-if="currentSkin === s.key" class="tick"><Icon name="checklist" :size="12" /></span>
         </button>
       </div>
+      <p class="rd more">预设会一次性设定主题、强调色、材质与透明度；之后你仍然可以单独微调任何一项。</p>
     </div>
 
+    <!-- 强调色 -->
     <div class="glass-card card">
       <h2>强调色</h2>
       <div class="accents">
         <button
-          v-for="a in accents"
+          v-for="a in accentPresets"
           :key="a.key"
           class="swatch"
           :class="{ active: accent === a.key }"
           :style="{ background: a.color }"
           :title="a.label"
-          @click="emit('update:accent', a.key)"
+          @click="accent = a.key"
         ></button>
+        <label class="picker" :title="`自定义颜色（当前：${accentLabel}）`">
+          <input v-model="pickerValue" type="color" />
+        </label>
+        <button class="ghost" @click="randomAccent">随机</button>
+        <button class="ghost" @click="accent = 'indigo'">恢复默认</button>
+        <span class="cur">{{ accentLabel }}</span>
       </div>
     </div>
 
+    <!-- 主题与壁纸 -->
     <div class="glass-card card">
-      <h2>毛玻璃</h2>
+      <h2>主题与壁纸</h2>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">明暗主题</p>
+          <p class="rd">浅色主题下图表与图标也已适配</p>
+        </div>
+        <div class="seg">
+          <button
+            v-for="t in themes"
+            :key="t.key"
+            class="seg-item"
+            :class="{ active: themePref === t.key }"
+            @click="themePref = t.key"
+          >
+            <Icon :name="t.icon" :size="15" />
+            <span>{{ t.label }}</span>
+          </button>
+        </div>
+      </div>
 
       <div class="row">
         <div class="rlabel">
-          <p class="rt">毛玻璃</p>
-          <p class="rd">半透明卡片与侧栏（低配设备可关闭）</p>
+          <p class="rt">壁纸</p>
+          <p class="rd">玻璃效果需要有"东西"可糊，柔光渐变是最省性能的选择</p>
         </div>
-        <NSwitch :value="glass" @update:value="(v: boolean) => emit('update:glass', v)" />
-      </div>
-
-      <div class="row col">
-        <div class="rlabel">
-          <p class="rt">窗口特效</p>
-          <p class="rd">让桌面透过窗口形成玻璃质感</p>
-        </div>
-        <div class="seg wrap">
+        <div class="seg">
           <button
-            v-for="e in effects"
-            :key="e.key"
+            v-for="w in wallKinds"
+            :key="w.key"
             class="seg-item"
-            :class="{ active: effectKind === e.key }"
-            :title="e.desc"
-            @click="pickEffect(e.key)"
+            :class="{ active: wallKind === w.key }"
+            @click="wallKind = w.key"
           >
-            {{ e.label }}
+            {{ w.label }}
           </button>
         </div>
-        <p class="rd">{{ effects.find((e) => e.key === effectKind)?.desc }}</p>
       </div>
 
-      <div class="row col">
+      <div class="row">
         <div class="rlabel">
-          <p class="rt">玻璃模糊</p>
-          <p class="rd">0 ~ 40px，越大越朦胧</p>
+          <p class="rt">本地图片</p>
+          <p class="rd">从本机选择一张图作为底衬（只存本机数据目录，不上传）</p>
         </div>
-        <NSlider
-          :value="localBlur"
-          :min="0"
-          :max="40"
-          :step="1"
-          :format-tooltip="(v: number) => v + 'px'"
-          style="max-width: 320px"
-          @update:value="onBlurInput"
-          @dragend="commitBlur"
-        />
+        <div class="acts">
+          <button class="ghost" @click="pickWallpaper">选择图片</button>
+          <button class="ghost danger" @click="clearWallpaper">移除图片</button>
+        </div>
       </div>
+    </div>
 
-      <div class="row col">
+    <!-- 玻璃效果：所有"有多透"的控制收在同一组 -->
+    <div class="glass-card card">
+      <h2>玻璃效果</h2>
+
+      <div class="row">
         <div class="rlabel">
-          <p class="rt">界面底色不透明度</p>
-          <p class="rd">30% ~ 100%，越低桌面越透</p>
+          <p class="rt">毛玻璃总开关</p>
+          <p class="rd">关闭后界面变为不透明实底（低配设备可关）</p>
         </div>
-        <NSlider
-          :value="localAlpha"
-          :min="30"
-          :max="100"
-          :step="2"
-          :format-tooltip="(v: number) => v + '%'"
-          style="max-width: 320px"
-          @update:value="onAlphaInput"
-          @dragend="commitAlpha"
-        />
+        <NSwitch :value="glass" @update:value="(v: boolean) => (glass = v)" />
       </div>
 
-      <p v-if="effectMsg" class="hint">{{ effectMsg }}</p>
+      <div class="materials">
+        <button
+          v-for="m in materials"
+          :key="m.key"
+          class="mat"
+          :class="{ active: material === m.key }"
+          @click="material = m.key"
+        >
+          <span class="mat-pv" :class="m.key"></span>
+          <span class="sname">{{ m.label }}</span>
+          <span class="sdesc">{{ m.desc }}</span>
+        </button>
+      </div>
+
+      <SettingSlider v-model="blur" label="玻璃模糊" desc="0 ~ 40px，同时作用于卡片与背景层" :min="0" :max="40" suffix="px" />
+      <SettingSlider v-model="bgAlpha" label="界面底色不透明度" desc="30% ~ 100%，越低桌面越透" :min="30" :max="100" suffix="%" />
+      <SettingSlider v-model="sideAlpha" label="侧边栏不透明度" desc="0% ~ 100%" :min="0" :max="100" suffix="%" />
+      <SettingSlider v-model="cardAlpha" label="卡片不透明度" desc="50% ~ 100%" :min="50" :max="100" suffix="%" />
+    </div>
+
+    <!-- 动效 -->
+    <div class="glass-card card">
+      <h2>动效</h2>
+      <SettingSlider
+        v-model="motion"
+        label="动效强度"
+        desc="0 = 关闭动画；1 = 标准；越大悬停放大与上浮越明显"
+        :min="0"
+        :max="1.6"
+        :step="0.1"
+        suffix="×"
+      />
       <p class="rd more">
-        提示：窗口特效由 Windows 绘制，需要窗口未最大化且显卡驱动正常；若出现黑底或闪烁，切到「关闭」即可。
+        现在把鼠标移到任意卡片上试试：卡片会上浮并轻微放大、描边变成强调色。强度拉到 0 就是完全静态。
       </p>
     </div>
+
+    <!-- 主题包 -->
+    <div class="glass-card card">
+      <h2>主题包（本机文件）</h2>
+      <div class="acts">
+        <button class="ghost" @click="exportTheme">导出主题包</button>
+        <button class="ghost" @click="importTheme">导入主题包</button>
+      </div>
+      <p class="rd more">
+        导出为一份 JSON（皮肤/材质/透明度/动效参数），可在别的机器上导入复现同一套观感。壁纸图片不包含在内。
+      </p>
+    </div>
+
+    <p v-if="msg" class="ok">{{ msg }}</p>
+    <p v-if="err" class="err">{{ err }}</p>
   </div>
 </template>
 
@@ -242,41 +373,93 @@ onMounted(async () => {
   color: var(--text-muted);
 }
 
-.seg {
-  display: inline-flex;
-  gap: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 4px;
-  background: var(--surface);
+/* 皮肤预设 */
+.skins {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 10px;
 }
 
-.seg.wrap {
-  flex-wrap: wrap;
-}
-
-.seg-item {
+.skin {
+  position: relative;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 6px;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-family: inherit;
-  padding: 7px 14px;
-  border-radius: var(--r-sm);
+  align-items: stretch;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  padding: 8px;
   cursor: pointer;
+  font-family: inherit;
+  transition: transform var(--dur), border-color var(--dur), box-shadow var(--dur);
 }
 
-.seg-item.active {
+.skin:hover {
+  transform: translateY(calc(-2px * var(--motion))) scale(calc(1 + 0.02 * var(--motion)));
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow-soft);
+}
+
+.skin.active {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--accent-soft) inset;
+}
+
+.preview {
+  display: block;
+  height: 46px;
+  border-radius: var(--r-sm);
+  padding: 5px;
+}
+
+.pv-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+  border-radius: 5px;
+  padding: 0 6px;
+}
+
+.pv-bar {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.pv-bar.short {
+  width: 60%;
+}
+
+.sname {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.sdesc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tick {
+  position: absolute;
+  top: 6px;
+  right: 6px;
   color: var(--accent-text);
   background: var(--accent-soft);
+  border-radius: var(--r-full);
+  padding: 2px;
+  display: inline-flex;
 }
 
+/* 强调色 */
 .accents {
   display: flex;
+  align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .swatch {
@@ -285,16 +468,69 @@ onMounted(async () => {
   border-radius: 50%;
   border: 2px solid transparent;
   cursor: pointer;
-  transition: transform 0.12s, box-shadow 0.12s;
+  transition: transform var(--dur), box-shadow var(--dur);
 }
 
 .swatch:hover {
-  transform: scale(1.1);
+  transform: scale(calc(1 + 0.12 * var(--motion)));
 }
 
 .swatch.active {
   border-color: var(--text);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.picker {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px dashed var(--border-strong);
+  overflow: hidden;
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.picker input {
+  width: 200%;
+  height: 200%;
+  margin: -25%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.cur {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.ghost {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background var(--dur), color var(--dur);
+}
+
+.ghost:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.ghost.danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.acts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .row {
@@ -305,37 +541,118 @@ onMounted(async () => {
   padding: 8px 0;
 }
 
-.row.col {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-}
-
 .rlabel .rt {
   margin: 0 0 2px;
-  font-size: 14px;
+  font-size: 13.5px;
   color: var(--text);
 }
 
 .rlabel .rd {
   margin: 0;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-muted);
 }
 
-.hint {
-  margin: 8px 0 0;
+.seg {
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 4px;
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+
+.seg-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 6px 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.seg-item.active {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+/* 材质双卡 */
+.materials {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 6px 0 4px;
+}
+
+.mat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  padding: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform var(--dur), border-color var(--dur);
+}
+
+.mat:hover {
+  transform: translateY(calc(-2px * var(--motion)));
+}
+
+.mat.active {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--accent-soft) inset;
+}
+
+.mat-pv {
+  display: block;
+  height: 42px;
+  border-radius: var(--r-sm);
+  background-image: linear-gradient(
+    100deg,
+    #ff9966,
+    #ffd166,
+    #6fb59a,
+    #58b3c4,
+    #a08fe0
+  );
+}
+
+.mat-pv.frosted {
+  backdrop-filter: blur(8px) saturate(1.3) brightness(1.08);
+  opacity: 0.85;
+}
+
+.mat-pv.liquid {
+  backdrop-filter: blur(2px) saturate(1.8) brightness(1.05) contrast(1.04);
+  border: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.rd.more {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-faint);
+}
+
+.ok {
+  margin: 0;
   font-size: 12px;
   color: var(--good);
 }
 
-.rd.more {
-  margin-top: 10px;
+.err {
+  margin: 0;
   font-size: 12px;
-  color: var(--text-faint);
-}
-
-button {
-  font-family: inherit;
+  color: var(--danger);
 }
 </style>

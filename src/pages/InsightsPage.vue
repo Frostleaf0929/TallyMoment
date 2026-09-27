@@ -15,6 +15,15 @@ const renderErr = ref("");
 
 const chartEl = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
+let ro: ResizeObserver | null = null;
+
+/** 隐藏页面（v-show）里 clientWidth 为 0，先不建图，等真可见时再由 ResizeObserver 建 */
+function syncSize() {
+  if (!chartEl.value) return;
+  if (chartEl.value.clientWidth < 8) return;
+  if (!chart) renderChart();
+  else chart.resize();
+}
 
 function fakeReport(): InsightReport {
   const now = Math.floor(Date.now() / 1000);
@@ -83,7 +92,7 @@ const stateColors = computed(() => {
 });
 
 function renderChart() {
-  if (!chartEl.value || !report.value) return;
+  if (!chartEl.value || !report.value || chartEl.value.clientWidth < 8) return;
   if (!chart) chart = echarts.init(chartEl.value);
   const c = chartColors();
   const sc = stateColors.value;
@@ -211,9 +220,14 @@ onMounted(() => {
   );
   load();
   window.addEventListener("resize", onResize);
+  if (chartEl.value) {
+    ro = new ResizeObserver(() => syncSize());
+    ro.observe(chartEl.value);
+  }
 });
 onUnmounted(() => {
   window.removeEventListener("resize", onResize);
+  ro?.disconnect();
   chart?.dispose();
   chart = null;
 });

@@ -1643,6 +1643,115 @@ pub fn prefs_get(conn: &Connection) -> Prefs {
     }
 }
 
+// ---------- 壁纸与主题包（个性化页；墙纸只存本机数据目录） ----------
+
+const WALLPAPER_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+pub fn wallpaper_dir() -> Result<PathBuf, String> {
+    let dir = resolve_db_path()?
+        .parent()
+        .ok_or("数据目录异常")?
+        .to_path_buf()
+        .join("wallpapers");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建壁纸目录失败: {e}"))?;
+    Ok(dir)
+}
+
+/// 把用户选的图片复制进数据目录（只保存一份，替换旧的）
+pub fn wallpaper_set(conn: &Connection, src_path: &str) -> Result<(), String> {
+    let src = PathBuf::from(src_path);
+    if !src.is_file() {
+        return Err("所选图片不存在或无法读取".into());
+    }
+    let ext = src
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if !["png", "jpg", "jpeg", "webp", "gif", "bmp"].contains(&ext.as_str()) {
+        return Err("只支持图片格式：png / jpg / webp / gif / bmp".into());
+    }
+    let size = std::fs::metadata(&src).map_err(|e| format!("读取图片失败: {e}"))?.len();
+    if size > WALLPAPER_MAX_BYTES {
+        return Err("图片过大（超过 16MB），请先压缩再试".into());
+    }
+    let dir = wallpaper_dir()?;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.filter_map(|e| e.ok()) {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with("wall.") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    let dst = dir.join(format!("wall.{ext}"));
+    std::fs::copy(&src, &dst).map_err(|e| format!("保存壁纸失败: {e}"))?;
+    set_setting(conn, "ui.wallpaper", &dst.to_string_lossy())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WallpaperFile {
+    pub mime: String,
+    /// base64（前端转 Blob URL，避免 asset 协议的路径/权限问题）
+    pub data: String,
+}
+
+/// 读取当前壁纸（没有则 None）
+pub fn wallpaper_get(conn: &Connection) -> Result<Option<WallpaperFile>, String> {
+    let Some(path) = get_setting(conn, "ui.wallpaper") else {
+        return Ok(None);
+    };
+    let p = PathBuf::from(&path);
+    if !p.is_file() {
+        return Ok(None);
+    }
+    let ext = p
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        _ => "image/png",
+    };
+    let data = std::fs::read(&p).map_err(|e| format!("读取壁纸失败: {e}"))?;
+    Ok(Some(WallpaperFile {
+        mime: mime.into(),
+        data: crate::pet_settings::base64_encode(&data),
+    }))
+}
+
+pub fn wallpaper_clear(conn: &Connection) -> Result<(), String> {
+    if let Ok(dir) = wallpaper_dir() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.filter_map(|e| e.ok()) {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with("wall.") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+    set_setting(conn, "ui.wallpaper", "")
+}
+
+/// 主题包导出到用户选定路径
+pub fn theme_export(path: &str, json: &str) -> Result<(), String> {
+    std::fs::write(path, json).map_err(|e| format!("写入主题包失败: {e}"))
+}
+
+/// 主题包导入（只读文本，限制 1MB）
+pub fn theme_import(path: &str) -> Result<String, String> {
+    let p = PathBuf::from(path);
+    let size = std::fs::metadata(&p).map_err(|e| format!("读取主题包失败: {e}"))?.len();
+    if size > 1024 * 1024 {
+        return Err("主题包文件过大，不是有效的主题包".into());
+    }
+    std::fs::read_to_string(&p).map_err(|e| format!("读取主题包失败: {e}"))
+}
+
 /// 数据目录与文件信息（设置页展示，回答「数据存在哪」）
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
