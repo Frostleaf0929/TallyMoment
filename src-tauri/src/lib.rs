@@ -226,6 +226,19 @@ fn period_index(app: tauri::AppHandle) -> Result<storage::PeriodIndex, String> {
     storage::period_index(&conn)
 }
 
+/// 任意日期区间报表（详细页）
+#[tauri::command]
+fn range_report(
+    app: tauri::AppHandle,
+    from: String,
+    to: String,
+    app_name: Option<String>,
+) -> Result<storage::RangeReport, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::range_report(&conn, &from, &to, app_name.as_deref())
+}
+
 /// 应用清单（历史页「按应用」侧栏）
 #[tauri::command]
 fn app_list(app: tauri::AppHandle, limit: Option<i64>) -> Result<Vec<storage::AppUsage>, String> {
@@ -912,6 +925,7 @@ pub fn run() {
             insights_report,
             period_report,
             period_index,
+            range_report,
             app_list,
             app_period_report,
             prefs_get,

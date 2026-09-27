@@ -82,6 +82,25 @@ export interface AppPeriodReport {
   buckets: PeriodBucket[];
 }
 
+/** 任意区间报表（详细页） */
+export interface RangeReport {
+  from: string;
+  to: string;
+  title: string;
+  days: number;
+  totalSeconds: number;
+  appCount: number;
+  activeDays: number;
+  avgPerDay: number;
+  keys: number;
+  clicks: number;
+  apps: AppUsage[];
+  hourly: HourSlice[];
+  buckets: PeriodBucket[];
+  app: string | null;
+  appDisplay: string | null;
+}
+
 /** 界面偏好 */
 export interface Prefs {
   appsTopN: number;

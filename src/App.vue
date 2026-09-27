@@ -10,6 +10,7 @@ import PetView from "./components/PetView.vue";
 import ToastStack from "./components/ToastStack.vue";
 import TodayPage from "./pages/TodayPage.vue";
 import HistoryPage from "./pages/HistoryPage.vue";
+import DetailPage from "./pages/DetailPage.vue";
 import InsightsPage from "./pages/InsightsPage.vue";
 import TodoPage from "./pages/TodoPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
@@ -40,6 +41,7 @@ document.documentElement.dataset.mode = mode;
 type Tab =
   | "today"
   | "history"
+  | "detail"
   | "insights"
   | "todo"
   | "data"
@@ -49,6 +51,7 @@ type Tab =
 const tabs: { key: Tab; label: string; icon: string }[] = [
   { key: "today", label: "今日", icon: "clock" },
   { key: "history", label: "历史", icon: "doc" },
+  { key: "detail", label: "详细", icon: "graph" },
   { key: "insights", label: "洞察", icon: "graph" },
   { key: "todo", label: "待办", icon: "checklist" },
   { key: "data", label: "数据", icon: "database" },
@@ -59,7 +62,9 @@ const active = ref<Tab>("today");
 
 // 今日卡片 / 应用排行点击 → 跳到历史页对应视图
 watchEffect(() => {
-  if (navIntent.value) active.value = "history";
+  const n = navIntent.value;
+  if (!n) return;
+  active.value = n.view === "app" ? "detail" : "history";
 });
 const collapsed = ref(localStorage.getItem("ui.side") === "collapsed");
 
@@ -262,6 +267,7 @@ onUnmounted(() => {
       <main class="content">
         <TodayPage v-show="active === 'today'" @jump="() => (active = 'history')" />
         <HistoryPage v-show="active === 'history'" />
+        <DetailPage v-show="active === 'detail'" />
         <InsightsPage v-show="active === 'insights'" />
         <TodoPage v-show="active === 'todo'" />
         <div v-show="active === 'data'" class="page">
@@ -320,9 +326,13 @@ body.glass-off {
   position: relative;
   display: flex;
   height: 100vh;
+  /* 16px 留白做成"外框"，侧栏与内容区各自是一块圆角卡片（对标参考图的卡片式布局） */
+  padding: 16px;
+  gap: 16px;
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: 18px;
   border: 1px solid var(--card-border);
+  box-sizing: border-box;
 }
 
 .side {
@@ -333,7 +343,9 @@ body.glass-off {
   display: flex;
   flex-direction: column;
   padding: 10px 10px 12px;
-  border-right: 1px solid var(--card-border);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
   /* 与卡片同一套材质：背景层透上来 + 同一档模糊 */
   background: rgba(var(--side-rgb), var(--side-alpha));
   backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
@@ -354,6 +366,11 @@ body.glass-off {
 
 .side.collapsed {
   width: 64px;
+}
+
+/* 侧栏左侧的竖线随激活项——留在卡片内部 */
+.side {
+  overflow: hidden;
 }
 
 /* 品牌行兼作拖拽区（没有独立标题栏了） */
@@ -412,7 +429,7 @@ body.glass-off {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 2px;
+  width: 1px;
   background: linear-gradient(
     to bottom,
     transparent,
@@ -425,7 +442,7 @@ body.glass-off {
 .nav-item.active::before {
   content: "";
   position: absolute;
-  left: -10px;
+  left: -9px;
   top: 50%;
   transform: translateY(-50%);
   width: 3px;
@@ -520,7 +537,12 @@ body.glass-off {
   z-index: 1;
   flex: 1;
   min-width: 0;
-  /* 顶部留出悬浮按钮的高度，卡片不会撞上按钮 */
+  /* 内容区也是一块圆角卡片 */
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg-glass) 55%, transparent);
+  box-shadow: var(--card-shadow);
+  /* 顶部留出悬浮按钮的高度 */
   padding: 38px 20px 20px;
   overflow-y: auto;
 }
@@ -528,8 +550,8 @@ body.glass-off {
 /* ---------- 悬浮窗口控制按钮 ---------- */
 .winbtns {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: 22px;
+  right: 22px;
   z-index: 5;
   display: flex;
   gap: 2px;

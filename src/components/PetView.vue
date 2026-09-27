@@ -106,9 +106,16 @@ async function mountLive2d(bundle: Live2dBundle) {
   };
 
   const map = new Map<string, string>();
-  for (const f of bundle.files) map.set(f.rel, toBlobUrl(f));
+  for (const f of bundle.files) map.set(f.rel, toDataUrl(f));
   const dir = bundle.model3Rel.replace(/[^/]+$/, "");
   const resolve = (rel: string) => map.get(dir + rel) ?? map.get(rel) ?? rel;
+
+  // 先自检：model3.json 引用的文件必须都在包里，缺谁直接报出来（比 pixi 的 Network error 好定位）
+  const missing: string[] = [];
+  const need = (rel: unknown) => {
+    if (typeof rel !== "string") return;
+    if (!map.has(dir + rel) && !map.has(rel)) missing.push(rel);
+  };
 
   const settings = JSON.parse(JSON.stringify(bundle.model3)) as Record<string, unknown> & {
     url?: string;
@@ -124,8 +131,18 @@ async function mountLive2d(bundle: Live2dBundle) {
   for (const e of (fr.Expressions ?? []) as { File?: string }[]) {
     if (e?.File) e.File = resolve(e.File);
   }
+  need(fr.Moc);
+  for (const t of (fr.Textures ?? []) as unknown[]) need(t);
+  for (const k of ["Physics", "Pose", "DisplayInfo", "UserData"]) need(fr[k]);
+  for (const e of (fr.Expressions ?? []) as { File?: string }[]) need(e?.File);
   for (const group of Object.values((fr.Motions ?? {}) as Record<string, { File?: string }[]>)) {
-    for (const m of group ?? []) if (m?.File) m.File = resolve(m.File);
+    for (const m of group ?? []) {
+      need(m?.File);
+      if (m?.File) m.File = resolve(m.File);
+    }
+  }
+  if (missing.length) {
+    throw new Error(`模型引用的文件缺失：${missing.join("、")}`);
   }
 
   const canvas = canvasEl.value;
@@ -207,12 +224,17 @@ async function loadSettings() {
   }
 }
 
-/** base64 -> Blob URL */
+/** base64 -> Blob URL（分层图用） */
 function toBlobUrl(asset: AssetFile): string {
   const bin = atob(asset.data);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return URL.createObjectURL(new Blob([bytes], { type: asset.mime }));
+}
+
+/** base64 -> data URL（Live2D 用：blob: 在 WebView2 里会取不到，报 Network error） */
+function toDataUrl(asset: AssetFile): string {
+  return `data:${asset.mime};base64,${asset.data}`;
 }
 
 function revokeAssets() {

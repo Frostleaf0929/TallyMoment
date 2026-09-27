@@ -310,7 +310,10 @@ onMounted(load);
         <NButton size="small" secondary :loading="importing" @click="importZip">
           <Icon name="doc" :size="14" /> 导入 ZIP
         </NButton>
-        <span v-if="!importing" class="ihint">支持 Mver 模型包（img/ + config.json 或 bongocat.skin.json）</span>
+        <span v-if="!importing" class="ihint">
+          导入会把这个模型<b>复制</b>一份到本程序的数据目录（Data\models），
+          <b>不会修改或移动你选的原始文件夹</b>；模型需要 img/ 目录 + config.json（或 bongocat.skin.json）
+        </span>
       </div>
       <BallLoader v-if="importing" label="正在导入模型…" />
       <div v-if="live2d" class="l2dbox" :class="live2d.ok ? 'okbox' : 'badbox'">
@@ -532,6 +535,11 @@ onMounted(load);
 .ihint {
   font-size: 11px;
   color: var(--text-faint);
+  line-height: 1.6;
+}
+
+.ihint b {
+  color: var(--text-muted);
 }
 
 .row {

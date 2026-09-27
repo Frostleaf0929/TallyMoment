@@ -1643,6 +1643,191 @@ pub fn prefs_get(conn: &Connection) -> Prefs {
     }
 }
 
+// ---------- 任意日期区间报表（详细页：按天/按周/按月/按年，可按应用下钻） ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangeReport {
+    pub from: String,
+    pub to: String,
+    pub title: String,
+    /// 区间天数
+    pub days: i64,
+    pub total_seconds: i64,
+    pub app_count: usize,
+    pub active_days: i64,
+    pub avg_per_day: i64,
+    pub keys: i64,
+    pub clicks: i64,
+    pub apps: Vec<AppUsage>,
+    pub hourly: Vec<HourSlice>,
+    pub buckets: Vec<PeriodBucket>,
+    /// 仅当按应用下钻时有值
+    pub app: Option<String>,
+    pub app_display: Option<String>,
+}
+
+/// 区间报表：应用排行 / 24 小时分布 / 趋势桶；`app` 有值时只统计该应用
+pub fn range_report(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    app: Option<&str>,
+) -> Result<RangeReport, String> {
+    use chrono::NaiveDate;
+    let d_from = NaiveDate::parse_from_str(from, "%Y-%m-%d").map_err(|_| "起始日期格式需为 YYYY-MM-DD")?;
+    let d_to = NaiveDate::parse_from_str(to, "%Y-%m-%d").map_err(|_| "结束日期格式需为 YYYY-MM-DD")?;
+    if d_to < d_from {
+        return Err("结束日期早于起始日期".into());
+    }
+    let days = (d_to - d_from).num_days() + 1;
+    if days > 3700 {
+        return Err("区间过大（最多 10 年）".into());
+    }
+    let app_filter = app.filter(|a| !a.is_empty());
+
+    let apps_sql = format!(
+        "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds)
+         FROM daily_stats d JOIN apps a ON a.id = d.app_id
+         WHERE d.date >= ?1 AND d.date <= ?2 {app_cond}
+         GROUP BY d.app_id ORDER BY 3 DESC LIMIT 300",
+        app_cond = if app_filter.is_some() { "AND a.name = ?3" } else { "" }
+    );
+    let mut stmt = conn.prepare(&apps_sql).map_err(|e| format!("查询区间应用失败: {e}"))?;
+    let map_row = |r: &rusqlite::Row| {
+        Ok(AppUsage {
+            name: r.get(0)?,
+            display_name: r.get(1)?,
+            seconds: r.get(2)?,
+        })
+    };
+    let apps: Vec<AppUsage> = match app_filter {
+        Some(a) => stmt
+            .query_map(rusqlite::params![from, to, a], map_row)
+            .map_err(|e| format!("查询区间应用失败: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect(),
+        None => stmt
+            .query_map(rusqlite::params![from, to], map_row)
+            .map_err(|e| format!("查询区间应用失败: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect(),
+    };
+
+    let hourly_sql = format!(
+        "SELECT h.hour, a.name, SUM(h.seconds)
+         FROM hourly_stats h JOIN apps a ON a.id = h.app_id
+         WHERE h.date >= ?1 AND h.date <= ?2 {app_cond}
+         GROUP BY h.hour, h.app_id",
+        app_cond = if app_filter.is_some() { "AND a.name = ?3" } else { "" }
+    );
+    let mut hstmt = conn.prepare(&hourly_sql).map_err(|e| format!("查询区间时段失败: {e}"))?;
+    let h_row = |r: &rusqlite::Row| {
+        Ok(HourSlice {
+            hour: r.get(0)?,
+            app_name: r.get(1)?,
+            seconds: r.get(2)?,
+        })
+    };
+    let hourly: Vec<HourSlice> = match app_filter {
+        Some(a) => hstmt
+            .query_map(rusqlite::params![from, to, a], h_row)
+            .map_err(|e| format!("查询区间时段失败: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect(),
+        None => hstmt
+            .query_map(rusqlite::params![from, to], h_row)
+            .map_err(|e| format!("查询区间时段失败: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect(),
+    };
+
+    // 桶粒度随区间长度自动选：≤62 天按天、≤730 天按月、更长按年
+    let group_expr = if days <= 62 {
+        "d.date"
+    } else if days <= 730 {
+        "substr(d.date, 1, 7)"
+    } else {
+        "substr(d.date, 1, 4)"
+    };
+    let bucket_sql = format!(
+        "SELECT {group_expr} AS k, MIN(d.date), SUM(d.seconds)
+         FROM daily_stats d JOIN apps a ON a.id = d.app_id
+         WHERE d.date >= ?1 AND d.date <= ?2 {app_cond}
+         GROUP BY k ORDER BY k",
+        app_cond = if app_filter.is_some() { "AND a.name = ?3" } else { "" }
+    );
+    let mut bstmt = conn.prepare(&bucket_sql).map_err(|e| format!("查询区间趋势失败: {e}"))?;
+    let b_row = |r: &rusqlite::Row| {
+        let k: String = r.get(0)?;
+        let date: String = r.get(1)?;
+        Ok(PeriodBucket {
+            label: if days <= 62 {
+                k.get(5..).unwrap_or(&k).replace('-', "/")
+            } else if days <= 730 {
+                k.get(5..).unwrap_or(&k).to_string()
+            } else {
+                k.clone()
+            },
+            date,
+            seconds: r.get(2)?,
+        })
+    };
+    let buckets: Vec<PeriodBucket> = match app_filter {
+        Some(a) => bstmt
+            .query_map(rusqlite::params![from, to, a], b_row)
+            .map_err(|e| format!("查询区间趋势失败: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect(),
+        None => bstmt
+            .query_map(rusqlite::params![from, to], b_row)
+            .map_err(|e| format!("查询区间趋势失败: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect(),
+    };
+
+    let (keys, clicks) = conn
+        .query_row(
+            "SELECT COALESCE(SUM(key_count),0), COALESCE(SUM(click_count),0)
+             FROM input_stats WHERE date >= ?1 AND date <= ?2",
+            [from, to],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .unwrap_or((0, 0));
+    let active_days: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT date) FROM daily_stats WHERE date >= ?1 AND date <= ?2",
+            [from, to],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    let total_seconds = apps.iter().map(|a| a.seconds).sum();
+    let app_display = apps.first().map(|a| a.display_name.clone());
+    let title = if from == to {
+        from.to_string()
+    } else {
+        format!("{from} ~ {to}")
+    };
+    Ok(RangeReport {
+        from: from.into(),
+        to: to.into(),
+        title,
+        days,
+        total_seconds,
+        app_count: apps.len(),
+        active_days,
+        avg_per_day: if active_days > 0 { total_seconds / active_days } else { 0 },
+        keys,
+        clicks,
+        apps,
+        hourly,
+        buckets,
+        app: app_filter.map(|a| a.to_string()),
+        app_display,
+    })
+}
+
 // ---------- 壁纸与主题包（个性化页；墙纸只存本机数据目录） ----------
 
 const WALLPAPER_MAX_BYTES: u64 = 16 * 1024 * 1024;
