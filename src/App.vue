@@ -73,23 +73,6 @@ watchEffect(() => {
   isLight.value = !isDark();
 });
 
-/** 折叠状态下：悬停 400ms 自动展开（与删除按钮同一套宽度过渡曲线） */
-let hoverTimer: number | undefined;
-function onSideEnter() {
-  if (!collapsed.value) return;
-  if (hoverTimer) clearTimeout(hoverTimer);
-  hoverTimer = window.setTimeout(() => {
-    collapsed.value = false;
-    localStorage.setItem("ui.side", "expanded");
-  }, 400);
-}
-function onSideLeave() {
-  if (hoverTimer) {
-    clearTimeout(hoverTimer);
-    hoverTimer = undefined;
-  }
-}
-
 function toggleCollapse() {
   collapsed.value = !collapsed.value;
   localStorage.setItem("ui.side", collapsed.value ? "collapsed" : "expanded");
@@ -233,26 +216,20 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <aside
-        class="side"
-        :class="{ collapsed }"
-        @mouseenter="onSideEnter"
-        @mouseleave="onSideLeave"
-      >
+      <aside class="side" :class="{ collapsed }">
         <div class="brand" @mousedown="startDrag" @dblclick="toggleMaxWin">
-          <img v-if="collapsed" class="logoimg" src="/app-icon.svg" alt="拾刻" draggable="false" />
-          <template v-else>
-            <span class="logo">拾刻</span>
-            <span class="en">TallyMoment</span>
-          </template>
           <button
-            class="collapse-btn"
+            class="logo-btn"
             :title="collapsed ? '展开侧栏' : '收起侧栏'"
             @mousedown.stop
             @click="toggleCollapse"
           >
-            <Icon :name="collapsed ? 'expand' : 'collapse'" :size="16" />
+            <img class="logoimg" src="/app-icon.svg" alt="拾刻" draggable="false" />
           </button>
+          <template v-if="!collapsed">
+            <span class="logo">拾刻</span>
+            <span class="en">TallyMoment</span>
+          </template>
         </div>
 
         <nav class="nav">
@@ -398,55 +375,32 @@ body.glass-off {
   cursor: default;
 }
 
-.logoimg {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  margin: 0 auto;
-}
-
-/* 折叠按钮：右上角、仅图标（无文字） */
-.collapse-btn {
-  margin-left: auto;
+/* 应用图标本身就是折叠/展开开关 */
+.logo-btn {
   border: 0;
   background: transparent;
-  color: var(--text-faint);
-  border-radius: var(--r-sm);
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  padding: 0;
+  border-radius: 8px;
   cursor: pointer;
+  display: inline-flex;
   flex: none;
-  transition: background var(--dur), color var(--dur);
+  transition: transform var(--dur), box-shadow var(--dur);
 }
 
-.collapse-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+.logo-btn:hover {
+  transform: scale(calc(1 + 0.06 * var(--motion)));
 }
 
-.side.collapsed .brand {
-  padding: 4px 0 8px;
-}
-
-.side.collapsed .collapse-btn {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  margin: 0;
-  width: 18px;
-  height: 18px;
-  opacity: 0;
-}
-
-.side.collapsed:hover .collapse-btn {
-  opacity: 1;
+.logoimg {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: block;
 }
 
 .side.collapsed .brand {
   justify-content: center;
+  padding: 4px 0 8px;
 }
 
 .logo {

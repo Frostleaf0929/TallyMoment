@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NInput } from "naive-ui";
 import type { AppUsage, RangeReport } from "../types";
@@ -7,6 +7,7 @@ import { fmtDuration } from "../lib/format";
 import { colorFor } from "../lib/colors";
 import { accentColor } from "../lib/chartColors";
 import { appColorMode, appNameEnglish } from "../lib/appearance";
+import { iconColor, iconUrl, requestIcons } from "../lib/appIcons";
 import { navIntent } from "../lib/uiState";
 import BallLoader from "../components/BallLoader.vue";
 import DayBars from "../components/DayBars.vue";
@@ -104,8 +105,11 @@ function pickApp(name: string | null) {
 }
 
 const appLabel = (a: AppUsage) => (appNameEnglish.value ? a.name.replace(/\.exe$/i, "") : a.displayName);
-const appColor = (a: AppUsage) =>
-  appColorMode.value === "accent" ? accentColor() : colorFor(a.name);
+const appColor = (a: AppUsage) => {
+  if (appColorMode.value === "accent") return accentColor();
+  if (appColorMode.value === "iconColor") return iconColor(a.name) || colorFor(a.name);
+  return colorFor(a.name);
+};
 
 const maxSeconds = computed(() => Math.max(1, ...(report.value?.apps ?? []).map((a) => a.seconds)));
 
@@ -139,6 +143,13 @@ const trend = computed(() => {
 
 onMounted(() => void load(false));
 
+// 图标模式下批量取图标
+watchEffect(() => {
+  if (appColorMode.value === "icon" || appColorMode.value === "iconColor") {
+    requestIcons(filteredApps.value.map((a) => a.name));
+  }
+});
+
 // 从今日页/排行跳转过来：选中该应用，若当前范围没数据自动退到"总共"
 watch(navIntent, (n) => {
   if (!n || n.view !== "app") return;
@@ -170,7 +181,14 @@ watch(navIntent, (n) => {
             :title="appLabel(a)"
             @click="pickApp(a.name)"
           >
-            <span class="adot" :style="{ background: appColor(a) }"></span>
+            <img
+              v-if="appColorMode === 'icon' && iconUrl(a.name)"
+              class="aicon"
+              :src="iconUrl(a.name)"
+              alt=""
+              draggable="false"
+            />
+            <span v-else class="adot" :style="{ background: appColor(a) }"></span>
             <span class="aname">{{ appLabel(a) }}</span>
             <span class="atime">{{ fmtDuration(a.seconds) }}</span>
             <span class="abar">
@@ -199,7 +217,7 @@ watch(navIntent, (n) => {
               {{ r.label }}
             </button>
           </div>
-          <p class="spantext">{{ report?.from }} ~ {{ report?.to }}</p>
+          <p v-if="report" class="spantext">{{ report.from }} ~ {{ report.to }}</p>
           <p v-if="fallbackNote" class="note">{{ fallbackNote }}</p>
         </section>
 
@@ -216,12 +234,6 @@ watch(navIntent, (n) => {
             <p class="label">活跃天数 / 应用数</p>
             <p class="value">
               {{ report?.activeDays ?? 0 }} <small>天</small> · {{ report?.appCount ?? 0 }} <small>个</small>
-            </p>
-          </div>
-          <div class="glass-card stat">
-            <p class="label">键入 / 点击</p>
-            <p class="value num2">
-              {{ report?.keys ?? 0 }} <small>键</small> · {{ report?.clicks ?? 0 }} <small>击</small>
             </p>
           </div>
         </section>
@@ -379,7 +391,7 @@ watch(navIntent, (n) => {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 14px;
   align-items: stretch;
 }
@@ -416,11 +428,14 @@ watch(navIntent, (n) => {
 }
 
 /* 应用列表撑满所在列，底部与右侧列对齐 */
+/* 列表高度跟随右列（底部对齐），但不超过视口：超过就在卡片内滚动，不再一路往下延展 */
 .applist {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
+  max-height: calc(100vh - 200px);
+  overflow: hidden;
 }
 
 .listhead {
@@ -478,6 +493,13 @@ watch(navIntent, (n) => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+}
+
+.aicon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: contain;
 }
 
 .aname {

@@ -41,9 +41,10 @@ export const sideShadow = ref(num("ui.sideShadow", 0));
 export const cardShadow = ref(num("ui.cardShadow", 1));
 /** 应用名模式：true = 全英文（exe 名），false = 跟随系统显示名 */
 export const appNameEnglish = ref(localStorage.getItem("ui.appNameEn") === "1");
-/** 应用配色模式：random = 随机色，accent = 跟随强调色 */
-export const appColorMode = ref<"random" | "accent">(
-  (localStorage.getItem("ui.appColor") as "random" | "accent") || "random"
+/** 应用配色模式：random 随机色 / accent 跟随强调色 / iconColor 按图标取色 / icon 直接显示图标 */
+export type AppColorMode = "random" | "accent" | "iconColor" | "icon";
+export const appColorMode = ref<AppColorMode>(
+  (localStorage.getItem("ui.appColor") as AppColorMode) || "random"
 );
 export const motion = ref(num("ui.motion", 1));
 export const wallKind = ref<WallKind>(
@@ -319,7 +320,9 @@ export function importPack(pack: ThemePack): string | null {
   cardBlur.value = n("cardBlur", 26);
   cardShadow.value = n("cardShadow", 1);
   appNameEnglish.value = String(a.appNameEnglish ?? "0") === "1";
-  appColorMode.value = a.appColorMode === "accent" ? "accent" : "random";
+  appColorMode.value = (["accent", "iconColor", "icon"].includes(String(a.appColorMode))
+    ? (a.appColorMode as AppColorMode)
+    : "random");
   motion.value = n("motion", 1);
   wallKind.value = (a.wallKind as WallKind) || "gradient";
   return null;

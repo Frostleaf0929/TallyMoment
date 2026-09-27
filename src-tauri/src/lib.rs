@@ -1,3 +1,4 @@
+mod app_icon;
 mod input_hook;
 mod insights;
 mod pet_settings;
@@ -224,6 +225,45 @@ fn period_index(app: tauri::AppHandle) -> Result<storage::PeriodIndex, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
     storage::period_index(&conn)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppIconOut {
+    name: String,
+    w: i32,
+    h: i32,
+    /// BGRA base64
+    bgra: String,
+    color: String,
+}
+
+/// 批量读取应用图标（设置里"应用图标 / 图标取色"两种模式用）
+#[tauri::command]
+fn app_icons(app: tauri::AppHandle, names: Vec<String>) -> Vec<AppIconOut> {
+    let mut out = Vec::new();
+    let db = app.state::<Db>();
+    let Ok(conn) = db.0.lock() else {
+        return out;
+    };
+    for name in names {
+        let path: Option<String> = conn
+            .query_row("SELECT exe_path FROM apps WHERE name = ?1", [&name], |r| r.get(0))
+            .ok();
+        let Some(p) = path.filter(|p| !p.trim().is_empty()) else {
+            continue;
+        };
+        if let Ok(d) = app_icon::extract_cached(&p) {
+            out.push(AppIconOut {
+                name,
+                w: d.w,
+                h: d.h,
+                bgra: pet_settings::base64_encode(&d.bgra),
+                color: d.color.clone(),
+            });
+        }
+    }
+    out
 }
 
 /// 任意日期区间报表（详细页）
@@ -925,6 +965,7 @@ pub fn run() {
             insights_report,
             period_report,
             period_index,
+            app_icons,
             range_report,
             app_list,
             app_period_report,

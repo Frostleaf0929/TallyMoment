@@ -35,6 +35,11 @@ windows = { version = "0.62", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_SystemInformation",
+    # 读应用图标（SHGetFileInfoW + GDI 取像素）用：仅新增 feature，未新增依赖包
+    "Win32_UI_Shell",
+    "Win32_Storage_FileSystem",
+    "Win32_Graphics_Gdi",
+    "Win32_Foundation",
 ] }
 
 

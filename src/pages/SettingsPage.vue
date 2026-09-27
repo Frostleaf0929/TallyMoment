@@ -97,7 +97,9 @@ onMounted(async () => {
       <div class="row">
         <div class="rlabel">
           <p class="rt">应用配色</p>
-          <p class="rd">随机色更易区分；跟随强调色更整体</p>
+          <p class="rd">
+            随机色更易区分；跟随强调色更整体；按图标取色=从程序图标里取主色；显示应用图标=直接显示 exe 图标
+          </p>
         </div>
         <div class="seg">
           <button
@@ -113,6 +115,20 @@ onMounted(async () => {
             @click="appColorMode = 'accent'"
           >
             跟随强调色
+          </button>
+          <button
+            class="seg-item"
+            :class="{ active: appColorMode === 'iconColor' }"
+            @click="appColorMode = 'iconColor'"
+          >
+            按图标取色
+          </button>
+          <button
+            class="seg-item"
+            :class="{ active: appColorMode === 'icon' }"
+            @click="appColorMode = 'icon'"
+          >
+            显示应用图标
           </button>
         </div>
       </div>

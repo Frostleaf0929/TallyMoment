@@ -1681,8 +1681,9 @@ pub fn range_report(
         return Err("结束日期早于起始日期".into());
     }
     let days = (d_to - d_from).num_days() + 1;
-    if days > 3700 {
-        return Err("区间过大（最多 10 年）".into());
+    // 上限放宽到 200 年：详细页的"总共"从 2000-01-01 起算，旧上限（10 年）会把"总共"判为非法
+    if days > 73_000 {
+        return Err("区间过大（最多 200 年）".into());
     }
     let app_filter = app.filter(|a| !a.is_empty());
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watchEffect } from "vue";
 import { NProgress } from "naive-ui";
 import type { AppUsage } from "../types";
 import { colorFor } from "../lib/colors";
@@ -7,6 +7,7 @@ import { fmtDuration } from "../lib/format";
 import { chartColors } from "../lib/chartColors";
 import { appsTopN, isLight } from "../lib/uiState";
 import { appColorMode, appNameEnglish } from "../lib/appearance";
+import { iconColor, iconUrl, requestIcons } from "../lib/appIcons";
 
 const emit = defineEmits<{ (e: "pick", name: string): void }>();
 
@@ -19,11 +20,16 @@ const shown = computed(() => {
   return props.apps.slice(0, n).map((a, i) => ({
     ...a,
     rank: i + 1,
-    name: appNameEnglish.value ? a.name.replace(/\.exe$/i, "") : a.displayName,
+    // key = 数据库里的进程标识（跳转必须用它）；label = 展示名
+    key: a.name,
+    label: appNameEnglish.value ? a.name.replace(/\.exe$/i, "") : a.displayName,
     color:
       appColorMode.value === "accent"
         ? getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#7b84ec"
+        : appColorMode.value === "iconColor"
+        ? iconColor(a.name) || colorFor(a.name)
         : colorFor(a.name),
+    icon: appColorMode.value === "icon" ? iconUrl(a.name) : "",
     pct: Math.round((a.seconds / max.value) * 100),
   }));
 });
@@ -35,14 +41,22 @@ const rail = computed(() => {
 });
 
 const rest = computed(() => Math.max(0, props.apps.length - shown.value.length));
+
+// 需要图标时批量取一次
+watchEffect(() => {
+  if (appColorMode.value === "icon" || appColorMode.value === "iconColor") {
+    requestIcons(shown.value.map((a) => a.key));
+  }
+});
 </script>
 
 <template>
   <div class="ranking">
-    <button v-for="a in shown" :key="a.name" class="row" :title="`查看 ${a.name} 的明细`" @click="emit('pick', a.name)">
+    <button v-for="a in shown" :key="a.key" class="row" :title="`查看 ${a.label} 的明细`" @click="emit('pick', a.key)">
       <span class="rank">{{ a.rank }}</span>
-      <span class="dot" :style="{ background: a.color }"></span>
-      <span class="name" :title="a.name">{{ a.displayName }}</span>
+      <img v-if="a.icon" class="iapp" :src="a.icon" alt="" draggable="false" />
+      <span v-else class="dot" :style="{ background: a.color }"></span>
+      <span class="name" :title="a.name">{{ a.label }}</span>
       <span class="time">{{ fmtDuration(a.seconds) }}</span>
       <div class="bar">
         <NProgress
@@ -70,6 +84,7 @@ const rest = computed(() => Math.max(0, props.apps.length - shown.value.length))
 
 .row {
   width: 100%;
+  grid-template-columns: 16px 22px 1fr auto;
   border: 0;
   background: transparent;
   font-family: inherit;
@@ -92,6 +107,14 @@ const rest = computed(() => Math.max(0, props.apps.length - shown.value.length))
   font-size: 11px;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
+}
+
+.iapp {
+  grid-row: 1;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  object-fit: contain;
 }
 
 .dot {
