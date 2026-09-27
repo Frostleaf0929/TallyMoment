@@ -32,6 +32,18 @@ export const blur = ref(num("ui.blur", 26));
 export const bgAlpha = ref(stale() ? 80 : num("ui.bgAlpha", 80));
 export const sideAlpha = ref(stale() ? 50 : num("ui.sideAlpha", 50));
 export const cardAlpha = ref(num("ui.cardAlpha", 100));
+/* 三块表面各自的模糊与阴影（个性化页分三组调） */
+export const bgBlur = ref(stale() ? 18 : num("ui.bgBlur", 18));
+export const sideBlur = ref(stale() ? 26 : num("ui.sideBlur", 26));
+export const cardBlur = ref(stale() ? 26 : num("ui.cardBlur", 26));
+export const sideShadow = ref(num("ui.sideShadow", 0));
+export const cardShadow = ref(num("ui.cardShadow", 1));
+/** 应用名模式：true = 全英文（exe 名），false = 跟随系统显示名 */
+export const appNameEnglish = ref(localStorage.getItem("ui.appNameEn") === "1");
+/** 应用配色模式：random = 随机色，accent = 跟随强调色 */
+export const appColorMode = ref<"random" | "accent">(
+  (localStorage.getItem("ui.appColor") as "random" | "accent") || "random"
+);
 export const motion = ref(num("ui.motion", 1));
 export const wallKind = ref<WallKind>(
   (localStorage.getItem("ui.wallKind") as WallKind) || "gradient"
@@ -203,6 +215,14 @@ export function applyAppearance() {
 
   root.style.setProperty("--glass-blur", `${blur.value}px`);
   root.style.setProperty("--wall-blur", `${Math.round(blur.value * 0.7)}px`);
+  root.style.setProperty("--bg-blur", `${bgBlur.value}px`);
+  root.style.setProperty("--side-blur", `${sideBlur.value}px`);
+  root.style.setProperty("--card-blur", `${cardBlur.value}px`);
+  root.style.setProperty(
+    "--side-shadow",
+    sideShadow.value <= 0 ? "0 0 0 rgba(0,0,0,0)" : `inset -1px 0 0 var(--card-border)`
+  );
+  root.style.setProperty("--card-shadow-strength", String(cardShadow.value));
   root.style.setProperty("--bg-alpha", String(bgAlpha.value / 100));
   root.style.setProperty("--side-alpha", String(sideAlpha.value / 100));
   root.style.setProperty("--card-alpha", String(cardAlpha.value / 100));
@@ -230,6 +250,13 @@ export function saveAppearance() {
   localStorage.setItem("ui.bgAlpha", String(bgAlpha.value));
   localStorage.setItem("ui.sideAlpha", String(sideAlpha.value));
   localStorage.setItem("ui.cardAlpha", String(cardAlpha.value));
+  localStorage.setItem("ui.bgBlur", String(bgBlur.value));
+  localStorage.setItem("ui.sideBlur", String(sideBlur.value));
+  localStorage.setItem("ui.cardBlur", String(cardBlur.value));
+  localStorage.setItem("ui.sideShadow", String(sideShadow.value));
+  localStorage.setItem("ui.cardShadow", String(cardShadow.value));
+  localStorage.setItem("ui.appNameEn", appNameEnglish.value ? "1" : "0");
+  localStorage.setItem("ui.appColor", appColorMode.value);
   localStorage.setItem("ui.motion", String(motion.value));
   localStorage.setItem("ui.wallKind", wallKind.value);
   localStorage.setItem("ui.v", UI_VERSION);
@@ -257,6 +284,12 @@ export function exportPack(): ThemePack {
       bgAlpha: bgAlpha.value,
       sideAlpha: sideAlpha.value,
       cardAlpha: cardAlpha.value,
+      bgBlur: bgBlur.value,
+      sideBlur: sideBlur.value,
+      cardBlur: cardBlur.value,
+      cardShadow: cardShadow.value,
+      appNameEnglish: appNameEnglish.value ? "1" : "0",
+      appColorMode: appColorMode.value,
       motion: motion.value,
       wallKind: wallKind.value,
     },
@@ -280,6 +313,12 @@ export function importPack(pack: ThemePack): string | null {
   bgAlpha.value = n("bgAlpha", 80);
   sideAlpha.value = n("sideAlpha", 50);
   cardAlpha.value = n("cardAlpha", 100);
+  bgBlur.value = n("bgBlur", 18);
+  sideBlur.value = n("sideBlur", 26);
+  cardBlur.value = n("cardBlur", 26);
+  cardShadow.value = n("cardShadow", 1);
+  appNameEnglish.value = String(a.appNameEnglish ?? "0") === "1";
+  appColorMode.value = a.appColorMode === "accent" ? "accent" : "random";
   motion.value = n("motion", 1);
   wallKind.value = (a.wallKind as WallKind) || "gradient";
   return null;

@@ -3,9 +3,19 @@ import { onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { DayReport } from "../types";
 import { fmtDuration } from "../lib/format";
+import { jumpTo } from "../lib/uiState";
 import Icon from "../components/Icon.vue";
 import HourlyChart from "../components/HourlyChart.vue";
 import AppRanking from "../components/AppRanking.vue";
+
+const emit = defineEmits<{
+  (e: "jump", target: "recent" | "app"): void;
+}>();
+
+function go(target: "recent" | "app") {
+  jumpTo(target);
+  emit("jump", target);
+}
 
 const report = ref<DayReport | null>(null);
 const online = ref(false);
@@ -79,14 +89,16 @@ const startedAt = () => {
     </section>
 
     <section class="cards">
-      <div class="glass-card stat">
+      <button class="glass-card stat clickable" title="查看历史·近 14 天" @click="go('recent')">
         <p class="label"><Icon name="clock" :size="14" /> 今日总时长</p>
         <p class="value accent">{{ fmtDuration(report?.totalSeconds ?? 0) }}</p>
-      </div>
-      <div class="glass-card stat">
+        <span class="go">查看历史 ›</span>
+      </button>
+      <button class="glass-card stat clickable" title="按应用查看" @click="go('app')">
         <p class="label"><Icon name="overview" :size="14" /> 使用应用</p>
         <p class="value">{{ report?.appCount ?? 0 }} <small>个</small></p>
-      </div>
+        <span class="go">按应用查看 ›</span>
+      </button>
       <div class="glass-card stat">
         <p class="label"><Icon name="fire" :size="14" /> 键入 / 点击</p>
         <p class="value small num2">
@@ -102,7 +114,7 @@ const startedAt = () => {
 
     <section class="glass-card">
       <h2>应用排行</h2>
-      <AppRanking :apps="report?.apps ?? []" />
+      <AppRanking :apps="report?.apps ?? []" @pick="(n: string) => jumpTo('app', n)" />
     </section>
   </div>
 </template>

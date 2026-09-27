@@ -15,7 +15,7 @@ import TodoPage from "./pages/TodoPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 import PersonalizePage from "./pages/PersonalizePage.vue";
 import PetSettingsPage from "./pages/PetSettingsPage.vue";
-import { appsTopN, isLight } from "./lib/uiState";
+import { appsTopN, isLight, navIntent } from "./lib/uiState";
 import {
   applyAppearance,
   glass,
@@ -56,6 +56,11 @@ const tabs: { key: Tab; label: string; icon: string }[] = [
   { key: "personalize", label: "个性化", icon: "palette" },
 ];
 const active = ref<Tab>("today");
+
+// 今日卡片 / 应用排行点击 → 跳到历史页对应视图
+watchEffect(() => {
+  if (navIntent.value) active.value = "history";
+});
 const collapsed = ref(localStorage.getItem("ui.side") === "collapsed");
 
 const naiveTheme = ref<GlobalTheme | null>(darkTheme);
@@ -198,7 +203,7 @@ onUnmounted(() => {
   <NConfigProvider :theme="naiveTheme" :locale="zhCN" :date-locale="dateZhCN">
     <ToastStack v-if="mode === 'reminder'" />
     <PetView v-else-if="mode === 'pet'" />
-    <div v-else class="shell" :class="{ 'glass-off': !glass }">
+    <div v-else class="shell shell-frame" :class="{ 'glass-off': !glass }">
       <div class="wall" aria-hidden="true"></div>
 
       <!-- 窗口控制：悬浮在右上角，不占一整条标题栏，避免多出一道"割裂面" -->
@@ -255,7 +260,7 @@ onUnmounted(() => {
       </aside>
 
       <main class="content">
-        <TodayPage v-show="active === 'today'" />
+        <TodayPage v-show="active === 'today'" @jump="() => (active = 'history')" />
         <HistoryPage v-show="active === 'history'" />
         <InsightsPage v-show="active === 'insights'" />
         <TodoPage v-show="active === 'todo'" />
@@ -533,11 +538,11 @@ body.glass-off {
 }
 
 .wb {
-  width: 30px;
-  height: 24px;
+  width: 32px;
+  height: 26px;
   border: 0;
-  background: transparent;
-  color: var(--text-faint);
+  background: var(--surface);
+  color: var(--text-muted);
   border-radius: 6px;
   cursor: pointer;
   display: inline-flex;

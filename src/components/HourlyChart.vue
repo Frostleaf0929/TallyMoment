@@ -61,6 +61,7 @@ function render() {
   chart.setOption(
     {
       backgroundColor: "transparent",
+      animation: false,
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "shadow" },

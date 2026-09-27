@@ -6,6 +6,9 @@ import { colorFor } from "../lib/colors";
 import { fmtDuration } from "../lib/format";
 import { chartColors } from "../lib/chartColors";
 import { appsTopN, isLight } from "../lib/uiState";
+import { appColorMode, appNameEnglish } from "../lib/appearance";
+
+const emit = defineEmits<{ (e: "pick", name: string): void }>();
 
 const props = withDefaults(defineProps<{ apps: AppUsage[]; limit?: number }>(), { limit: 0 });
 
@@ -16,8 +19,11 @@ const shown = computed(() => {
   return props.apps.slice(0, n).map((a, i) => ({
     ...a,
     rank: i + 1,
-    name: a.name.replace(/\.exe$/i, ""),
-    color: colorFor(a.name),
+    name: appNameEnglish.value ? a.name.replace(/\.exe$/i, "") : a.displayName,
+    color:
+      appColorMode.value === "accent"
+        ? getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#7b84ec"
+        : colorFor(a.name),
     pct: Math.round((a.seconds / max.value) * 100),
   }));
 });
@@ -33,7 +39,7 @@ const rest = computed(() => Math.max(0, props.apps.length - shown.value.length))
 
 <template>
   <div class="ranking">
-    <div v-for="a in shown" :key="a.name" class="row">
+    <button v-for="a in shown" :key="a.name" class="row" :title="`查看 ${a.name} 的明细`" @click="emit('pick', a.name)">
       <span class="rank">{{ a.rank }}</span>
       <span class="dot" :style="{ background: a.color }"></span>
       <span class="name" :title="a.name">{{ a.displayName }}</span>
@@ -49,7 +55,7 @@ const rest = computed(() => Math.max(0, props.apps.length - shown.value.length))
           :rail-color="rail"
         />
       </div>
-    </div>
+    </button>
     <p v-if="!shown.length" class="empty">今天还没有记录</p>
     <p v-else-if="rest" class="more">还有 {{ rest }} 个应用没显示（显示条数可在设置里调）</p>
   </div>
@@ -63,6 +69,12 @@ const rest = computed(() => Math.max(0, props.apps.length - shown.value.length))
 }
 
 .row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
   display: grid;
   grid-template-columns: 16px 10px 1fr auto;
   grid-template-rows: auto auto;

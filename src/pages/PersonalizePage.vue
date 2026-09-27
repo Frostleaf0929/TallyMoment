@@ -11,8 +11,11 @@ import {
   applySkin,
   activeSkinKey,
   bgAlpha,
-  blur,
   cardAlpha,
+  bgBlur,
+  sideBlur,
+  cardBlur,
+  cardShadow,
   exportPack,
   glass,
   importPack,
@@ -298,10 +301,28 @@ async function importTheme() {
         </button>
       </div>
 
-      <SettingSlider v-model="blur" label="玻璃模糊" desc="0 ~ 40px，同时作用于卡片与背景层" :min="0" :max="40" suffix="px" />
-      <SettingSlider v-model="bgAlpha" label="界面底色不透明度" desc="30% ~ 100%，越低桌面越透" :min="30" :max="100" suffix="%" />
+    </div>
+
+    <!-- 背景 -->
+    <div class="glass-card card">
+      <h2>背景</h2>
+      <SettingSlider v-model="bgBlur" label="背景模糊" desc="0 ~ 60px：柔光/壁纸的朦胧程度" :min="0" :max="60" suffix="px" />
+      <SettingSlider v-model="bgAlpha" label="背景不透明度" desc="30% ~ 100%，越低桌面越透" :min="30" :max="100" suffix="%" />
+    </div>
+
+    <!-- 侧边栏 -->
+    <div class="glass-card card">
+      <h2>侧边栏</h2>
+      <SettingSlider v-model="sideBlur" label="侧边栏亚克力模糊" desc="0 ~ 60px" :min="0" :max="60" suffix="px" />
       <SettingSlider v-model="sideAlpha" label="侧边栏不透明度" desc="0% ~ 100%" :min="0" :max="100" suffix="%" />
+    </div>
+
+    <!-- 卡片 -->
+    <div class="glass-card card">
+      <h2>卡片</h2>
+      <SettingSlider v-model="cardBlur" label="卡片亚克力模糊" desc="0 ~ 60px" :min="0" :max="60" suffix="px" />
       <SettingSlider v-model="cardAlpha" label="卡片不透明度" desc="50% ~ 100%" :min="50" :max="100" suffix="%" />
+      <SettingSlider v-model="cardShadow" label="卡片阴影强度" desc="0 = 无阴影（扁平）；1 = 标准；越大浮起感越强" :min="0" :max="2" :step="0.1" suffix="×" />
     </div>
 
     <!-- 动效 -->

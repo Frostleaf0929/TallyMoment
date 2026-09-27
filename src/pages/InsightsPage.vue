@@ -102,6 +102,7 @@ function renderChart() {
   chart.setOption(
     {
       backgroundColor: "transparent",
+      animation: false,
       tooltip: {
         trigger: "axis",
         backgroundColor: c.tipBg,
@@ -293,7 +294,7 @@ watch(isLight, renderChart);
 
     <!-- 分析与建议 -->
     <section class="analyses">
-      <div v-for="(it, i) in report?.insights ?? []" :key="i" class="item" :class="it.tone">
+      <div v-for="(it, i) in report?.insights ?? []" :key="i" class="item glass-card" :class="it.tone">
         <span class="mark"></span>
         <div>
           <p class="t">{{ it.title }}</p>

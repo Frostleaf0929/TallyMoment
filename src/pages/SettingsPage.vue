@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { NSlider, NSwitch } from "naive-ui";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { appsTopN } from "../lib/uiState";
+import { appColorMode } from "../lib/appearance";
 
 interface DataInfo {
   dir: string;
@@ -93,6 +94,28 @@ onMounted(async () => {
 
     <div class="glass-card card">
       <h2>显示</h2>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">应用配色</p>
+          <p class="rd">随机色更易区分；跟随强调色更整体</p>
+        </div>
+        <div class="seg">
+          <button
+            class="seg-item"
+            :class="{ active: appColorMode === 'random' }"
+            @click="appColorMode = 'random'"
+          >
+            随机色
+          </button>
+          <button
+            class="seg-item"
+            :class="{ active: appColorMode === 'accent' }"
+            @click="appColorMode = 'accent'"
+          >
+            跟随强调色
+          </button>
+        </div>
+      </div>
       <div class="row col">
         <div class="rlabel">
           <p class="rt">应用排行显示条数</p>
@@ -194,6 +217,31 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 16px;
   padding: 6px 0;
+}
+
+.seg {
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 4px;
+  background: var(--surface);
+}
+
+.seg-item {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.seg-item.active {
+  color: var(--accent-text);
+  background: var(--accent-soft);
 }
 
 .row.col {

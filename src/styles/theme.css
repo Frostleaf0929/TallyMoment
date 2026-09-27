@@ -44,8 +44,8 @@
   /* 语义色（去饱和） */
   --good: #6fb59a;
   --good-soft: rgba(111, 181, 154, 0.14);
-  --warn: #d3a95e;
-  --warn-soft: rgba(211, 169, 94, 0.14);
+  --warn: #b98bab;
+  --warn-soft: rgba(185, 139, 171, 0.16);
   --info: #7d92cf;
   --info-soft: rgba(125, 146, 207, 0.14);
   --danger: #c9797b;
@@ -64,6 +64,12 @@
   /* 毛玻璃 */
   --glass-blur: 26px;
   --wall-blur: 18px;
+  /* 背景 / 侧边栏 / 卡片 各自独立（个性化页分三组调节） */
+  --bg-blur: 18px;
+  --side-blur: 26px;
+  --card-blur: 26px;
+  --side-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  --card-shadow-strength: 1;
 
   /* 背景层柔光（跟随强调色） */
   --wall-a: rgba(123, 132, 236, 0.2);
@@ -86,6 +92,9 @@
   --chart-tip-bg: #161a24;
   --chart-tip-border: #2a2f3d;
   --chart-tip-text: #e8eaf2;
+
+  /* 窗口外框颜色 */
+  --frame: rgba(255, 255, 255, 0.14);
 }
 
 /* ---------- 浅色主题 ---------- */
@@ -113,8 +122,8 @@
   --accent-border: rgba(106, 116, 224, 0.35);
   --good: #4f9e83;
   --good-soft: rgba(79, 158, 131, 0.12);
-  --warn: #b8893c;
-  --warn-soft: rgba(184, 137, 60, 0.13);
+  --warn: #9c6f8e;
+  --warn-soft: rgba(156, 111, 142, 0.14);
   --info: #6a83c4;
   --info-soft: rgba(106, 131, 196, 0.12);
   --danger: #bd6266;
@@ -131,6 +140,7 @@
   --chart-tip-bg: #ffffff;
   --chart-tip-border: rgba(20, 30, 50, 0.14);
   --chart-tip-text: #242a35;
+  --frame: rgba(20, 30, 50, 0.16);
 }
 
 /* ---------- 强调色切换 ---------- */
@@ -156,8 +166,8 @@
 
 [data-material="liquid"] .glass-card {
   /* 液态玻璃：更薄、更强折射感与亮度 */
-  backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
-  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
+  backdrop-filter: blur(calc(var(--card-blur) * 0.55)) saturate(1.75) brightness(1.06);
+  -webkit-backdrop-filter: blur(calc(var(--card-blur) * 0.55)) saturate(1.75) brightness(1.06);
   border-color: color-mix(in srgb, var(--text) 16%, transparent);
 }
 
@@ -165,8 +175,8 @@
 .glass-card {
   position: relative;
   background: color-mix(in srgb, var(--bg-glass) calc(var(--card-alpha) * 100%), transparent);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  backdrop-filter: blur(var(--card-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--card-blur)) saturate(1.25);
   border: 1px solid var(--card-border);
   border-radius: var(--r-lg);
   box-shadow: var(--card-shadow);
@@ -185,13 +195,13 @@
 /* 侧栏与内容区共用同一套材质（不再各自刷一种底色 → 三个板块像一个整体） */
 .side-glass {
   background: rgba(var(--side-rgb), var(--side-alpha));
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  backdrop-filter: blur(var(--side-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--side-blur)) saturate(1.25);
 }
 
 [data-material="liquid"] .side-glass {
-  backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
-  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
+  backdrop-filter: blur(calc(var(--side-blur) * 0.55)) saturate(1.75) brightness(1.06);
+  -webkit-backdrop-filter: blur(calc(var(--side-blur) * 0.55)) saturate(1.75) brightness(1.06);
 }
 
 /* backdrop-filter 会创建 containing block：容器本身不做玻璃，玻璃只加到叶子卡片上
@@ -233,6 +243,13 @@ html[data-mode="pet"] body {
   background: rgba(20, 30, 50, 0.18);
 }
 
+/* 窗口外框：2px，与侧栏共用同一条边，避免"三块拼接"的观感 */
+.shell-frame {
+  border: 2px solid var(--frame);
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
 /* ---------- 图表自绘图例 ---------- */
 .chart-legend {
   display: flex;
@@ -272,7 +289,7 @@ html[data-mode="pet"] body {
   background-position: center, center, center, center;
   background-repeat: no-repeat;
   opacity: var(--wall-image-opacity);
-  filter: blur(var(--wall-blur));
+  filter: blur(var(--bg-blur));
 }
 
 .glass-off .wall {

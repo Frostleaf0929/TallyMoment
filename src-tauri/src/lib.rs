@@ -648,6 +648,19 @@ fn pet_model_assets(
     pet_settings::model_assets_in(&models, &id, &mode)
 }
 
+/// 读取 Live2D 模型包（含 model3.json 与全部引用文件）
+#[tauri::command]
+fn pet_model_live2d(
+    app: tauri::AppHandle,
+    id: String,
+    mode: String,
+) -> Result<pet_settings::Live2dBundle, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let models = pet_settings::models_dir(&conn);
+    pet_settings::model_live2d_in(&models, &id, &mode)
+}
+
 /// 切换启用模型
 #[tauri::command]
 fn pet_model_set_active(
@@ -873,6 +886,7 @@ pub fn run() {
             pet_model_config,
             pet_model_rename,
             pet_model_assets,
+            pet_model_live2d,
             close_reminder,
             import_tai,
             export_json,

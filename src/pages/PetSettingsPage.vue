@@ -262,7 +262,7 @@ onMounted(load);
             <NButton size="tiny" quaternary @click="editingId = ''">取消</NButton>
           </template>
           <template v-else>
-            <span class="mname" :title="m.name" @click="startRename(m)">{{ m.name }}</span>
+            <span class="mname" :title="`${m.name}（双击改名）`" @dblclick="startRename(m)">{{ m.name }}</span>
             <span class="mtag">{{ modeLabel[m.mode] ?? m.mode }}</span>
             <span v-if="m.live2d" class="mtag live2d" title="含 Live2D 素材：静态图只是兜底，需要 Live2D 运行时">
               Live2D

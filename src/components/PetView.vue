@@ -21,6 +21,12 @@ interface AssetFile {
   data: string;
 }
 
+interface Live2dBundle {
+  model3: Record<string, unknown>;
+  model3Rel: string;
+  files: AssetFile[];
+}
+
 const settings = ref<PetSettingsView | null>(null);
 const seconds = ref(0);
 const keys = ref(0);
@@ -35,6 +41,132 @@ const layerRight = ref<string | null>(null);
 
 /** 自定义模型素材：rel -> Blob URL（Rust 直读，不走 asset 协议） */
 const assetUrls = new Map<string, string>();
+
+/* ---------- Live2D（Cubism Core for Web + pixi-live2d-display） ---------- */
+const canvasEl = ref<HTMLCanvasElement | null>(null);
+const live2dOn = ref(false);
+const live2dMsg = ref("");
+interface PixiAppLike {
+  destroy: (a?: boolean, b?: unknown) => void;
+  ticker: { maxFPS: number };
+  stage: { addChild: (c: unknown) => void };
+}
+let pixiApp: PixiAppLike | null = null;
+let l2dModel: {
+  destroy: () => void;
+  width: number;
+  height: number;
+  scale: { set: (v: number) => void };
+  anchor: { set: (x: number, y: number) => void };
+  position: { set: (x: number, y: number) => void };
+  expression: (i?: number) => void;
+  internalModel?: { settings?: { expressions?: unknown[] } };
+} | null = null;
+let lastReact = 0;
+
+/** 经典 script 引入 Cubism Core（/public 下的文件不能被 import） */
+async function ensureCubismCore(): Promise<void> {
+  const w = window as unknown as { Live2DCubismCore?: unknown };
+  if (w.Live2DCubismCore) return;
+  await new Promise<void>((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "/live2d/live2dcubismcore.min.js";
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("Live2D 运行时（Cubism Core）加载失败"));
+    document.head.appendChild(s);
+  });
+}
+
+function destroyLive2d() {
+  try {
+    l2dModel?.destroy();
+  } catch {
+    /* 忽略 */
+  }
+  try {
+    pixiApp?.destroy(true, { children: true });
+  } catch {
+    /* 忽略 */
+  }
+  l2dModel = null;
+  pixiApp = null;
+  live2dOn.value = false;
+}
+
+/** 把 model3.json 里的相对引用全部换成 Blob URL，再交给 pixi 渲染 */
+async function mountLive2d(bundle: Live2dBundle) {
+  destroyLive2d();
+  live2dMsg.value = "";
+  await ensureCubismCore();
+  const PIXI = (await import("pixi.js")) as unknown as {
+    Application: new (o: Record<string, unknown>) => PixiAppLike;
+  };
+  const { Live2DModel } = (await import("pixi-live2d-display/cubism4")) as unknown as {
+    Live2DModel: { from: (s: unknown, o?: unknown) => Promise<typeof l2dModel> };
+  };
+
+  const map = new Map<string, string>();
+  for (const f of bundle.files) map.set(f.rel, toBlobUrl(f));
+  const dir = bundle.model3Rel.replace(/[^/]+$/, "");
+  const resolve = (rel: string) => map.get(dir + rel) ?? map.get(rel) ?? rel;
+
+  const settings = JSON.parse(JSON.stringify(bundle.model3)) as Record<string, unknown> & {
+    url?: string;
+    FileReferences?: Record<string, unknown>;
+  };
+  settings.url = map.get(bundle.model3Rel) ?? "";
+  const fr = (settings.FileReferences ?? {}) as Record<string, unknown>;
+  if (typeof fr.Moc === "string") fr.Moc = resolve(fr.Moc);
+  if (Array.isArray(fr.Textures)) fr.Textures = (fr.Textures as string[]).map(resolve);
+  for (const k of ["Physics", "Pose", "DisplayInfo", "UserData"]) {
+    if (typeof fr[k] === "string") fr[k] = resolve(fr[k] as string);
+  }
+  for (const e of (fr.Expressions ?? []) as { File?: string }[]) {
+    if (e?.File) e.File = resolve(e.File);
+  }
+  for (const group of Object.values((fr.Motions ?? {}) as Record<string, { File?: string }[]>)) {
+    for (const m of group ?? []) if (m?.File) m.File = resolve(m.File);
+  }
+
+  const canvas = canvasEl.value;
+  if (!canvas) throw new Error("画布未就绪");
+  const app = new PIXI.Application({
+    view: canvas,
+    width: BASE_W,
+    height: BASE_H,
+    backgroundAlpha: 0,
+    antialias: true,
+    autoStart: true,
+    resolution: Math.min(window.devicePixelRatio || 1, 2),
+  });
+  if (!app) throw new Error("渲染器创建失败");
+  pixiApp = app;
+  app.ticker.maxFPS = 30;
+
+  const model = await Live2DModel.from(settings, { autoInteract: false });
+  if (!model) throw new Error("Live2D 模型加载失败");
+  l2dModel = model;
+  const k = Math.min(BASE_W / model.width, BASE_H / model.height) * 1.1;
+  model.scale.set(k);
+  model.anchor.set(0.5, 0.5);
+  model.position.set(BASE_W / 2, BASE_H / 2 + 10);
+  (app.stage as { addChild: (c: unknown) => void }).addChild(model);  live2dOn.value = true;
+}
+
+/** 按键时让 Live2D 模型换个表情（有冷却，避免连发） */
+function reactLive2d() {
+  const m = l2dModel;
+  if (!m) return;
+  const now = Date.now();
+  if (now - lastReact < 200) return;
+  lastReact = now;
+  try {
+    const list = m.internalModel?.settings?.expressions ?? [];
+    if (list.length) m.expression(Math.floor(Math.random() * list.length));
+  } catch {
+    /* 忽略 */
+  }
+}
 
 // 按键矩阵（行号 = 帧编号，行内 = VK 码）
 let leftMatrix: number[][] = [];
@@ -124,9 +256,23 @@ function buildBuiltin() {
 async function buildModel(id: string, mode: PetSettingsView["mode"]) {
   loadErr.value = "";
   if (id === "builtin") {
+    destroyLive2d();
     buildBuiltin();
     return;
   }
+  // 先试 Live2D：模型带 cat_model/*.model3.json 就用它渲染
+  try {
+    const bundle = await invoke<Live2dBundle>("pet_model_live2d", { id, mode });
+    if (bundle && bundle.files?.length) {
+      await mountLive2d(bundle);
+      return;
+    }
+  } catch (e) {
+    live2dMsg.value = String(e).replace(/^.*Error: /, "");
+    live2dMsg.value = "";
+  }
+  destroyLive2d();
+
   try {
     const files = await invoke<AssetFile[]>("pet_model_assets", { id, mode });
     revokeAssets();
@@ -225,6 +371,11 @@ const RIGHT_ZONE = new Set([
 function onInput(p: { kind: string; vk: number }) {
   if (p.kind !== "key") return;
   const vk = p.vk;
+  // Live2D 模式：没有分层素材帧，改用表情反馈
+  if (live2dOn.value) {
+    reactLive2d();
+    return;
+  }
   const li = leftMatrix.findIndex((row) => row.includes(vk));
   if (li >= 0) {
     pressLeft(String(li));
@@ -256,6 +407,7 @@ function updateScale() {
   k.value = Math.max(0.2, w / BASE_W);
 }
 const BASE_W = 372;
+const BASE_H = 226;
 
 async function startDrag() {
   try {
@@ -316,7 +468,8 @@ onUnmounted(() => {
 <template>
   <div class="pet" @mousedown="startDrag" @mouseup="onMouseUp">
     <div class="scaler" :style="{ transform: `scale(${k})`, opacity: (settings?.opacity ?? 100) / 100 }">
-      <div class="stage" :class="{ mirror: settings?.mirror }">
+      <canvas v-show="live2dOn" ref="canvasEl" class="l2d" :width="372" :height="226"></canvas>
+      <div v-show="!live2dOn" class="stage" :class="{ mirror: settings?.mirror }">
         <img v-if="layerBg" class="layer" :src="layerBg" alt="" draggable="false" />
         <img v-if="layerCat" class="layer" :src="layerCat" alt="" draggable="false" />
         <img v-if="layerLeft" class="layer" :src="layerLeft" alt="" draggable="false" />
@@ -329,6 +482,7 @@ onUnmounted(() => {
         <span title="自启动以来键入次数">{{ keys }} 键</span>
         <span class="sep">·</span>
         <span title="自启动以来点击次数">{{ clicks }} 击</span>
+        <span v-if="live2dOn" class="sep" title="正在用 Live2D 渲染">· L2D</span>
         <span v-if="loadErr" class="sep" :title="loadErr">· 模型异常</span>
       </div>
     </div>
@@ -371,6 +525,15 @@ html[data-mode="pet"] body {
   width: 372px;
   aspect-ratio: 612 / 354;
   transition: transform 0.15s;
+}
+
+.l2d {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 372px;
+  height: 226px;
+  pointer-events: none;
 }
 
 .stage.mirror {

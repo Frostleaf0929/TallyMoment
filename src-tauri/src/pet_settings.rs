@@ -740,6 +740,112 @@ pub fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+// ---------- Live2D 素材直读（Cubism Core for Web + pixi-live2d-display） ----------
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Live2dBundle {
+    /// 模型定义（cat.model3.json 的内容）
+    pub model3: serde_json::Value,
+    /// model3.json 自身的相对路径（前端把它也转成 Blob URL 作为基准）
+    pub model3_rel: String,
+    /// cat_model 目录下的全部文件（json / moc3 / png …），base64
+    pub files: Vec<AssetFile>,
+}
+
+/// 找某模型当前模式下的 Live2D 模型定义（img/<mode>/cat_model/*.model3.json）
+fn find_live2d_model3(root: &Path, mode: &str) -> Option<PathBuf> {
+    let mode_dir = match mode {
+        "standard" => "standard",
+        "gamepad" => "gamepad",
+        _ => "keyboard",
+    };
+    for m in [mode_dir, "standard", "keyboard", "gamepad"] {
+        let dir = root.join("img").join(m).join("cat_model");
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let mut hits: Vec<PathBuf> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().ends_with(".model3.json"))
+                        .unwrap_or(false)
+                })
+                .collect();
+            hits.sort();
+            if let Some(first) = hits.into_iter().next() {
+                return Some(first);
+            }
+        }
+    }
+    None
+}
+
+fn mime_any(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .as_deref()
+    {
+        Some("json") => "application/json",
+        Some("moc3") => "application/octet-stream",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "image/png",
+    }
+}
+
+/// 读取 Live2D 模型包（model3.json + 全部引用文件），供前端组装成 Blob URL 后交给 pixi
+pub fn model_live2d_in(models: &Path, id: &str, mode: &str) -> Result<Live2dBundle, String> {
+    if id == BUILTIN_ID {
+        return Err("内置模型没有 Live2D 素材".into());
+    }
+    let root = models.join(id);
+    if !root.is_dir() {
+        return Err("模型不存在".into());
+    }
+    let model3_path = find_live2d_model3(&root, mode).ok_or("该模型没有 Live2D 模型文件（.model3.json）")?;
+    let cat_dir = model3_path.parent().ok_or("模型路径异常")?.to_path_buf();
+
+    let txt = std::fs::read_to_string(&model3_path).map_err(|e| format!("读取 model3.json 失败: {e}"))?;
+    let model3: serde_json::Value =
+        serde_json::from_str(&txt).map_err(|e| format!("解析 model3.json 失败: {e}"))?;
+
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    collect_files(&root, &cat_dir, &mut files)?;
+    files.sort();
+    if files.len() > MAX_ASSET_FILES {
+        return Err(format!("Live2D 素材过多（{} 个文件），已拒绝读取", files.len()));
+    }
+    let model3_rel = model3_path
+        .strip_prefix(&root)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
+
+    let mut out = Vec::new();
+    let mut total: u64 = 0;
+    for (rel, abs) in files {
+        let data = std::fs::read(&abs).map_err(|e| format!("读取素材失败: {e}"))?;
+        total = total.saturating_add(data.len() as u64);
+        if total > MAX_ASSET_BYTES {
+            return Err("Live2D 素材体积过大，已拒绝读取".into());
+        }
+        out.push(AssetFile {
+            rel,
+            mime: mime_any(&abs).into(),
+            data: base64_encode(&data),
+        });
+    }
+    Ok(Live2dBundle {
+        model3,
+        model3_rel,
+        files: out,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -943,6 +1049,55 @@ mod tests {
         assert_eq!(base64_encode(b"abc"), "YWJj");
         assert_eq!(base64_encode(b"ab"), "YWI=");
         assert_eq!(base64_encode(b"a"), "YQ==");
+    }
+
+    #[test]
+    fn live2d_bundle_reads_model_and_refs() {
+        let _guard = lock();
+        let conn = storage::open(&temp_db("s6")).unwrap();
+        let models = models_dir(&conn);
+        let _ = std::fs::remove_dir_all(&models);
+        std::fs::create_dir_all(&models).unwrap();
+
+        // 造一个"只有 Live2D"的模型：img/standard/cat_model/ 下有 model3.json + moc3 + 贴图
+        let root = models.join("bunny");
+        let cat = root.join("img/standard/cat_model");
+        let tex_dir = cat.join("Bunny.2048");
+        std::fs::create_dir_all(&tex_dir).unwrap();
+        std::fs::create_dir_all(root.join("img/standard/hand")).unwrap();
+        std::fs::write(
+            cat.join("cat.model3.json"),
+            r#"{"Version":3,"FileReferences":{"Moc":"Bunny.moc3","Textures":["Bunny.2048/texture_00.png"],"Expressions":[{"Name":"e0","File":"live2d_expression0.exp3.json"}]}}"#,
+        )
+        .unwrap();
+        std::fs::write(cat.join("Bunny.moc3"), b"moc3-bytes").unwrap();
+        std::fs::write(tex_dir.join("texture_00.png"), b"png").unwrap();
+        std::fs::write(cat.join("live2d_expression0.exp3.json"), b"{}").unwrap();
+        std::fs::write(root.join("img/standard/hand/0.png"), b"png").unwrap();
+
+        // 模式识别：standard（有 hand/ 目录）
+        assert_eq!(detect_mode(&root).as_deref(), Some("standard"));
+        assert!(has_live2d(&root));
+
+        let b = model_live2d_in(&models, "bunny", "standard").unwrap();
+        assert_eq!(b.model3_rel, "img/standard/cat_model/cat.model3.json");
+        assert_eq!(b.model3["Version"], 3);
+        // 引用的四个文件都在，且各自有内容
+        for rel in [
+            "img/standard/cat_model/Bunny.moc3",
+            "img/standard/cat_model/Bunny.2048/texture_00.png",
+            "img/standard/cat_model/live2d_expression0.exp3.json",
+            "img/standard/cat_model/cat.model3.json",
+        ] {
+            let hit = b.files.iter().find(|f| f.rel == rel);
+            assert!(hit.is_some(), "缺少素材 {rel}");
+            assert!(!hit.unwrap().data.is_empty());
+        }
+        // 模型列表也要标出"含 Live2D"
+        let list = list_models(&conn).unwrap();
+        assert!(list.iter().any(|m| m.id == "bunny" && m.live2d));
+
+        let _ = std::fs::remove_dir_all(&models);
     }
 
     #[test]

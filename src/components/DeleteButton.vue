@@ -1,81 +1,58 @@
 <script setup lang="ts">
 /**
- * 图标删除按钮：默认圆形，悬停时横向展开成胶囊并浮出"删除"文字
- * 参考 uiverse.io/vinodjangid07/smart-emu-83（纯 transition + ::before，无 keyframes）
+ * 删除按钮（横向：左图标 + 右中文），悬停填充危险色并有轻微放大
+ * 参考 uiverse.io/vinodjangid07/smart-emu-83 的展开思路，改成横向更省空间
  */
-withDefaults(defineProps<{ label?: string; size?: "sm" | "md" }>(), { label: "删除", size: "md" });
-
+withDefaults(defineProps<{ label?: string }>(), { label: "删除" });
 const emit = defineEmits<{ (e: "click"): void }>();
 </script>
 
 <template>
-  <button class="del" :class="size" :title="label" @click="emit('click')">
+  <button class="del" :title="label" @click="emit('click')">
     <svg viewBox="0 0 448 512" class="del-icon" aria-hidden="true">
       <path
         d="M135.2 17.7L128 32H32C14.3 32 0 46.3 0 64S14.3 96 32 96H416c17.7 0 32-14.3 32-32s-14.3-32-32-32H320l-7.2-14.3C307.4 6.8 296.3 0 284.2 0H163.8c-12.1 0-23.2 6.8-28.6 17.7zM416 128H32L53.2 467c1.6 25.3 22.6 45 47.9 45H346.9c25.3 0 46.3-19.7 47.9-45L416 128z"
       />
     </svg>
+    <span class="txt">{{ label }}</span>
   </button>
 </template>
 
 <style scoped>
 .del {
-  position: relative;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 50%;
+  gap: 5px;
+  border: 1px solid var(--border);
   background: var(--surface);
   color: var(--danger);
+  border-radius: var(--r-full);
+  padding: 3px 10px 3px 8px;
+  font-size: 11.5px;
+  font-family: inherit;
   cursor: pointer;
-  overflow: hidden;
-  transition: width 0.3s, border-radius 0.3s, background-color 0.3s, color 0.3s;
-}
-
-.del.md {
-  width: 28px;
-  height: 28px;
-}
-
-.del.sm {
-  width: 24px;
-  height: 24px;
+  transition: background var(--dur), color var(--dur), border-color var(--dur),
+    transform var(--dur);
 }
 
 .del-icon {
   width: 11px;
-  transition: width 0.3s, transform 0.3s;
+  height: 11px;
+  flex: none;
 }
 
 .del-icon path {
   fill: currentColor;
 }
 
-.del::before {
-  position: absolute;
-  top: 4px;
-  content: "删除";
-  font-size: 1px;
-  color: transparent;
-  transition: font-size 0.25s, transform 0.3s, color 0.25s;
-}
-
 .del:hover {
-  width: 68px;
-  border-radius: var(--r-full);
   background: var(--danger);
   color: #fff;
+  border-color: transparent;
+  transform: scale(calc(1 + 0.06 * var(--motion)));
 }
 
-.del:hover .del-icon {
-  width: 26px;
-  transform: translateY(50%);
-}
-
-.del:hover::before {
-  font-size: 11px;
-  color: #fff;
-  transform: translateY(-8px);
+.txt {
+  line-height: 1;
 }
 </style>

@@ -12,6 +12,7 @@ import type {
 import { fmtDuration } from "../lib/format";
 import { colorFor } from "../lib/colors";
 import AppRanking from "../components/AppRanking.vue";
+import { jumpTo, navIntent } from "../lib/uiState";
 import DayBars from "../components/DayBars.vue";
 import HourlyChart from "../components/HourlyChart.vue";
 import BallLoader from "../components/BallLoader.vue";
@@ -60,7 +61,9 @@ function dayLabel(d: string): string {
 
 async function loadDays() {
   try {
-    days.value = await invoke<DailyTotal[]>("recent_daily", { days: 14 });
+    const raw = await invoke<DailyTotal[]>("recent_daily", { days: 14 });
+    // 今天在最左、越往右越早（Tai 的顺序）
+    days.value = [...raw].reverse();
     if (days.value.length && !selected.value) {
       await pick(days.value[0].date);
     }
@@ -153,6 +156,40 @@ async function pickApp(name: string) {
   appName.value = name;
   await loadAppReport();
 }
+
+// 来自今日页/排行的跳转
+watch(navIntent, async (n) => {
+  if (!n) return;
+  if (n.view === "recent") {
+    await switchMode("recent");
+    if (days.value.length) await pick(days.value[0].date);
+  } else {
+    if (!apps.value.length) {
+      try {
+        apps.value = await invoke<AppUsage[]>("app_list", { limit: 100 });
+      } catch {
+        /* 忽略 */
+      }
+    }
+    await switchMode("app");
+    if (n.app) await pickApp(n.app);
+  }
+});
+
+/** 卡片右上角的平均值标注 */
+const recentAvg = computed(() => {
+  const arr = days.value.filter((d) => d.seconds > 0);
+  if (!arr.length) return "—";
+  const avg = arr.reduce((s, d) => s + d.seconds, 0) / arr.length;
+  return `${fmtDuration(Math.round(avg))}/天`;
+});
+
+const periodAvg = computed(() => {
+  const p = period.value;
+  if (!p || !p.activeDays) return "—";
+  const avg = p.totalSeconds / p.activeDays;
+  return `${fmtDuration(Math.round(avg))}/天`;
+});
 
 async function pickAppKind(k: "day" | "month" | "year" | "all") {
   appKind.value = k;
@@ -305,18 +342,24 @@ onMounted(async () => {
         </section>
 
         <section class="glass-card wide">
-          <h2>24 小时分布</h2>
+          <div class="cardhead">
+            <h2>24 小时分布</h2>
+            <span class="avg">合计 {{ fmtDuration(report.totalSeconds) }}</span>
+          </div>
           <HourlyChart :slices="report.hourly" />
         </section>
 
         <section class="glass-card wide">
-          <h2>近 14 天趋势</h2>
-          <DayBars :labels="recentTrend.labels" :series="recentTrend.series" />
+          <div class="cardhead">
+            <h2>近 14 天趋势</h2>
+            <span class="avg">平均 {{ recentAvg }}</span>
+          </div>
+          <DayBars :labels="recentTrend.labels" :series="recentTrend.series" :label-interval="0" />
         </section>
 
         <section class="glass-card">
           <h2>应用排行</h2>
-          <AppRanking :apps="report.apps" />
+          <AppRanking :apps="report.apps" @pick="(n: string) => pickApp(n)" />
         </section>
       </template>
       <BallLoader v-else-if="loading" label="加载中…" />
@@ -343,7 +386,10 @@ onMounted(async () => {
         </section>
 
         <section class="glass-card wide">
-          <h2>{{ period.kind === "month" ? "当日分布" : period.kind === "year" ? "月度趋势" : "年度趋势" }}</h2>
+          <div class="cardhead">
+            <h2>{{ period.kind === "month" ? "当日分布" : period.kind === "year" ? "月度趋势" : "年度趋势" }}</h2>
+            <span class="avg">平均 {{ periodAvg }}</span>
+          </div>
           <DayBars
             :labels="periodTrend.labels"
             :series="periodTrend.series"
@@ -358,7 +404,7 @@ onMounted(async () => {
 
         <section class="glass-card">
           <h2>应用排行</h2>
-          <AppRanking :apps="period.apps" />
+          <AppRanking :apps="period.apps" @pick="(n: string) => jumpTo('app', n)" />
         </section>
       </template>
       <BallLoader v-else-if="loading" label="加载中…" />
@@ -561,6 +607,19 @@ onMounted(async () => {
 
 .glass-card.wide {
   padding-bottom: 12px;
+}
+
+.cardhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.avg {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .glass-card h2 {
