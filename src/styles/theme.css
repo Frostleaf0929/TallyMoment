@@ -17,7 +17,7 @@
   --bg-rgb: 15, 17, 22;
   --side-rgb: 20, 24, 31;
   /* 三层透明度（个性化页写入） */
-  --bg-alpha: 0.8;   /* 界面底色（画布） */
+  --bg-alpha: 1;   /* 界面底色（画布） */
   --side-alpha: 0.5; /* 侧边栏 */
   --card-alpha: 1;   /* 卡片（乘在 --bg-glass 之上） */
   --bg-glass: rgba(20, 24, 31, 0.58);
@@ -102,7 +102,7 @@
   --bg: #eef0f4;
   --bg-rgb: 255, 255, 255;
   --side-rgb: 255, 255, 255;
-  --bg-alpha: 0.78;
+  --bg-alpha: 1;
   --side-alpha: 0.5;
   --bg-glass: rgba(255, 255, 255, 0.66);
   --surface: rgba(255, 255, 255, 0.66);

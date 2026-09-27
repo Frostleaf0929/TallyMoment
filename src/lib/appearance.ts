@@ -12,7 +12,7 @@ export type Material = "frosted" | "liquid";
 export type WallKind = "none" | "gradient" | "image";
 
 /** 外观参数版本：默认值变了要让旧值一次性失效 */
-export const UI_VERSION = "3";
+export const UI_VERSION = "4";
 const stale = () => localStorage.getItem("ui.v") !== UI_VERSION;
 
 const num = (key: string, fallback: number) => {
@@ -29,7 +29,8 @@ export const material = ref<Material>(
   (localStorage.getItem("ui.material") as Material) || "frosted"
 );
 export const blur = ref(num("ui.blur", 26));
-export const bgAlpha = ref(stale() ? 80 : num("ui.bgAlpha", 80));
+/* 背景层默认完全不透明（用户选定：直角 + 不透明），滑杆仍可回调 */
+export const bgAlpha = ref(stale() ? 100 : num("ui.bgAlpha", 100));
 export const sideAlpha = ref(stale() ? 50 : num("ui.sideAlpha", 50));
 export const cardAlpha = ref(num("ui.cardAlpha", 100));
 /* 三块表面各自的模糊与阴影（个性化页分三组调） */
