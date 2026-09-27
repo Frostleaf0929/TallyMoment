@@ -13,7 +13,7 @@ use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     window::{Effect, EffectsBuilder},
-    Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    Emitter, Manager, WindowEvent,
 };
 use tracker::{Db, TrackerShared, TrayMenu};
 
@@ -992,49 +992,20 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // 桌宠窗：读取持久化设置（缩放/位置/置顶/穿透）
-            let (pet_s, effect_kind) = {
+            // 桌宠窗已停用（用户决定降优先级，代码保留在 lib.rs/pet_settings.rs/PetView.vue）
+            // 需要恢复时：把下面被注释的建窗代码放回来 + 托盘加回"显示桌宠"项 + App.vue 加回桌宠页
+            // 窗口特效（毛玻璃）仍按设置应用
+            let effect_kind = {
                 let db = app.state::<Db>();
                 let conn = db
                     .0
                     .lock()
                     .map_err(|_| "数据库锁不可用")
                     .unwrap_or_else(|_| panic!("db lock"));
-                (
-                    pet_settings::load(&conn),
-                    storage::get_setting(&conn, "ui.window_effect"),
-                )
+                storage::get_setting(&conn, "ui.window_effect")
             };
-            // 应用持久化的窗口特效（毛玻璃）
             if let Some(kind) = effect_kind {
                 let _ = apply_window_effect(app.handle(), &kind);
-            }
-            let k = pet_s.scale / 100.0;
-            let (mut px, mut py) = (-1.0, -1.0);
-            if pet_s.pos_x >= 0.0 && pet_s.pos_y >= 0.0 {
-                px = pet_s.pos_x;
-                py = pet_s.pos_y;
-            } else if let Ok(Some(m)) = app.primary_monitor() {
-                let sc = m.scale_factor();
-                let size = m.size();
-                px = size.width as f64 / sc - pet_settings::BASE_W * k - 392.0;
-                py = size.height as f64 / sc - pet_settings::BASE_H * k - 306.0;
-            }
-            let pet_window = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("index.html".into()))
-                .title("拾刻桌宠")
-                .inner_size(pet_settings::BASE_W * k, pet_settings::BASE_H * k)
-                .position(px.max(0.0), py.max(0.0))
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(pet_s.always_on_top)
-                .skip_taskbar(true)
-                .resizable(false)
-                .focused(false)
-                .shadow(false)
-                .visible(true)
-                .build();
-            if let Ok(w) = pet_window {
-                let _ = w.set_ignore_cursor_events(pet_s.pass_through);
             }
 
             tracker::spawn(app.handle().clone());

@@ -73,7 +73,7 @@ watchEffect(() => {
   isLight.value = !isDark();
 });
 
-/** 折叠状态下：悬停 1 秒自动展开（胶囊式展开动画由 width 过渡完成） */
+/** 折叠状态下：悬停 400ms 自动展开（与删除按钮同一套宽度过渡曲线） */
 let hoverTimer: number | undefined;
 function onSideEnter() {
   if (!collapsed.value) return;
@@ -81,7 +81,7 @@ function onSideEnter() {
   hoverTimer = window.setTimeout(() => {
     collapsed.value = false;
     localStorage.setItem("ui.side", "expanded");
-  }, 1000);
+  }, 400);
 }
 function onSideLeave() {
   if (hoverTimer) {
@@ -364,7 +364,7 @@ body.glass-off {
   background: rgba(var(--side-rgb), var(--side-alpha));
   backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
-  transition: width 0.2s ease;
+  transition: width var(--dur) cubic-bezier(0.22, 0.61, 0.36, 1);
   overflow: hidden;
 }
 

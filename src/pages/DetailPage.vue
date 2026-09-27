@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { NDatePicker, NInput } from "naive-ui";
+import { NInput } from "naive-ui";
 import type { AppUsage, RangeReport } from "../types";
 import { fmtDuration } from "../lib/format";
 import { colorFor } from "../lib/colors";
@@ -12,26 +12,27 @@ import BallLoader from "../components/BallLoader.vue";
 import DayBars from "../components/DayBars.vue";
 import HourlyChart from "../components/HourlyChart.vue";
 
-/** 详细页：按天/按周/按月/按年 + 日历选择器 + 应用列表（可下钻） */
-type Mode = "day" | "week" | "month" | "year";
+/**
+ * 详细页：**以应用为主**（对标 Tai 的详细）
+ * 时间范围固定在"当前"的几种相对区间（今天/本周/本月/本年/全部），不提供任意日期选择
+ */
+type RangeKey = "day" | "week" | "month" | "year" | "all";
 
-const mode = ref<Mode>("day");
-/** 选择器里的日期（毫秒时间戳） */
-const picked = ref<number>(Date.now());
+const rangeKey = ref<RangeKey>("week");
 const loading = ref(false);
 const report = ref<RangeReport | null>(null);
 const selectedApp = ref<string | null>(null);
 const keyword = ref("");
 const err = ref("");
+const fallbackNote = ref("");
 
-const modes: { key: Mode; label: string }[] = [
-  { key: "day", label: "按天" },
-  { key: "week", label: "按周" },
-  { key: "month", label: "按月" },
-  { key: "year", label: "按年" },
+const ranges: { key: RangeKey; label: string; text: string }[] = [
+  { key: "day", label: "天", text: "今天" },
+  { key: "week", label: "周", text: "本周" },
+  { key: "month", label: "月", text: "本月" },
+  { key: "year", label: "年", text: "本年" },
+  { key: "all", label: "总共", text: "全部时间" },
 ];
-
-const pickerType = computed(() => (mode.value === "year" ? "year" : mode.value === "month" ? "month" : "date"));
 
 function ymd(d: Date): string {
   const m = `${d.getMonth() + 1}`.padStart(2, "0");
@@ -39,34 +40,49 @@ function ymd(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
-/** 把选择器日期换算成 [from, to] */
-function rangeOf(): { from: string; to: string } {
-  const d = new Date(picked.value);
-  if (mode.value === "day") return { from: ymd(d), to: ymd(d) };
-  if (mode.value === "week") {
-    // 周一为一周开始
-    const dow = (d.getDay() + 6) % 7;
-    const start = new Date(d.getTime() - dow * 86400000);
-    const end = new Date(start.getTime() + 6 * 86400000);
+/** 相对区间：天=今天、周=本周（周一起）、月=本月、年=本年、总共=有记录以来 */
+function rangeOf(k: RangeKey): { from: string; to: string } {
+  const now = new Date();
+  const today = ymd(now);
+  if (k === "day") return { from: today, to: today };
+  if (k === "week") {
+    const dow = (now.getDay() + 6) % 7;
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
     return { from: ymd(start), to: ymd(end) };
   }
-  if (mode.value === "month") {
-    const start = new Date(d.getFullYear(), d.getMonth(), 1);
-    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-    return { from: ymd(start), to: ymd(end) };
+  if (k === "month") {
+    return {
+      from: ymd(new Date(now.getFullYear(), now.getMonth(), 1)),
+      to: ymd(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+    };
   }
-  return { from: `${d.getFullYear()}-01-01`, to: `${d.getFullYear()}-12-31` };
+  if (k === "year") {
+    return { from: `${now.getFullYear()}-01-01`, to: `${now.getFullYear()}-12-31` };
+  }
+  return { from: "2000-01-01", to: today };
 }
 
-async function load() {
-  const { from, to } = rangeOf();
+const rangeText = computed(() => ranges.find((r) => r.key === rangeKey.value)?.text ?? "");
+
+async function load(autoFallback = false) {
+  const { from, to } = rangeOf(rangeKey.value);
   loading.value = true;
+  err.value = "";
   try {
-    report.value = await invoke<RangeReport>("range_report", {
+    const r = await invoke<RangeReport>("range_report", {
       from,
       to,
       appName: selectedApp.value,
     });
+    report.value = r;
+    // 跳转过来时若该范围没有记录，自动退到"总共"，避免看到一片空白
+    if (autoFallback && r.totalSeconds === 0 && rangeKey.value !== "all") {
+      rangeKey.value = "all";
+      fallbackNote.value = "该时间范围内没有记录，已自动切到「总共」";
+      await load(false);
+      return;
+    }
   } catch (e) {
     report.value = null;
     err.value = String(e).replace(/^.*Error: /, "");
@@ -75,43 +91,35 @@ async function load() {
   }
 }
 
-/** 切换粒度：把日期归一化到该粒度的起点，并强制选择器重建（否则右侧文字不纠正） */
-function normalize(ts: number, m: Mode): number {
-  const d = new Date(ts);
-  if (m === "day") return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  if (m === "week") {
-    const dow = (d.getDay() + 6) % 7;
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow).getTime();
-  }
-  if (m === "month") return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
-  return new Date(d.getFullYear(), 0, 1).getTime();
-}
-
-async function switchMode(m: Mode) {
-  mode.value = m;
-  picked.value = normalize(picked.value, m);
-  await load();
+function pickRange(k: RangeKey) {
+  rangeKey.value = k;
+  fallbackNote.value = "";
+  void load(false);
 }
 
 function pickApp(name: string | null) {
   selectedApp.value = selectedApp.value === name ? null : name;
-  void load();
+  fallbackNote.value = "";
+  void load(false);
 }
 
 const appLabel = (a: AppUsage) => (appNameEnglish.value ? a.name.replace(/\.exe$/i, "") : a.displayName);
-
 const appColor = (a: AppUsage) =>
   appColorMode.value === "accent" ? accentColor() : colorFor(a.name);
 
-const maxSeconds = computed(() =>
-  Math.max(1, ...(report.value?.apps ?? []).map((a) => a.seconds))
-);
+const maxSeconds = computed(() => Math.max(1, ...(report.value?.apps ?? []).map((a) => a.seconds)));
 
 const filteredApps = computed(() => {
   const k = keyword.value.trim().toLowerCase();
   const list = report.value?.apps ?? [];
   if (!k) return list;
   return list.filter((a) => appLabel(a).toLowerCase().includes(k) || a.name.toLowerCase().includes(k));
+});
+
+const current = computed(() => {
+  if (!selectedApp.value) return null;
+  const list = report.value?.apps ?? [];
+  return list.find((a) => a.name === selectedApp.value) ?? null;
 });
 
 const trend = computed(() => {
@@ -129,15 +137,13 @@ const trend = computed(() => {
   };
 });
 
-onMounted(load);
+onMounted(() => void load(false));
 
-// 今日页/排行跳转过来：自动选中该应用
+// 从今日页/排行跳转过来：选中该应用，若当前范围没数据自动退到"总共"
 watch(navIntent, (n) => {
-  if (!n) return;
-  if (n.app) {
-    selectedApp.value = n.app;
-    void load();
-  }
+  if (!n || n.view !== "app") return;
+  selectedApp.value = n.app ?? null;
+  void load(true);
 });
 </script>
 
@@ -145,102 +151,100 @@ watch(navIntent, (n) => {
   <div class="detail">
     <header class="head">
       <h1>详细</h1>
-      <span class="sub">按天 / 按周 / 按月 / 按年 · 单个应用可下钻</span>
+      <span class="sub">按应用查看 · 选中左侧应用可下钻</span>
     </header>
 
-    <!-- 统一风格的周期选择器（对标 Tai：分段切换 + 日历弹层） -->
-    <div class="pickerrow">
-      <div class="seg">
-        <button
-          v-for="m in modes"
-          :key="m.key"
-          class="seg-item"
-          :class="{ active: mode === m.key }"
-          @click="switchMode(m.key)"
-        >
-          {{ m.label }}
-        </button>
-      </div>
-      <NDatePicker
-        :key="mode"
-        v-model:value="picked"
-        :type="pickerType"
-        :actions="['confirm']"
-        :clearable="false"
-        style="width: 190px"
-        @update:value="load"
-      />
-      <span v-if="report" class="range">{{ report.title }} · 共 {{ report.days }} 天</span>
-    </div>
+    <div class="split">
+      <!-- 应用列表（主入口） -->
+      <aside class="glass-card applist">
+        <div class="listhead">
+          <h2>应用</h2>
+          <NInput v-model:value="keyword" size="small" placeholder="搜索" clearable style="width: 110px" />
+        </div>
+        <div class="listbody">
+          <button
+            v-for="a in filteredApps"
+            :key="a.name"
+            class="approw"
+            :class="{ active: selectedApp === a.name }"
+            :title="appLabel(a)"
+            @click="pickApp(a.name)"
+          >
+            <span class="adot" :style="{ background: appColor(a) }"></span>
+            <span class="aname">{{ appLabel(a) }}</span>
+            <span class="atime">{{ fmtDuration(a.seconds) }}</span>
+            <span class="abar">
+              <i :style="{ width: (a.seconds / maxSeconds) * 100 + '%', background: appColor(a) }"></i>
+            </span>
+          </button>
+          <p v-if="!filteredApps.length" class="empty">这个范围没有记录</p>
+        </div>
+      </aside>
 
-    <template v-if="report">
-      <section class="cards">
-        <div class="glass-card stat">
-          <p class="label">区间总时长</p>
-          <p class="value accent">{{ fmtDuration(report.totalSeconds) }}</p>
-        </div>
-        <div class="glass-card stat">
-          <p class="label">平均每活跃日</p>
-          <p class="value">{{ fmtDuration(report.avgPerDay) }}</p>
-        </div>
-        <div class="glass-card stat">
-          <p class="label">活跃天数 / 应用数</p>
-          <p class="value">{{ report.activeDays }} <small>天</small> · {{ report.appCount }} <small>个</small></p>
-        </div>
-        <div class="glass-card stat">
-          <p class="label">键入 / 点击</p>
-          <p class="value num2">{{ report.keys }} <small>键</small> · {{ report.clicks }} <small>击</small></p>
-        </div>
-      </section>
-
-      <div class="split">
-        <!-- 应用列表（对标 Tai 的详细·应用：搜索 + 图标/色点 + 进度 + 时长） -->
-        <aside class="glass-card applist">
-          <div class="listhead">
-            <h2>应用</h2>
-            <NInput v-model:value="keyword" size="small" placeholder="搜索" clearable style="width: 120px" />
+      <div class="right">
+        <!-- 时间范围卡（原来"区间总时长"的位置）：只做相对区间文字切换 -->
+        <section class="glass-card rangerow">
+          <div class="rangehead">
+            <h2>时间范围</h2>
+            <span class="rangetext">{{ rangeText }}</span>
           </div>
-          <div class="listbody">
+          <div class="rangeopts">
             <button
-              v-for="a in filteredApps"
-              :key="a.name"
-              class="approw"
-              :class="{ active: selectedApp === a.name }"
-              :title="appLabel(a)"
-              @click="pickApp(a.name)"
+              v-for="r in ranges"
+              :key="r.key"
+              class="rangeopt"
+              :class="{ active: rangeKey === r.key }"
+              @click="pickRange(r.key)"
             >
-              <span class="adot" :style="{ background: appColor(a) }"></span>
-              <span class="aname">{{ appLabel(a) }}</span>
-              <span class="atime">{{ fmtDuration(a.seconds) }}</span>
-              <span class="abar">
-                <i :style="{ width: (a.seconds / maxSeconds) * 100 + '%', background: appColor(a) }"></i>
-              </span>
+              {{ r.label }}
             </button>
-            <p v-if="!filteredApps.length" class="empty">这个区间没有记录</p>
           </div>
-        </aside>
+          <p class="spantext">{{ report?.from }} ~ {{ report?.to }}</p>
+          <p v-if="fallbackNote" class="note">{{ fallbackNote }}</p>
+        </section>
 
-        <div class="right">
+        <section class="cards">
+          <div class="glass-card stat">
+            <p class="label">{{ current ? `${appLabel(current)} · 总时长` : "全部应用 · 总时长" }}</p>
+            <p class="value accent">{{ fmtDuration(report?.totalSeconds ?? 0) }}</p>
+          </div>
+          <div class="glass-card stat">
+            <p class="label">平均每活跃日</p>
+            <p class="value">{{ fmtDuration(report?.avgPerDay ?? 0) }}</p>
+          </div>
+          <div class="glass-card stat">
+            <p class="label">活跃天数 / 应用数</p>
+            <p class="value">
+              {{ report?.activeDays ?? 0 }} <small>天</small> · {{ report?.appCount ?? 0 }} <small>个</small>
+            </p>
+          </div>
+          <div class="glass-card stat">
+            <p class="label">键入 / 点击</p>
+            <p class="value num2">
+              {{ report?.keys ?? 0 }} <small>键</small> · {{ report?.clicks ?? 0 }} <small>击</small>
+            </p>
+          </div>
+        </section>
+
+        <template v-if="report">
           <section class="glass-card wide">
             <div class="cardhead">
-              <h2>
-                {{ selectedApp ? `${report.appDisplay ?? selectedApp} · 趋势` : "使用趋势" }}
-              </h2>
+              <h2>{{ current ? `${appLabel(current)} · 使用趋势` : "使用趋势" }}</h2>
               <span class="avg">平均 {{ fmtDuration(report.avgPerDay) }}/天</span>
             </div>
             <DayBars :labels="trend.labels" :series="trend.series" :label-interval="trend.interval" />
           </section>
 
           <section class="glass-card wide">
-            <h2>{{ selectedApp ? "该应用各小时分布" : "24 小时分布" }}</h2>
+            <h2>{{ current ? `${appLabel(current)} · 各小时分布` : "24 小时分布" }}</h2>
             <HourlyChart :slices="report.hourly" :height="200" />
           </section>
-        </div>
+        </template>
+        <BallLoader v-else-if="loading" label="加载中…" />
+        <p v-else-if="err" class="err">读取失败：{{ err }}</p>
+        <p v-else class="empty2">这个范围没有记录</p>
       </div>
-    </template>
-    <BallLoader v-else-if="loading" label="加载中…" />
-    <p v-else-if="err" class="err">读取失败：{{ err }}</p>
-    <p v-else class="empty2">这个区间没有记录（换一个日期或粒度看看）</p>
+    </div>
   </div>
 </template>
 
@@ -268,56 +272,12 @@ watch(navIntent, (n) => {
   color: var(--text-muted);
 }
 
-.pickerrow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.seg {
-  display: inline-flex;
-  gap: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 4px;
-  background: var(--surface);
-}
-
-.seg-item {
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-family: inherit;
-  padding: 6px 14px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  transition: background var(--dur), color var(--dur);
-}
-
-.seg-item.active {
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
-
-.range {
-  font-size: 12px;
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-}
-
-.cards {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
-}
-
+/* 两列等高：底部对齐（窗口模式下不再一高一低） */
 .split {
   display: grid;
   grid-template-columns: 268px 1fr;
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .right {
@@ -355,10 +315,82 @@ watch(navIntent, (n) => {
   font-variant-numeric: tabular-nums;
 }
 
+.rangerow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rangehead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.rangehead h2 {
+  margin: 0;
+}
+
+.rangetext {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.rangeopts {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.rangeopt {
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color var(--dur), background var(--dur);
+}
+
+.rangeopt:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.rangeopt.active {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.spantext {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.note {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--accent-text);
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
 .stat .label {
   margin: 0 0 6px;
   font-size: 12px;
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stat .value {
@@ -383,12 +415,12 @@ watch(navIntent, (n) => {
   color: var(--text-faint);
 }
 
+/* 应用列表撑满所在列，底部与右侧列对齐 */
 .applist {
   display: flex;
   flex-direction: column;
-  /* 撑满视口高度，不再"断在一半" */
-  max-height: calc(100vh - 260px);
-  min-height: 320px;
+  min-height: 0;
+  height: 100%;
 }
 
 .listhead {
@@ -405,7 +437,7 @@ watch(navIntent, (n) => {
 
 .listbody {
   flex: 1;
-  min-height: 0;
+  min-height: 240px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
