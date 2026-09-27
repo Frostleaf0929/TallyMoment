@@ -22,6 +22,7 @@ const loading = ref(false);
 const report = ref<RangeReport | null>(null);
 const selectedApp = ref<string | null>(null);
 const keyword = ref("");
+const err = ref("");
 
 const modes: { key: Mode; label: string }[] = [
   { key: "day", label: "按天" },
@@ -66,11 +67,30 @@ async function load() {
       to,
       appName: selectedApp.value,
     });
-  } catch {
+  } catch (e) {
     report.value = null;
+    err.value = String(e).replace(/^.*Error: /, "");
   } finally {
     loading.value = false;
   }
+}
+
+/** 切换粒度：把日期归一化到该粒度的起点，并强制选择器重建（否则右侧文字不纠正） */
+function normalize(ts: number, m: Mode): number {
+  const d = new Date(ts);
+  if (m === "day") return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  if (m === "week") {
+    const dow = (d.getDay() + 6) % 7;
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow).getTime();
+  }
+  if (m === "month") return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+  return new Date(d.getFullYear(), 0, 1).getTime();
+}
+
+async function switchMode(m: Mode) {
+  mode.value = m;
+  picked.value = normalize(picked.value, m);
+  await load();
 }
 
 function pickApp(name: string | null) {
@@ -136,12 +156,13 @@ watch(navIntent, (n) => {
           :key="m.key"
           class="seg-item"
           :class="{ active: mode === m.key }"
-          @click="((mode = m.key), load())"
+          @click="switchMode(m.key)"
         >
           {{ m.label }}
         </button>
       </div>
       <NDatePicker
+        :key="mode"
         v-model:value="picked"
         :type="pickerType"
         :actions="['confirm']"
@@ -218,6 +239,8 @@ watch(navIntent, (n) => {
       </div>
     </template>
     <BallLoader v-else-if="loading" label="加载中…" />
+    <p v-else-if="err" class="err">读取失败：{{ err }}</p>
+    <p v-else class="empty2">这个区间没有记录（换一个日期或粒度看看）</p>
   </div>
 </template>
 
@@ -463,5 +486,17 @@ watch(navIntent, (n) => {
   font-size: 12px;
   text-align: center;
   padding: 18px 0;
+}
+
+.err {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.empty2 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-faint);
 }
 </style>

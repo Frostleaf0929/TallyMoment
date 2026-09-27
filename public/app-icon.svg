@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 圆角方底（中性浅灰，跟随浅色界面底色） -->
+  <rect x="4" y="4" width="504" height="504" rx="100" ry="100" fill="#EEF0F4"/>
+  <!-- 钟面外环（极粗描边，右上有开口） -->
+  <path d="M 344 108 A 176 176 0 1 0 404 160" fill="none" stroke="#3D3A35" stroke-width="50" stroke-linecap="round"/>
+  <!-- 中心点 -->
+  <circle cx="256" cy="256" r="28" fill="#3D3A35"/>
+  <!-- 时针：从中心指向右上（穿过环的开口方向） -->
+  <line x1="256" y1="256" x2="380" y2="150" stroke="#3D3A35" stroke-width="16" stroke-linecap="round"/>
+  <!-- 分针：从中心指向左上（较长） -->
+  <line x1="256" y1="256" x2="148" y2="96" stroke="#3D3A35" stroke-width="16" stroke-linecap="round"/>
+</svg>

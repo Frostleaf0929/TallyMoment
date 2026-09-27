@@ -946,20 +946,14 @@ pub fn run() {
                 MenuItem::with_id(app, "today", "今日累计 0 分钟", false, None::<&str>)?;
             let pause_item =
                 CheckMenuItem::with_id(app, "pause", "暂停记录", true, false, None::<&str>)?;
-            let pet_item =
-                CheckMenuItem::with_id(app, "pet", "显示桌宠", true, true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "打开面板", true, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(
-                app,
-                &[&today_item, &pause_item, &pet_item, &sep1, &show, &sep2, &quit],
-            )?;
+            let menu = Menu::with_items(app, &[&today_item, &pause_item, &sep1, &show, &sep2, &quit])?;
 
             let _ = app.state::<TrayMenu>().today.set(today_item);
             let _ = app.state::<TrayMenu>().pause.set(pause_item);
-            let _ = app.state::<TrayMenu>().pet.set(pet_item);
 
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -976,15 +970,6 @@ pub fn run() {
                         set_paused(app, paused);
                     }
                     "quit" => app.exit(0),
-                    "pet" => {
-                        if let Some(w) = app.get_webview_window("pet") {
-                            let vis = w.is_visible().unwrap_or(false);
-                            let _ = if vis { w.hide() } else { w.show() };
-                            if let Some(p) = app.state::<TrayMenu>().pet.get() {
-                                let _ = p.set_checked(!vis);
-                            }
-                        }
-                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {

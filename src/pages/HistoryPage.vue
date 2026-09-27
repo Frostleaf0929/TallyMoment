@@ -119,16 +119,20 @@ const periodAvg = computed(() => {
   return `${fmtDuration(Math.round(p.totalSeconds / p.activeDays))}/天`;
 });
 
-const recentTrend = computed(() => ({
-  labels: days.value.map((d) => d.date.slice(5).replace("-", "/")),
-  series: [
-    {
-      name: "使用时长",
-      color: "var(--accent)",
-      data: days.value.map((d) => Math.round(d.seconds / 60)),
-    },
-  ],
-}));
+/** 趋势图按时间正序（左=旧、右=新），与左上角的日期按钮顺序无关 */
+const recentTrend = computed(() => {
+  const chrono = [...days.value].reverse();
+  return {
+    labels: chrono.map((d) => d.date.slice(5).replace("-", "/")),
+    series: [
+      {
+        name: "使用时长",
+        color: "var(--accent)",
+        data: chrono.map((d) => Math.round(d.seconds / 60)),
+      },
+    ],
+  };
+});
 
 const periodTrend = computed(() => {
   const b = period.value?.buckets ?? [];

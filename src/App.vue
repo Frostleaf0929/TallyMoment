@@ -15,7 +15,6 @@ import InsightsPage from "./pages/InsightsPage.vue";
 import TodoPage from "./pages/TodoPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 import PersonalizePage from "./pages/PersonalizePage.vue";
-import PetSettingsPage from "./pages/PetSettingsPage.vue";
 import { appsTopN, isLight, navIntent } from "./lib/uiState";
 import {
   applyAppearance,
@@ -45,17 +44,15 @@ type Tab =
   | "insights"
   | "todo"
   | "data"
-  | "petsettings"
   | "personalize"
   | "settings";
 const tabs: { key: Tab; label: string; icon: string }[] = [
   { key: "today", label: "今日", icon: "clock" },
-  { key: "history", label: "历史", icon: "doc" },
-  { key: "detail", label: "详细", icon: "graph" },
+  { key: "history", label: "历史", icon: "history" },
+  { key: "detail", label: "详细", icon: "detail" },
   { key: "insights", label: "洞察", icon: "graph" },
   { key: "todo", label: "待办", icon: "checklist" },
   { key: "data", label: "数据", icon: "database" },
-  { key: "petsettings", label: "桌宠", icon: "cat" },
   { key: "personalize", label: "个性化", icon: "palette" },
 ];
 const active = ref<Tab>("today");
@@ -76,18 +73,26 @@ watchEffect(() => {
   isLight.value = !isDark();
 });
 
+/** 折叠状态下：悬停 1 秒自动展开（胶囊式展开动画由 width 过渡完成） */
+let hoverTimer: number | undefined;
+function onSideEnter() {
+  if (!collapsed.value) return;
+  if (hoverTimer) clearTimeout(hoverTimer);
+  hoverTimer = window.setTimeout(() => {
+    collapsed.value = false;
+    localStorage.setItem("ui.side", "expanded");
+  }, 1000);
+}
+function onSideLeave() {
+  if (hoverTimer) {
+    clearTimeout(hoverTimer);
+    hoverTimer = undefined;
+  }
+}
+
 function toggleCollapse() {
   collapsed.value = !collapsed.value;
   localStorage.setItem("ui.side", collapsed.value ? "collapsed" : "expanded");
-}
-
-const petVisible = ref(true);
-async function togglePet() {
-  try {
-    petVisible.value = await invoke<boolean>("toggle_pet");
-  } catch {
-    /* 忽略 */
-  }
 }
 
 /* ---------- 窗口控制（权限已在 capabilities 显式声明） ---------- */
@@ -228,10 +233,26 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <aside class="side" :class="{ collapsed }">
+      <aside
+        class="side"
+        :class="{ collapsed }"
+        @mouseenter="onSideEnter"
+        @mouseleave="onSideLeave"
+      >
         <div class="brand" @mousedown="startDrag" @dblclick="toggleMaxWin">
-          <span class="logo">拾刻</span>
-          <span v-if="!collapsed" class="en">TallyMoment</span>
+          <img v-if="collapsed" class="logoimg" src="/app-icon.svg" alt="拾刻" draggable="false" />
+          <template v-else>
+            <span class="logo">拾刻</span>
+            <span class="en">TallyMoment</span>
+          </template>
+          <button
+            class="collapse-btn"
+            :title="collapsed ? '展开侧栏' : '收起侧栏'"
+            @mousedown.stop
+            @click="toggleCollapse"
+          >
+            <Icon :name="collapsed ? 'expand' : 'collapse'" :size="16" />
+          </button>
         </div>
 
         <nav class="nav">
@@ -252,10 +273,6 @@ onUnmounted(() => {
           <button class="nav-item" :class="{ active: active === 'settings' }" title="设置" @click="active = 'settings'">
             <Icon name="settings" :size="19" />
             <span v-if="!collapsed" class="nav-label">设置</span>
-          </button>
-          <button class="nav-item" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="toggleCollapse">
-            <Icon :name="collapsed ? 'expand' : 'collapse'" :size="19" />
-            <span v-if="!collapsed" class="nav-label">收起</span>
           </button>
           <div class="status" :class="status.tone" :title="status.text">
             <span class="dot"></span>
@@ -279,11 +296,7 @@ onUnmounted(() => {
             <DataCard />
           </div>
         </div>
-        <PetSettingsPage
-          v-show="active === 'petsettings'"
-          v-model:pet-visible="petVisible"
-          @toggle-pet="togglePet"
-        />
+        <!-- 桌宠模块已停用（用户决定降优先级，代码保留在 pages/PetSettingsPage.vue） -->
         <PersonalizePage v-show="active === 'personalize'" @wallpaper-changed="loadWallpaper" />
         <SettingsPage v-show="active === 'settings'" />
       </main>
@@ -330,8 +343,9 @@ body.glass-off {
   padding: 16px;
   gap: 16px;
   overflow: hidden;
-  border-radius: 18px;
-  border: 1px solid var(--card-border);
+  /* 外围那层不再自己做圆角与描边：整窗只有一层背景（.wall）+ 两块圆角卡片 */
+  border-radius: 0;
+  border: 0;
   box-sizing: border-box;
 }
 
@@ -376,12 +390,63 @@ body.glass-off {
 /* 品牌行兼作拖拽区（没有独立标题栏了） */
 .brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   height: 40px;
-  padding: 6px 10px 8px;
+  padding: 4px 4px 8px 10px;
   white-space: nowrap;
   cursor: default;
+}
+
+.logoimg {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  margin: 0 auto;
+}
+
+/* 折叠按钮：右上角、仅图标（无文字） */
+.collapse-btn {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: var(--r-sm);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+  transition: background var(--dur), color var(--dur);
+}
+
+.collapse-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.side.collapsed .brand {
+  padding: 4px 0 8px;
+}
+
+.side.collapsed .collapse-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  margin: 0;
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+}
+
+.side.collapsed:hover .collapse-btn {
+  opacity: 1;
+}
+
+.side.collapsed .brand {
+  justify-content: center;
 }
 
 .logo {
