@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import * as echarts from "echarts";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { InsightReport } from "../types";
 import { fmtDuration } from "../lib/format";
+import { chartColors } from "../lib/chartColors";
+import { isLight } from "../lib/uiState";
 import Icon from "../components/Icon.vue";
 import DayBars from "../components/DayBars.vue";
 
@@ -66,39 +68,50 @@ async function load() {
   }
 }
 
+/** 状态色：从主题令牌取，浅色主题下也是可读的深色（此前写死深色调色板） */
+const stateColors = computed(() => {
+  void isLight.value;
+  const s = getComputedStyle(document.documentElement);
+  const g = (k: string, d: string) => s.getPropertyValue(k).trim() || d;
+  return {
+    flow: g("--accent", "#7b84ec"),
+    focused: g("--info", "#7d92cf"),
+    fragmented: g("--warn", "#d3a95e"),
+    keys: g("--accent", "#7b84ec"),
+    clicks: g("--good", "#6fb59a"),
+  };
+});
+
 function renderChart() {
   if (!chartEl.value || !report.value) return;
   if (!chart) chart = echarts.init(chartEl.value);
+  const c = chartColors();
+  const sc = stateColors.value;
   const days = report.value.inputDaily;
+  const keySeries = days.map((d) => d.keys);
+  const clickSeries = days.map((d) => d.clicks);
   chart.setOption(
     {
       backgroundColor: "transparent",
       tooltip: {
         trigger: "axis",
-        backgroundColor: "#161a24",
-        borderColor: "#2a2f3d",
-        textStyle: { color: "#e8eaf2", fontSize: 12 },
+        backgroundColor: c.tipBg,
+        borderColor: c.tipBorder,
+        textStyle: { color: c.tipText, fontSize: 12 },
       },
-      legend: {
-        top: 0,
-        right: 0,
-        icon: "rect",
-        itemWidth: 10,
-        itemHeight: 3,
-        textStyle: { color: "#9aa3b8", fontSize: 11 },
-      },
-      grid: { left: 8, right: 8, top: 28, bottom: 0, containLabel: true },
+      legend: { show: false },
+      grid: { left: 4, right: 8, top: 10, bottom: 0, containLabel: true },
       xAxis: {
         type: "category",
         data: days.map((d) => d.date.slice(5).replace("-", "/")),
-        axisLine: { lineStyle: { color: "#2a2f3d" } },
+        axisLine: { lineStyle: { color: c.axis } },
         axisTick: { show: false },
-        axisLabel: { color: "#5c6474", fontSize: 10 },
+        axisLabel: { color: c.label, fontSize: 10, interval: 1 },
       },
       yAxis: {
         type: "value",
-        splitLine: { lineStyle: { color: "#1c212d" } },
-        axisLabel: { color: "#5c6474", fontSize: 10 },
+        splitLine: { lineStyle: { color: c.split } },
+        axisLabel: { color: c.label, fontSize: 10 },
       },
       series: [
         {
@@ -107,10 +120,10 @@ function renderChart() {
           smooth: true,
           symbol: "circle",
           symbolSize: 5,
-          data: days.map((d) => d.keys),
-          lineStyle: { color: "#7b84ec", width: 2 },
-          itemStyle: { color: "#7b84ec" },
-          areaStyle: { color: "rgba(123,132,236,0.12)" },
+          data: keySeries,
+          lineStyle: { color: sc.keys, width: 2 },
+          itemStyle: { color: sc.keys },
+          areaStyle: { color: sc.keys, opacity: 0.12 },
         },
         {
           name: "点击",
@@ -118,15 +131,24 @@ function renderChart() {
           smooth: true,
           symbol: "circle",
           symbolSize: 5,
-          data: days.map((d) => d.clicks),
-          lineStyle: { color: "#6fb59a", width: 2 },
-          itemStyle: { color: "#6fb59a" },
+          data: clickSeries,
+          lineStyle: { color: sc.clicks, width: 2 },
+          itemStyle: { color: sc.clicks },
         },
       ],
     },
     true
   );
 }
+
+/** 自绘图例（ECharts 内置图例在窄卡片里会压到绘图区） */
+const inputLegend = computed(() => {
+  const sc = stateColors.value;
+  return [
+    { name: "键入", color: sc.keys },
+    { name: "点击", color: sc.clicks },
+  ];
+});
 
 const HOURS = Array.from({ length: 24 }, (_, i) => `${i}`);
 
@@ -150,12 +172,13 @@ const stateBars = computed(() => {
     }
   }
   const r = (a: number[]) => a.map((v) => Math.round(v));
+  const sc = stateColors.value;
   return {
     labels: HOURS,
     series: [
-      { name: "心流", color: "#7b84ec", data: r(flow) },
-      { name: "专注", color: "#7d92cf", data: r(focused) },
-      { name: "碎片", color: "#d3a95e", data: r(fragmented) },
+      { name: "心流", color: sc.flow, data: r(flow) },
+      { name: "专注", color: sc.focused, data: r(focused) },
+      { name: "碎片", color: sc.fragmented, data: r(fragmented) },
     ],
   };
 });
@@ -169,7 +192,7 @@ const hourBars = computed(() => {
     series: [
       {
         name: "近 14 天累计",
-        color: "rgba(123,132,236,0.75)",
+        color: stateColors.value.flow,
         data: arr.map((v) => Math.round(v)),
       },
     ],
@@ -194,6 +217,8 @@ onUnmounted(() => {
   chart?.dispose();
   chart = null;
 });
+// 主题切换时 canvas 需要重绘
+watch(isLight, renderChart);
 
 </script>
 
@@ -237,6 +262,11 @@ onUnmounted(() => {
     <!-- 使用频率 -->
     <section class="glass-card wide">
       <h2>使用频率 · 近 14 天键入与点击</h2>
+      <div class="chart-legend">
+        <span v-for="l in inputLegend" :key="l.name" class="lg">
+          <i :style="{ background: l.color }"></i>{{ l.name }}
+        </span>
+      </div>
       <div ref="chartEl" class="chart"></div>
     </section>
 

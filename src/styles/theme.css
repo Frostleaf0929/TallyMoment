@@ -2,12 +2,17 @@
    拾刻 · 设计 Token 体系（单一真源）
    风格：极简 · Windows Fluent 底蕴 · 毛玻璃 · 柔和去饱和配色
    图标：Solar Line Duotone (CC BY 4.0, 480 Design — via Iconify)
+
+   批次 6 增补（参考 dsh-dream-skin 的分层做法）：
+   - 背景层（--wall-*）：窗口内自绘的柔光底，让「玻璃模糊」滑杆真的有东西可糊
+   - 图表配色（--chart-*）：图表跟随深浅主题，不再恒用深色线
+   - 卡片分界（--card-border/--card-shadow）：深色也看得出层次
    ============================================================ */
 
 :root {
   /* 表面 */
   --bg: #0f1116;
-  /* 界面底色（rgb 分量，供 rgba() 拼不透明度；--bg-alpha 由个性化页写入，默认留一点透光） */
+  /* 界面底色（rgb 分量，供 rgba() 拼不透明度；--bg-alpha 由个性化页写入） */
   --bg-rgb: 15, 17, 22;
   --bg-alpha: 0.8;
   --bg-glass: rgba(20, 24, 31, 0.58);
@@ -16,6 +21,10 @@
   --surface-solid: #161a21;
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.13);
+
+  /* 卡片分界：深色下靠描边 + 阴影拉开层次 */
+  --card-border: rgba(255, 255, 255, 0.1);
+  --card-shadow: 0 10px 30px rgba(0, 0, 0, 0.34), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
 
   /* 文字 */
   --text: #dde1e9;
@@ -48,20 +57,38 @@
   --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.22);
   --shadow-soft: 0 4px 14px rgba(0, 0, 0, 0.16);
 
-  /* 毛玻璃 */
+  /* 毛玻璃：卡片模糊（个性化页滑杆写入）与背景层模糊 */
   --glass-blur: 26px;
+  --wall-blur: 18px;
+
+  /* 背景层柔光（跟随强调色，深浅主题各自可读） */
+  --wall-a: rgba(123, 132, 236, 0.2);
+  --wall-b: rgba(125, 146, 207, 0.16);
+  --wall-c: rgba(160, 143, 224, 0.14);
+
+  /* 图表配色（跟随主题） */
+  --chart-axis: #2a2f3d;
+  --chart-label: #5c6474;
+  --chart-split: #1c212d;
+  --chart-rail: rgba(255, 255, 255, 0.09);
+  --chart-tip-bg: #161a24;
+  --chart-tip-border: #2a2f3d;
+  --chart-tip-text: #e8eaf2;
 }
 
 /* ---------- 浅色主题 ---------- */
 [data-theme="light"] {
   --bg: #eef0f4;
-  --bg-rgb: 238, 240, 244;
-  --bg-glass: rgba(255, 255, 255, 0.6);
+  --bg-rgb: 255, 255, 255;
+  --bg-alpha: 0.78;
+  --bg-glass: rgba(255, 255, 255, 0.66);
   --surface: rgba(255, 255, 255, 0.66);
   --surface-hover: rgba(255, 255, 255, 0.9);
   --surface-solid: #ffffff;
   --border: rgba(20, 30, 50, 0.09);
   --border-strong: rgba(20, 30, 50, 0.16);
+  --card-border: rgba(20, 30, 50, 0.07);
+  --card-shadow: 0 10px 30px rgba(30, 40, 70, 0.12);
   --text: #242a35;
   --text-muted: #626b7d;
   --text-faint: #98a0af;
@@ -79,30 +106,55 @@
   --danger-soft: rgba(189, 98, 102, 0.12);
   --shadow-card: 0 10px 30px rgba(30, 40, 70, 0.1);
   --shadow-soft: 0 4px 14px rgba(30, 40, 70, 0.07);
+  --wall-a: rgba(106, 116, 224, 0.16);
+  --wall-b: rgba(106, 131, 196, 0.14);
+  --wall-c: rgba(160, 143, 224, 0.12);
+  --chart-axis: rgba(20, 30, 50, 0.22);
+  --chart-label: #6b7385;
+  --chart-split: rgba(20, 30, 50, 0.08);
+  --chart-rail: rgba(20, 30, 50, 0.08);
+  --chart-tip-bg: #ffffff;
+  --chart-tip-border: rgba(20, 30, 50, 0.14);
+  --chart-tip-text: #242a35;
 }
 
 /* ---------- 强调色切换 ---------- */
-[data-accent="teal"]   { --accent: #58b3c4; --accent-soft: rgba(88,179,196,0.14); --accent-text: #8fd0dd; --accent-border: rgba(88,179,196,0.38); }
-[data-accent="green"]  { --accent: #6fb59a; --accent-soft: rgba(111,181,154,0.14); --accent-text: #93cfba; --accent-border: rgba(111,181,154,0.38); }
-[data-accent="violet"] { --accent: #a08fe0; --accent-soft: rgba(160,143,224,0.14); --accent-text: #c0b4ee; --accent-border: rgba(160,143,224,0.38); }
-[data-accent="amber"]  { --accent: #d3a35e; --accent-soft: rgba(211,163,94,0.15); --accent-text: #e5c08b; --accent-border: rgba(211,163,94,0.4); }
-[data-accent="rose"]   { --accent: #d3859b; --accent-soft: rgba(211,133,155,0.14); --accent-text: #e7a8b8; --accent-border: rgba(211,133,155,0.4); }
+[data-accent="teal"]   { --accent: #58b3c4; --accent-soft: rgba(88,179,196,0.14); --accent-text: #8fd0dd; --accent-border: rgba(88,179,196,0.38); --wall-a: rgba(88,179,196,0.2); }
+[data-accent="green"]  { --accent: #6fb59a; --accent-soft: rgba(111,181,154,0.14); --accent-text: #93cfba; --accent-border: rgba(111,181,154,0.38); --wall-a: rgba(111,181,154,0.2); }
+[data-accent="violet"] { --accent: #a08fe0; --accent-soft: rgba(160,143,224,0.14); --accent-text: #c0b4ee; --accent-border: rgba(160,143,224,0.38); --wall-a: rgba(160,143,224,0.2); }
+[data-accent="amber"]  { --accent: #d3a35e; --accent-soft: rgba(211,163,94,0.15); --accent-text: #e5c08b; --accent-border: rgba(211,163,94,0.4); --wall-a: rgba(211,163,94,0.2); }
+[data-accent="rose"]   { --accent: #d3859b; --accent-soft: rgba(211,133,155,0.14); --accent-text: #e7a8b8; --accent-border: rgba(211,133,155,0.4); --wall-a: rgba(211,133,155,0.2); }
+[data-theme="light"][data-accent="teal"]   { --accent-text: #2f7d8c; }
+[data-theme="light"][data-accent="green"]  { --accent-text: #3c8770; }
+[data-theme="light"][data-accent="violet"] { --accent-text: #6f5cc4; }
+[data-theme="light"][data-accent="amber"]  { --accent-text: #96682a; }
+[data-theme="light"][data-accent="rose"]   { --accent-text: #b25a76; }
 
 /* ---------- 通用组件类 ---------- */
 .glass-card {
+  position: relative;
   background: var(--bg-glass);
   backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
-  border: 1px solid var(--border);
+  border: 1px solid var(--card-border);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--card-shadow);
 }
+
+/* backdrop-filter 会创建 containing block：容器本身不做玻璃，玻璃只加到叶子卡片上
+   （这条来自 dsh-dream-skin 的踩坑记录：给承载 fixed 弹层的大容器加模糊会把弹层"困"进容器） */
 
 /* 毛玻璃关闭：退化为实底 */
 .glass-off .glass-card {
   background: var(--surface-solid);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  border-color: var(--border);
+}
+
+/* 浅色主题下 Solar 双色图标的次级层太淡，看起来像"断开的弧" */
+[data-theme="light"] svg [opacity=".5"] {
+  opacity: 0.85;
 }
 
 /* 提醒窗与桌宠窗：页面必须全透明，让窗口透明生效（修复关卡后的黑框） */
@@ -125,4 +177,48 @@ html[data-mode="pet"] body {
 }
 [data-theme="light"] ::-webkit-scrollbar-thumb {
   background: rgba(20, 30, 50, 0.18);
+}
+
+/* ---------- 图表自绘图例：放图表上方，避免压到绘图区 ---------- */
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chart-legend .lg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.chart-legend .lg i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* ---------- 背景层柔光：让"玻璃模糊"滑杆真的有东西可糊 ---------- */
+.wall {
+  position: absolute;
+  inset: -60px;
+  z-index: 0;
+  pointer-events: none;
+  background-color: rgba(var(--bg-rgb), var(--bg-alpha));
+  background-image:
+    radial-gradient(58% 48% at 16% 8%, var(--wall-a), transparent 70%),
+    radial-gradient(52% 42% at 88% 16%, var(--wall-b), transparent 72%),
+    radial-gradient(70% 58% at 62% 104%, var(--wall-c), transparent 76%);
+  filter: blur(var(--wall-blur));
+}
+
+.glass-off .wall {
+  filter: none;
+  background-image: none;
+  background-color: rgb(var(--bg-rgb));
 }

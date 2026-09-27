@@ -40,9 +40,34 @@ const accents: { key: string; color: string; label: string }[] = [
 /* ---------- 窗口特效（持久化在后端 settings 表） ---------- */
 const effectKind = ref("acrylic");
 const effectMsg = ref("");
-/** 本地即时值：拖动滑条时先反馈，松手才写盘 */
+/** 本地即时值：拖动中先反馈，松手（dragend）与 200ms 防抖后落盘
+ *  注意：naive-ui 的 Slider 只发 update:value / dragend，没有 change 事件 */
 const localBlur = ref(props.blur);
 const localAlpha = ref(props.bgAlpha);
+let blurTimer: number | undefined;
+let alphaTimer: number | undefined;
+
+function onBlurInput(v: number) {
+  localBlur.value = v;
+  if (blurTimer) clearTimeout(blurTimer);
+  blurTimer = window.setTimeout(() => emit("update:blur", localBlur.value), 200);
+}
+
+function onAlphaInput(v: number) {
+  localAlpha.value = v;
+  if (alphaTimer) clearTimeout(alphaTimer);
+  alphaTimer = window.setTimeout(() => emit("update:bgAlpha", localAlpha.value), 200);
+}
+
+function commitBlur() {
+  if (blurTimer) clearTimeout(blurTimer);
+  emit("update:blur", localBlur.value);
+}
+
+function commitAlpha() {
+  if (alphaTimer) clearTimeout(alphaTimer);
+  emit("update:bgAlpha", localAlpha.value);
+}
 
 const effects: { key: string; label: string; desc: string }[] = [
   { key: "acrylic", label: "亚克力", desc: "Windows 11 原生，最通透（窗口失焦时系统会自动减淡）" },
@@ -152,8 +177,8 @@ onMounted(async () => {
           :step="1"
           :format-tooltip="(v: number) => v + 'px'"
           style="max-width: 320px"
-          @update:value="(v: number) => (localBlur = v)"
-          @change="(v: number) => emit('update:blur', v)"
+          @update:value="onBlurInput"
+          @dragend="commitBlur"
         />
       </div>
 
@@ -169,8 +194,8 @@ onMounted(async () => {
           :step="2"
           :format-tooltip="(v: number) => v + '%'"
           style="max-width: 320px"
-          @update:value="(v: number) => (localAlpha = v)"
-          @change="(v: number) => emit('update:bgAlpha', v)"
+          @update:value="onAlphaInput"
+          @dragend="commitAlpha"
         />
       </div>
 

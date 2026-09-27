@@ -186,6 +186,8 @@ pub struct ModelInfo {
     pub builtin: bool,
     pub active: bool,
     pub renamed: bool,
+    /// 含 Live2D 素材（.model3.json）：需要 Live2D 运行时才能渲染
+    pub live2d: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -194,6 +196,8 @@ pub struct ImportOutcome {
     pub id: String,
     pub name: String,
     pub mode: String,
+    /// 含 Live2D 素材（静态图只是兜底）
+    pub live2d: bool,
     /// 内容指纹命中：本来就已经导入过，未重复导入
     pub deduped: bool,
     /// 因同名不同内容而自动加的后缀（例如 -2）
@@ -226,6 +230,16 @@ pub fn detect_mode(dir: &Path) -> Option<String> {
     None
 }
 
+/// 是否含 Live2D 素材（.model3.json）：含的话静态图只是兜底，需要 Live2D 运行时才是"正确的样子"
+pub fn has_live2d(dir: &Path) -> bool {
+    let img = dir.join("img");
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    if collect_files(dir, &img, &mut files).is_err() {
+        return false;
+    }
+    files.iter().any(|(rel, _)| rel.ends_with(".model3.json"))
+}
+
 fn display_name(id: &str, labels: &BTreeMap<String, String>) -> String {
     labels
         .get(id)
@@ -250,6 +264,7 @@ fn model_list_from(models: &Path, active: &str, labels: &BTreeMap<String, String
         let dir = models.join(&name);
         let mode = detect_mode(&dir).unwrap_or_default();
         let renamed = labels.contains_key(&name);
+        let live2d = has_live2d(&dir);
         out.push(ModelInfo {
             name: display_name(&name, labels),
             default_name: name.clone(),
@@ -258,6 +273,7 @@ fn model_list_from(models: &Path, active: &str, labels: &BTreeMap<String, String
             builtin: false,
             active: name == active,
             renamed,
+            live2d,
         });
     }
     out
@@ -277,6 +293,7 @@ pub fn list_models(conn: &Connection) -> Result<Vec<ModelInfo>, String> {
         builtin: true,
         active: s.active_model == BUILTIN_ID,
         renamed: labels.contains_key(BUILTIN_ID),
+        live2d: false,
     }];
     out.extend(model_list_from(&models, &s.active_model, &labels));
     Ok(out)
@@ -464,12 +481,14 @@ pub fn import_model_in(models: &Path, src_path: &str) -> Result<ImportOutcome, S
 
         // 指纹去重：已经装过同一个模型就不再装一遍
         let fp = fingerprint_dir(&root)?;
+        let live2d = has_live2d(&root);
         for existing in existing_fingerprints(models) {
             if existing.1 == fp {
                 return Ok(ImportOutcome {
                     name: existing.0.clone(),
                     id: existing.0,
                     mode,
+                    live2d,
                     deduped: true,
                     suffixed: false,
                 });
@@ -493,6 +512,7 @@ pub fn import_model_in(models: &Path, src_path: &str) -> Result<ImportOutcome, S
             name: id.clone(),
             id,
             mode,
+            live2d,
             deduped: false,
             suffixed,
         })

@@ -170,9 +170,10 @@ onUnmounted(() => {
   display: flex;
   border-radius: 12px;
   overflow: hidden;
-  background: rgba(22, 26, 34, 0.92);
-  border: 1px solid var(--border-strong);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+  background: rgba(22, 26, 34, 0.95);
+  /* 去掉描边：桌面上会显出一圈灰框，改用外阴影托底 */
+  border: 0;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.46);
   user-select: none;
 }
 

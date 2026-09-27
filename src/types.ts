@@ -70,6 +70,23 @@ export interface PeriodIndex {
   years: string[];
 }
 
+/** 单个应用的周期报表（历史页「按应用」） */
+export interface AppPeriodReport {
+  name: string;
+  displayName: string;
+  kind: "day" | "month" | "year" | "all";
+  key: string;
+  title: string;
+  totalSeconds: number;
+  activeDays: number;
+  buckets: PeriodBucket[];
+}
+
+/** 界面偏好 */
+export interface Prefs {
+  appsTopN: number;
+}
+
 /** 数据目录与文件信息（设置页） */
 export interface DataInfo {
   dir: string;

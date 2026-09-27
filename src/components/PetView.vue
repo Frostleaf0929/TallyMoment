@@ -277,12 +277,16 @@ onMounted(async () => {
   await loadSettings();
   refresh();
   pollTimer = window.setInterval(refresh, 5000);
-  unlistenInput = await listen<{ kind: string; vk: number }>("pet-input", (e) =>
-    onInput(e.payload)
-  );
-  unlistenSettings = await listen<PetSettingsView>("pet-settings-changed", () => {
-    void loadSettings();
-  });
+  try {
+    unlistenInput = await listen<{ kind: string; vk: number }>("pet-input", (e) =>
+      onInput(e.payload)
+    );
+    unlistenSettings = await listen<PetSettingsView>("pet-settings-changed", () => {
+      void loadSettings();
+    });
+  } catch {
+    /* 浏览器直开时忽略 */
+  }
   window.addEventListener("mouseup", onMouseUp);
 });
 

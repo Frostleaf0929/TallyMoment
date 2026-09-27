@@ -5,6 +5,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { NButton, NPopconfirm, NSlider, NSwitch } from "naive-ui";
 import type { PetSettings } from "../types";
 import Icon from "../components/Icon.vue";
+import DeleteButton from "../components/DeleteButton.vue";
+import BallLoader from "../components/BallLoader.vue";
 
 interface ModelInfo {
   id: string;
@@ -14,12 +16,14 @@ interface ModelInfo {
   builtin: boolean;
   active: boolean;
   renamed: boolean;
+  live2d: boolean;
 }
 
 interface ImportOutcome {
   id: string;
   name: string;
   mode: string;
+  live2d: boolean;
   deduped: boolean;
   suffixed: boolean;
 }
@@ -36,9 +40,13 @@ const importing = ref(false);
 const msg = ref("");
 const errMsg = ref("");
 
-/* 滑条：本地即时值 → 松手才写盘（此前直接绑后端值，拖动会被旧值弹回去） */
+/* 滑条：本地即时值 → 松手落盘
+   注意：naive-ui 的 Slider 只发 update:value / dragend，没有 change 事件
+   （上一版绑 change，因此拖动从来没有真正写回过后端） */
 const localScale = ref(100);
 const localOpacity = ref(100);
+let scaleTimer: number | undefined;
+let opacityTimer: number | undefined;
 
 const modeLabel: Record<string, string> = {
   keyboard: "双爪键盘",
@@ -74,14 +82,26 @@ async function applyWindow(opts: { scale?: number; opacity?: number }) {
   }
 }
 
-function onScaleChange(v: number) {
+function onScaleInput(v: number) {
   localScale.value = v;
-  void applyWindow({ scale: v });
+  if (scaleTimer) clearTimeout(scaleTimer);
+  scaleTimer = window.setTimeout(() => void applyWindow({ scale: localScale.value }), 200);
 }
 
-function onOpacityChange(v: number) {
+function onOpacityInput(v: number) {
   localOpacity.value = v;
-  void applyWindow({ opacity: v });
+  if (opacityTimer) clearTimeout(opacityTimer);
+  opacityTimer = window.setTimeout(() => void applyWindow({ opacity: localOpacity.value }), 200);
+}
+
+function commitScale() {
+  if (scaleTimer) clearTimeout(scaleTimer);
+  void applyWindow({ scale: localScale.value });
+}
+
+function commitOpacity() {
+  if (opacityTimer) clearTimeout(opacityTimer);
+  void applyWindow({ opacity: localOpacity.value });
 }
 
 async function toggleAlwaysTop(v: boolean) {
@@ -167,6 +187,9 @@ async function doImport(picked: string | null) {
     } else {
       msg.value = `已导入模型「${info.name}」，点「使用」启用`;
     }
+    if (info.live2d) {
+      msg.value += "。注意：这个模型含 Live2D 素材，静态图只是兜底，需要 Live2D 运行时才是它本来的样子。";
+    }
     await load();
   } catch (e) {
     errMsg.value = String(e).replace(/^.*Error: /, "");
@@ -241,6 +264,9 @@ onMounted(load);
           <template v-else>
             <span class="mname" :title="m.name" @click="startRename(m)">{{ m.name }}</span>
             <span class="mtag">{{ modeLabel[m.mode] ?? m.mode }}</span>
+            <span v-if="m.live2d" class="mtag live2d" title="含 Live2D 素材：静态图只是兜底，需要 Live2D 运行时">
+              Live2D
+            </span>
             <span v-if="m.builtin" class="mtag builtin">内置</span>
             <span v-if="m.active" class="mtag using">使用中</span>
             <div class="macts">
@@ -250,7 +276,7 @@ onMounted(load);
               </NButton>
               <NPopconfirm v-if="!m.builtin" @positive-click="removeModel(m.id)">
                 <template #trigger>
-                  <NButton quaternary size="tiny" type="error">删除</NButton>
+                  <DeleteButton size="sm" />
                 </template>
                 确定删除模型「{{ m.name }}」吗？磁盘上的模型文件夹也会一起删掉。
               </NPopconfirm>
@@ -266,14 +292,16 @@ onMounted(load);
         <NButton size="small" secondary :loading="importing" @click="importZip">
           <Icon name="doc" :size="14" /> 导入 ZIP
         </NButton>
-        <span class="ihint">支持 Mver 模型包（img/ + config.json 或 bongocat.skin.json）</span>
+        <span v-if="!importing" class="ihint">支持 Mver 模型包（img/ + config.json 或 bongocat.skin.json）</span>
       </div>
+      <BallLoader v-if="importing" label="正在导入模型…" />
       <p class="rd more">
         点模型名或「改名」可以自由命名（只改显示名，不动磁盘目录）；同一个模型重复导入会被自动识别，不会装两遍。
       </p>
       <p class="rd more">
-        注意：内置模型是<b>原版 BongoCat 分层图</b>。「兔子洞」皮肤的美术只有 Live2D 一份
-        （Bunny.moc3），需要 Live2D 运行时才能显示，目前不在内置素材里。
+        关于「兔子洞」：它的美术只有 Live2D 一份（<code>Bunny.moc3</code>），
+        分层 PNG 里没有兔子洞本体，所以现在只能显示原版 BongoCat 的静态图。
+        要真正显示兔子洞需要 Live2D 运行时（Cubism Core + 渲染库），属于要单独征求你同意的依赖。
       </p>
     </section>
 
@@ -292,8 +320,8 @@ onMounted(load);
           :step="5"
           :format-tooltip="(v: number) => v + '%'"
           style="max-width: 320px"
-          @update:value="(v: number) => (localScale = v)"
-          @change="onScaleChange"
+          @update:value="onScaleInput"
+          @dragend="commitScale"
         />
       </div>
       <div class="row col">
@@ -308,8 +336,8 @@ onMounted(load);
           :step="5"
           :format-tooltip="(v: number) => v + '%'"
           style="max-width: 320px"
-          @update:value="(v: number) => (localOpacity = v)"
-          @change="onOpacityChange"
+          @update:value="onOpacityInput"
+          @dragend="commitOpacity"
         />
       </div>
       <div class="row">
@@ -446,6 +474,17 @@ onMounted(load);
 .mtag.using {
   color: var(--accent-text);
   background: var(--accent-soft);
+}
+
+.mtag.live2d {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.rd.more code {
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .macts {

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { NSwitch } from "naive-ui";
+import { NSlider, NSwitch } from "naive-ui";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { appsTopN } from "../lib/uiState";
 
 interface DataInfo {
   dir: string;
@@ -43,6 +44,15 @@ function fmtSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
+async function saveTopN(v: number) {
+  try {
+    const p = await invoke<{ appsTopN: number }>("prefs_set", { appsTopN: v });
+    appsTopN.value = p.appsTopN;
+  } catch {
+    /* 忽略 */
+  }
+}
+
 onMounted(async () => {
   try {
     autoStart.value = await isEnabled();
@@ -78,6 +88,26 @@ onMounted(async () => {
           <p class="rt">记录</p>
           <p class="rd">记录开关在托盘右键菜单里（暂停记录 / 显示桌宠）</p>
         </div>
+      </div>
+    </div>
+
+    <div class="glass-card card">
+      <h2>显示</h2>
+      <div class="row col">
+        <div class="rlabel">
+          <p class="rt">应用排行显示条数</p>
+          <p class="rd">5 ~ 20 条，默认 10 条</p>
+        </div>
+        <NSlider
+          :value="appsTopN"
+          :min="5"
+          :max="20"
+          :step="1"
+          :format-tooltip="(v: number) => v + ' 条'"
+          style="max-width: 320px"
+          @update:value="(v: number) => (appsTopN = v)"
+          @change="saveTopN"
+        />
       </div>
     </div>
 
@@ -164,6 +194,12 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 16px;
   padding: 6px 0;
+}
+
+.row.col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
 }
 
 .rlabel .rt {

@@ -1474,6 +1474,175 @@ pub fn period_report(conn: &Connection, kind: &str, key: &str) -> Result<PeriodR
     })
 }
 
+// ---------- 按应用查看（历史页「按应用」视图，对标 Tai 的应用详情） ----------
+
+/// 全部时间的应用清单（按时长排序，供侧栏选择）
+pub fn app_list(conn: &Connection, limit: i64) -> Result<Vec<AppUsage>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds)
+             FROM daily_stats d JOIN apps a ON a.id = d.app_id
+             GROUP BY d.app_id ORDER BY 3 DESC LIMIT ?1",
+        )
+        .map_err(|e| format!("查询应用清单失败: {e}"))?;
+    let rows = stmt
+        .query_map([limit], |r| {
+            Ok(AppUsage {
+                name: r.get(0)?,
+                display_name: r.get(1)?,
+                seconds: r.get(2)?,
+            })
+        })
+        .map_err(|e| format!("查询应用清单失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取应用清单失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppPeriodReport {
+    pub name: String,
+    pub display_name: String,
+    /// day | month | year | all
+    pub kind: String,
+    pub key: String,
+    pub title: String,
+    pub total_seconds: i64,
+    pub active_days: i64,
+    pub buckets: Vec<PeriodBucket>,
+}
+
+/// 某个应用在指定周期的趋势：日=按小时、月=按天、年=按月、总=按年
+pub fn app_period_report(
+    conn: &Connection,
+    app: &str,
+    kind: &str,
+    key: &str,
+) -> Result<AppPeriodReport, String> {
+    let display_name: String = conn
+        .query_row(
+            "SELECT COALESCE(display_name, name) FROM apps WHERE name = ?1",
+            [app],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|_| app.to_string());
+
+    // 日视图走 hourly_stats（一天的 24 个小时桶）
+    if kind == "day" {
+        let day = if key.len() == 10 { key.to_string() } else { today_date() };
+        let mut stmt = conn
+            .prepare(
+                "SELECT h.hour, SUM(h.seconds)
+                 FROM hourly_stats h JOIN apps a ON a.id = h.app_id
+                 WHERE h.date = ?1 AND a.name = ?2 GROUP BY h.hour",
+            )
+            .map_err(|e| format!("查询应用日分布失败: {e}"))?;
+        let rows = stmt
+            .query_map([day.as_str(), app], |r| Ok((r.get::<_, i32>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(|e| format!("查询应用日分布失败: {e}"))?;
+        let mut hours = [0i64; 24];
+        for r in rows {
+            let (h, s) = r.map_err(|e| format!("读取应用日分布失败: {e}"))?;
+            if (0..24).contains(&h) {
+                hours[h as usize] = s;
+            }
+        }
+        let buckets: Vec<PeriodBucket> = (0..24)
+            .map(|h| PeriodBucket {
+                label: format!("{h}"),
+                date: day.clone(),
+                seconds: hours[h],
+            })
+            .collect();
+        let total = hours.iter().sum();
+        let active_days = if total > 0 { 1 } else { 0 };
+        return Ok(AppPeriodReport {
+            name: app.into(),
+            display_name,
+            kind: kind.into(),
+            key: day.clone(),
+            title: format!("{} · {day}", app.trim_end_matches(".exe")),
+            total_seconds: total,
+            active_days,
+            buckets,
+        });
+    }
+
+    let prefix = period_prefix(kind, key)?;
+    let group_expr = match kind {
+        "month" => "d.date",
+        "year" => "substr(d.date, 1, 7)",
+        _ => "substr(d.date, 1, 4)",
+    };
+    let sql = format!(
+        "SELECT {group_expr} AS k, MIN(d.date), SUM(d.seconds)
+         FROM daily_stats d JOIN apps a ON a.id = d.app_id
+         WHERE d.date LIKE ?1 AND a.name = ?2
+         GROUP BY k ORDER BY k"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("查询应用趋势失败: {e}"))?;
+    let buckets: Vec<PeriodBucket> = stmt
+        .query_map([prefix.as_str(), app], |r| {
+            let k: String = r.get(0)?;
+            let date: String = r.get(1)?;
+            Ok(PeriodBucket {
+                label: if kind == "month" {
+                    k.get(8..).unwrap_or(&k).trim_start_matches('0').to_string()
+                } else if kind == "year" {
+                    k.get(5..).unwrap_or(&k).to_string()
+                } else {
+                    k.clone()
+                },
+                date,
+                seconds: r.get(2)?,
+            })
+        })
+        .map_err(|e| format!("查询应用趋势失败: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+    let total_seconds = buckets.iter().map(|b| b.seconds).sum();
+    let active_days = buckets.iter().filter(|b| b.seconds > 0).count() as i64;
+    let title = match kind {
+        "month" => {
+            let (y, m) = key.split_once('-').unwrap_or((key, ""));
+            format!("{} · {y} 年 {} 月", app.trim_end_matches(".exe"), m.trim_start_matches('0'))
+        }
+        "year" => format!("{} · {key} 年", app.trim_end_matches(".exe")),
+        _ => format!("{} · 全部时间", app.trim_end_matches(".exe")),
+    };
+    Ok(AppPeriodReport {
+        name: app.into(),
+        display_name,
+        kind: kind.into(),
+        key: key.into(),
+        title,
+        total_seconds,
+        active_days,
+        buckets,
+    })
+}
+
+/// 界面偏好（排行条数等）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Prefs {
+    pub apps_top_n: i64,
+}
+
+pub fn prefs_get(conn: &Connection) -> Prefs {
+    Prefs {
+        apps_top_n: get_setting(conn, "ui.apps_top_n")
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(10)
+            .clamp(5, 20),
+    }
+}
+
 /// 数据目录与文件信息（设置页展示，回答「数据存在哪」）
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

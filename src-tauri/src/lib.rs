@@ -226,6 +226,44 @@ fn period_index(app: tauri::AppHandle) -> Result<storage::PeriodIndex, String> {
     storage::period_index(&conn)
 }
 
+/// 应用清单（历史页「按应用」侧栏）
+#[tauri::command]
+fn app_list(app: tauri::AppHandle, limit: Option<i64>) -> Result<Vec<storage::AppUsage>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::app_list(&conn, limit.unwrap_or(60).clamp(1, 300))
+}
+
+/// 单个应用的周期报表（日 / 月 / 年 / 全部）
+#[tauri::command]
+fn app_period_report(
+    app: tauri::AppHandle,
+    name: String,
+    kind: String,
+    key: String,
+) -> Result<storage::AppPeriodReport, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::app_period_report(&conn, &name, &kind, &key)
+}
+
+/// 界面偏好读取
+#[tauri::command]
+fn prefs_get(app: tauri::AppHandle) -> Result<storage::Prefs, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    Ok(storage::prefs_get(&conn))
+}
+
+/// 界面偏好保存（排行条数 5~20）
+#[tauri::command]
+fn prefs_set(app: tauri::AppHandle, apps_top_n: i64) -> Result<storage::Prefs, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::set_setting(&conn, "ui.apps_top_n", &apps_top_n.clamp(5, 20).to_string())?;
+    Ok(storage::prefs_get(&conn))
+}
+
 /// 数据目录与文件信息（设置页）
 #[tauri::command]
 fn data_info() -> Result<storage::DataInfo, String> {
@@ -810,6 +848,10 @@ pub fn run() {
             insights_report,
             period_report,
             period_index,
+            app_list,
+            app_period_report,
+            prefs_get,
+            prefs_set,
             data_info,
             open_data_dir,
             set_window_effect,

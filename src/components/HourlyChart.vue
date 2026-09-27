@@ -1,37 +1,24 @@
 <script setup lang="ts">
 import * as echarts from "echarts";
-import { onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { HourSlice } from "../types";
+import { accentColor, chartColors, hexAlpha } from "../lib/chartColors";
+import { isLight } from "../lib/uiState";
 
-const props = defineProps<{ slices: HourSlice[] }>();
+const props = withDefaults(
+  defineProps<{ slices: HourSlice[]; height?: number; stacked?: boolean }>(),
+  { height: 230, stacked: true }
+);
 
 const el = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${a})`;
-}
-
-function render() {
-  if (!el.value) return;
-  if (!chart) chart = echarts.init(el.value);
-
-  // 按全天累计取前 7 名应用，其余合并为「其他」
+/** 全天累计前 7 名，其余合并「其他」 */
+const seriesData = computed(() => {
   const totals = new Map<string, number>();
-  for (const s of props.slices) {
-    totals.set(s.appName, (totals.get(s.appName) ?? 0) + s.seconds);
-  }
+  for (const s of props.slices) totals.set(s.appName, (totals.get(s.appName) ?? 0) + s.seconds);
   const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
   const top = new Set(ranked.slice(0, 7).map(([k]) => k));
-
-  // Tai 式柔和阶梯：同色系（强调色）按排名降透明度
-  const accent =
-    getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#7b84ec";
-  const ladder = [1, 0.72, 0.54, 0.4, 0.3, 0.22, 0.16];
 
   const seriesMap = new Map<string, number[]>();
   for (const s of props.slices) {
@@ -40,26 +27,25 @@ function render() {
     arr[s.hour] += Math.round(s.seconds / 60);
     seriesMap.set(key, arr);
   }
+  const accent = accentColor();
+  const ladder = [1, 0.72, 0.54, 0.4, 0.3, 0.22, 0.16];
   let rank = 0;
-  const series = [...seriesMap.entries()]
-    .sort((a, b) => {
-      const ta = totals.get(a[0]) ?? Infinity;
-      const tb = totals.get(b[0]) ?? Infinity;
-      return tb - ta;
-    })
+  const out = [...seriesMap.entries()]
+    .sort((a, b) => (totals.get(b[0]) ?? Infinity) - (totals.get(a[0]) ?? Infinity))
     .map(([key, data]) => {
       const color =
-        key === "其他" ? "#4b5563" : hexAlpha(accent, ladder[Math.min(rank, ladder.length - 1)]);
+        key === "其他" ? (isLight.value ? "#9aa2b4" : "#4b5563") : hexAlpha(accent, ladder[Math.min(rank, ladder.length - 1)]);
       rank++;
-      return {
-        name: key.replace(/\.exe$/i, ""),
-        type: "bar" as const,
-        stack: "day",
-        barWidth: "62%",
-        itemStyle: { color },
-        data,
-      };
+      return { name: key.replace(/\.exe$/i, ""), color, data };
     });
+  return out;
+});
+
+function render() {
+  if (!el.value) return;
+  if (!chart) chart = echarts.init(el.value);
+  const c = chartColors();
+  const series = seriesData.value;
 
   chart.setOption(
     {
@@ -67,34 +53,34 @@ function render() {
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "shadow" },
-        backgroundColor: "#161a24",
-        borderColor: "#2a2f3d",
-        textStyle: { color: "#e8eaf2", fontSize: 12 },
+        backgroundColor: c.tipBg,
+        borderColor: c.tipBorder,
+        textStyle: { color: c.tipText, fontSize: 12 },
         valueFormatter: (v: number) => `${v} 分钟`,
       },
-      legend: {
-        top: 0,
-        right: 0,
-        icon: "circle",
-        itemWidth: 8,
-        itemHeight: 8,
-        textStyle: { color: "#9aa3b8", fontSize: 11 },
-        itemGap: 12,
-      },
-      grid: { left: 8, right: 8, top: 28, bottom: 0, containLabel: true },
+      // 图例改用自绘 HTML（见模板）：ECharts 内置图例在窄卡片里会压到绘图区上
+      legend: { show: false },
+      grid: { left: 4, right: 8, top: 10, bottom: 0, containLabel: true },
       xAxis: {
         type: "category",
         data: Array.from({ length: 24 }, (_, i) => `${i}`),
-        axisLine: { lineStyle: { color: "#2a2f3d" } },
+        axisLine: { lineStyle: { color: c.axis } },
         axisTick: { show: false },
-        axisLabel: { color: "#5c6474", fontSize: 10, interval: 2 },
+        axisLabel: { color: c.label, fontSize: 10, interval: 2 },
       },
       yAxis: {
         type: "value",
-        splitLine: { lineStyle: { color: "#1c212d" } },
-        axisLabel: { color: "#5c6474", fontSize: 10, formatter: "{value}分" },
+        splitLine: { lineStyle: { color: c.split } },
+        axisLabel: { color: c.label, fontSize: 10, formatter: "{value}分" },
       },
-      series,
+      series: series.map((s) => ({
+        name: s.name,
+        type: "bar" as const,
+        stack: props.stacked ? "day" : undefined,
+        barWidth: "62%",
+        itemStyle: { color: s.color },
+        data: s.data,
+      })),
     },
     true
   );
@@ -113,16 +99,27 @@ onUnmounted(() => {
   chart?.dispose();
   chart = null;
 });
-watch(() => props.slices, render, { deep: true });
+watch(() => [props.slices, isLight.value], render, { deep: true });
 </script>
 
 <template>
-  <div ref="el" class="chart"></div>
+  <div class="hourly">
+    <div v-if="seriesData.length" class="chart-legend">
+      <span v-for="s in seriesData" :key="s.name" class="lg">
+        <i :style="{ background: s.color }"></i>{{ s.name }}
+      </span>
+    </div>
+    <div ref="el" class="chart" :style="{ height: height + 'px' }"></div>
+  </div>
 </template>
 
 <style scoped>
+.hourly {
+  display: flex;
+  flex-direction: column;
+}
+
 .chart {
   width: 100%;
-  height: 230px;
 }
 </style>
