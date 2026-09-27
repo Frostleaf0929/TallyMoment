@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import type { DayReport } from "../types";
 import { fmtDuration } from "../lib/format";
 import Icon from "../components/Icon.vue";
-import HeatTimeline from "../components/HeatTimeline.vue";
 import HourlyChart from "../components/HourlyChart.vue";
 import AppRanking from "../components/AppRanking.vue";
 
@@ -97,19 +96,13 @@ const startedAt = () => {
     </section>
 
     <section class="glass-card wide">
-      <h2>活动热力 · 全天</h2>
-      <HeatTimeline :segments="report?.segments ?? []" />
+      <h2>24 小时分布</h2>
+      <HourlyChart :slices="report?.hourly ?? []" />
     </section>
 
-    <section class="grid2">
-      <div class="glass-card">
-        <h2>24 小时分布</h2>
-        <HourlyChart :slices="report?.hourly ?? []" />
-      </div>
-      <div class="glass-card">
-        <h2>应用排行</h2>
-        <AppRanking :apps="report?.apps ?? []" />
-      </div>
+    <section class="glass-card">
+      <h2>应用排行</h2>
+      <AppRanking :apps="report?.apps ?? []" />
     </section>
   </div>
 </template>

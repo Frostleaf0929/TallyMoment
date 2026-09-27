@@ -6,22 +6,54 @@ import { NButton, NPopconfirm, NSlider, NSwitch } from "naive-ui";
 import type { PetSettings } from "../types";
 import Icon from "../components/Icon.vue";
 
+interface ModelInfo {
+  id: string;
+  name: string;
+  defaultName: string;
+  mode: string;
+  builtin: boolean;
+  active: boolean;
+  renamed: boolean;
+}
+
+interface ImportOutcome {
+  id: string;
+  name: string;
+  mode: string;
+  deduped: boolean;
+  suffixed: boolean;
+}
+
+defineProps<{ petVisible: boolean }>();
+const emit = defineEmits<{
+  (e: "update:petVisible", v: boolean): void;
+  (e: "togglePet"): void;
+}>();
+
 const settings = ref<PetSettings | null>(null);
-const models = ref<{ id: string; name: string; mode: string; builtin: boolean; active: boolean }[]>([]);
+const models = ref<ModelInfo[]>([]);
 const importing = ref(false);
 const msg = ref("");
 const errMsg = ref("");
 
-// 滑块拖动中先存本地，松手后提交
-const pendingScale = ref<number | null>(null);
-const pendingOpacity = ref<number | null>(null);
+/* 滑条：本地即时值 → 松手才写盘（此前直接绑后端值，拖动会被旧值弹回去） */
+const localScale = ref(100);
+const localOpacity = ref(100);
+
+const modeLabel: Record<string, string> = {
+  keyboard: "双爪键盘",
+  gamepad: "手柄",
+  standard: "单手",
+};
 
 async function load() {
   try {
     settings.value = await invoke<PetSettings>("pet_settings_get");
+    localScale.value = settings.value.scale;
+    localOpacity.value = settings.value.opacity;
     models.value = await invoke("pet_models_list");
-  } catch {
-    /* 忽略 */
+  } catch (e) {
+    errMsg.value = String(e).replace(/^.*Error: /, "");
   }
 }
 
@@ -42,22 +74,14 @@ async function applyWindow(opts: { scale?: number; opacity?: number }) {
   }
 }
 
-function onScale(v: number) {
-  pendingScale.value = v;
-  if (pendingOpacity.value === null) pendingOpacity.value = settings.value?.opacity ?? 100;
+function onScaleChange(v: number) {
+  localScale.value = v;
+  void applyWindow({ scale: v });
 }
 
-function onOpacity(v: number) {
-  pendingOpacity.value = v;
-  if (pendingScale.value === null) pendingScale.value = settings.value?.scale ?? 100;
-}
-
-function commitSliders() {
-  const s = pendingScale.value;
-  const o = pendingOpacity.value;
-  if (s !== null && o !== null) void applyWindow({ scale: s, opacity: o });
-  pendingScale.value = null;
-  pendingOpacity.value = null;
+function onOpacityChange(v: number) {
+  localOpacity.value = v;
+  void applyWindow({ opacity: v });
 }
 
 async function toggleAlwaysTop(v: boolean) {
@@ -84,13 +108,37 @@ async function resetPosition() {
     await invoke("pet_reset_position");
     msg.value = "桌宠已回到默认位置";
   } catch (e) {
-    errMsg.value = String(e);
+    errMsg.value = String(e).replace(/^.*Error: /, "");
   }
 }
 
+/* ---------- 模型重命名（只改显示名，不动磁盘目录） ---------- */
+const editingId = ref("");
+const editName = ref("");
+
+function startRename(m: ModelInfo) {
+  editingId.value = m.id;
+  editName.value = m.name;
+  msg.value = "";
+  errMsg.value = "";
+}
+
+async function commitRename() {
+  const id = editingId.value;
+  if (!id) return;
+  try {
+    models.value = await invoke("pet_model_rename", { id, name: editName.value });
+    msg.value = "已更新模型名";
+    editingId.value = "";
+  } catch (e) {
+    errMsg.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+/* ---------- 导入 ---------- */
 async function importFolder() {
   await doImport(
-    await open({ multiple: false, directory: true, title: "选择模型文件夹（含 config.json）" })
+    await open({ multiple: false, directory: true, title: "选择模型文件夹（含 img 与 config.json）" })
   );
 }
 
@@ -111,8 +159,14 @@ async function doImport(picked: string | null) {
   msg.value = "";
   errMsg.value = "";
   try {
-    const info = await invoke<{ id: string; name: string }>("pet_import_model", { path: picked });
-    msg.value = `已导入模型「${info.name}」，点“使用”启用`;
+    const info = await invoke<ImportOutcome>("pet_import_model", { path: picked });
+    if (info.deduped) {
+      msg.value = `这个模型已经导入过了（「${info.name}」），未重复导入`;
+    } else if (info.suffixed) {
+      msg.value = `已导入为「${info.name}」（同名模型已存在，自动加了编号）`;
+    } else {
+      msg.value = `已导入模型「${info.name}」，点「使用」启用`;
+    }
     await load();
   } catch (e) {
     errMsg.value = String(e).replace(/^.*Error: /, "");
@@ -152,8 +206,20 @@ onMounted(load);
   <div class="petsettings">
     <header class="phead">
       <h1>桌宠</h1>
-      <span class="sub">模型、外观与窗口行为（对标新版 BongoCat 的设置子集）</span>
+      <span class="sub">显示开关、模型与窗口外观</span>
     </header>
+
+    <!-- 显示开关（从个性化页移到这里） -->
+    <section class="glass-card">
+      <h2>显示</h2>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">显示桌宠</p>
+          <p class="rd">屏幕右下角的猫，托盘右键菜单也能开关</p>
+        </div>
+        <NSwitch :value="petVisible" @update:value="(v: boolean) => { emit('update:petVisible', v); emit('togglePet'); }" />
+      </div>
+    </section>
 
     <!-- 模型管理 -->
     <section class="glass-card">
@@ -161,21 +227,35 @@ onMounted(load);
       <div class="mlist">
         <div v-for="m in models" :key="m.id" class="mrow" :class="{ active: m.active }">
           <span class="mdot"></span>
-          <span class="mname">{{ m.name }}</span>
-          <span class="mtag">{{ m.mode === "keyboard" ? "双爪键盘" : "单手" }}</span>
-          <span v-if="m.builtin" class="mtag builtin">内置</span>
-          <span v-if="m.active" class="mtag using">使用中</span>
-          <div class="macts">
-            <NButton v-if="!m.active" size="tiny" type="primary" secondary @click="setActive(m.id)">
-              使用
-            </NButton>
-            <NPopconfirm v-if="!m.builtin" @positive-click="removeModel(m.id)">
-              <template #trigger>
-                <NButton quaternary size="tiny" type="error">删除</NButton>
-              </template>
-              删除模型「{{ m.name }}」？
-            </NPopconfirm>
-          </div>
+          <template v-if="editingId === m.id">
+            <input
+              v-model="editName"
+              class="medit"
+              maxlength="40"
+              @keyup.enter="commitRename"
+              @keyup.esc="editingId = ''"
+            />
+            <NButton size="tiny" type="primary" secondary @click="commitRename">保存</NButton>
+            <NButton size="tiny" quaternary @click="editingId = ''">取消</NButton>
+          </template>
+          <template v-else>
+            <span class="mname" :title="m.name" @click="startRename(m)">{{ m.name }}</span>
+            <span class="mtag">{{ modeLabel[m.mode] ?? m.mode }}</span>
+            <span v-if="m.builtin" class="mtag builtin">内置</span>
+            <span v-if="m.active" class="mtag using">使用中</span>
+            <div class="macts">
+              <NButton size="tiny" quaternary @click="startRename(m)">改名</NButton>
+              <NButton v-if="!m.active" size="tiny" type="primary" secondary @click="setActive(m.id)">
+                使用
+              </NButton>
+              <NPopconfirm v-if="!m.builtin" @positive-click="removeModel(m.id)">
+                <template #trigger>
+                  <NButton quaternary size="tiny" type="error">删除</NButton>
+                </template>
+                确定删除模型「{{ m.name }}」吗？磁盘上的模型文件夹也会一起删掉。
+              </NPopconfirm>
+            </div>
+          </template>
         </div>
         <p v-if="!models.length" class="empty">暂无模型</p>
       </div>
@@ -186,8 +266,15 @@ onMounted(load);
         <NButton size="small" secondary :loading="importing" @click="importZip">
           <Icon name="doc" :size="14" /> 导入 ZIP
         </NButton>
-        <span class="ihint">支持 Mver 模型包（含 config.json + img/），按键映射自动生效</span>
+        <span class="ihint">支持 Mver 模型包（img/ + config.json 或 bongocat.skin.json）</span>
       </div>
+      <p class="rd more">
+        点模型名或「改名」可以自由命名（只改显示名，不动磁盘目录）；同一个模型重复导入会被自动识别，不会装两遍。
+      </p>
+      <p class="rd more">
+        注意：内置模型是<b>原版 BongoCat 分层图</b>。「兔子洞」皮肤的美术只有 Live2D 一份
+        （Bunny.moc3），需要 Live2D 运行时才能显示，目前不在内置素材里。
+      </p>
     </section>
 
     <!-- 窗口外观 -->
@@ -196,17 +283,17 @@ onMounted(load);
       <div class="row col">
         <div class="rlabel">
           <p class="rt">缩放</p>
-          <p class="rd">30% ~ 200%</p>
+          <p class="rd">50% ~ 200%</p>
         </div>
         <NSlider
-          :value="settings?.scale ?? 100"
+          :value="localScale"
           :min="50"
           :max="200"
           :step="5"
           :format-tooltip="(v: number) => v + '%'"
           style="max-width: 320px"
-          @update:value="onScale"
-          @change="commitSliders"
+          @update:value="(v: number) => (localScale = v)"
+          @change="onScaleChange"
         />
       </div>
       <div class="row col">
@@ -215,14 +302,14 @@ onMounted(load);
           <p class="rd">30% ~ 100%</p>
         </div>
         <NSlider
-          :value="settings?.opacity ?? 100"
+          :value="localOpacity"
           :min="30"
           :max="100"
           :step="5"
           :format-tooltip="(v: number) => v + '%'"
           style="max-width: 320px"
-          @update:value="onOpacity"
-          @change="commitSliders"
+          @update:value="(v: number) => (localOpacity = v)"
+          @change="onOpacityChange"
         />
       </div>
       <div class="row">
@@ -332,6 +419,19 @@ onMounted(load);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: text;
+}
+
+.medit {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--accent-border);
+  background: var(--surface-solid);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 5px 8px;
 }
 
 .mtag {
@@ -390,6 +490,13 @@ onMounted(load);
   margin: 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.rd.more {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-faint);
 }
 
 .ok {

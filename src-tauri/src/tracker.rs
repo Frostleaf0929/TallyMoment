@@ -12,8 +12,8 @@ use chrono::Timelike;
 
 /// 空闲判定阈值：超过 60 秒无键鼠输入视为离开，停止计时
 const IDLE_THRESHOLD_MS: u32 = 60_000;
-/// 每 5 分钟做一次落库检查点，异常退出最多丢 5 分钟数据
-const CHECKPOINT_SECS: i64 = 300;
+/// 每 1 分钟做一次落库检查点，异常退出最多丢 1 分钟数据
+const CHECKPOINT_SECS: i64 = 60;
 /// 托盘状态刷新间隔（秒）
 const TRAY_REFRESH_SECS: i64 = 30;
 
@@ -315,9 +315,18 @@ fn check_reminders(app: &AppHandle, now: chrono::DateTime<chrono::Local>) {
 }
 
 fn refresh_tray(app: &AppHandle) {
+    let paused = app
+        .state::<TrackerShared>()
+        .paused
+        .load(Ordering::Relaxed);
     let minutes = today_total(app) / 60;
     if let Some(tray) = app.tray_by_id("main-tray") {
-        let _ = tray.set_tooltip(Some(format!("拾刻 · 今日已记录 {minutes} 分钟")));
+        let tip = if paused {
+            "拾刻 · 已暂停记录".to_string()
+        } else {
+            format!("拾刻 · 今日已记录 {minutes} 分钟")
+        };
+        let _ = tray.set_tooltip(Some(tip));
     }
     if let Some(item) = app.try_state::<TrayMenu>().and_then(|m| m.today.get().cloned()) {
         let _ = item.set_text(format!("今日累计 {minutes} 分钟"));

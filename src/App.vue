@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watchEffect } from "vue";
+import { computed, onMounted, onUnmounted, ref, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { darkTheme, NConfigProvider, type GlobalTheme } from "naive-ui";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { darkTheme, dateZhCN, NConfigProvider, zhCN, type GlobalTheme } from "naive-ui";
 import Icon from "./components/Icon.vue";
 import DataCard from "./components/DataCard.vue";
 import PetView from "./components/PetView.vue";
@@ -12,6 +13,7 @@ import HistoryPage from "./pages/HistoryPage.vue";
 import InsightsPage from "./pages/InsightsPage.vue";
 import TodoPage from "./pages/TodoPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
+import PersonalizePage from "./pages/PersonalizePage.vue";
 import PetSettingsPage from "./pages/PetSettingsPage.vue";
 
 // 提醒小窗/桌宠与主面板共用同一个前端入口，按窗口标签分流
@@ -26,7 +28,15 @@ try {
 // 标记到 <html>，供 theme.css 让提醒/桌宠窗体透明
 document.documentElement.dataset.mode = mode;
 
-type Tab = "today" | "history" | "insights" | "todo" | "petsettings" | "data" | "settings";
+type Tab =
+  | "today"
+  | "history"
+  | "insights"
+  | "todo"
+  | "data"
+  | "petsettings"
+  | "personalize"
+  | "settings";
 const tabs: { key: Tab; label: string; icon: string }[] = [
   { key: "today", label: "今日", icon: "clock" },
   { key: "history", label: "历史", icon: "doc" },
@@ -34,16 +44,20 @@ const tabs: { key: Tab; label: string; icon: string }[] = [
   { key: "todo", label: "待办", icon: "checklist" },
   { key: "data", label: "数据", icon: "database" },
   { key: "petsettings", label: "桌宠", icon: "cat" },
+  { key: "personalize", label: "个性化", icon: "palette" },
 ];
 const active = ref<Tab>("today");
 
-/* ---------- 个性化（主题/强调色/毛玻璃/侧栏），持久化到 localStorage ---------- */
+/* ---------- 外观（主题/强调色/毛玻璃），持久化到 localStorage ---------- */
 type ThemePref = "dark" | "light" | "system";
 const themePref = ref<ThemePref>((localStorage.getItem("ui.theme") as ThemePref) || "dark");
 const accent = ref(localStorage.getItem("ui.accent") || "indigo");
 const glass = ref(localStorage.getItem("ui.glass") !== "off");
+/** 玻璃模糊强度（px）与界面底色不透明度（%）——毛玻璃可调参数
+ *  底色默认 80%：留出一点透光，窗口特效才看得出来；调满 100% 就是传统实底观感 */
+const blur = ref(Number(localStorage.getItem("ui.blur") ?? 26));
+const bgAlpha = ref(Number(localStorage.getItem("ui.bgAlpha") ?? 80));
 const collapsed = ref(localStorage.getItem("ui.side") === "collapsed");
-const brandLang = ref(localStorage.getItem("ui.brandLang") || "both");
 const systemDark = ref(true);
 let media: MediaQueryList | undefined;
 
@@ -55,25 +69,20 @@ watchEffect(() => {
   const root = document.documentElement;
   root.dataset.theme = isDark() ? "dark" : "light";
   root.dataset.accent = accent.value;
+  root.style.setProperty("--glass-blur", `${blur.value}px`);
+  root.style.setProperty("--bg-alpha", String(bgAlpha.value / 100));
   document.body.classList.toggle("glass-off", !glass.value);
   naiveTheme.value = isDark() ? darkTheme : null;
   localStorage.setItem("ui.theme", themePref.value);
   localStorage.setItem("ui.accent", accent.value);
   localStorage.setItem("ui.glass", glass.value ? "on" : "off");
-  localStorage.setItem("ui.brandLang", brandLang.value);
-  // 窗口标题按品牌语言联动
-  const t = brandLang.value === "zh" ? "拾刻" : brandLang.value === "en" ? "TallyMoment" : "拾刻 · TallyMoment";
-  document.title = t;
-  try { getCurrentWebviewWindow().setTitle(t); } catch { /* 浏览器直开 */ }
+  localStorage.setItem("ui.blur", String(blur.value));
+  localStorage.setItem("ui.bgAlpha", String(bgAlpha.value));
 });
 
 function toggleCollapse() {
   collapsed.value = !collapsed.value;
   localStorage.setItem("ui.side", collapsed.value ? "collapsed" : "expanded");
-}
-
-function toggleGlass() {
-  glass.value = !glass.value;
 }
 
 const petVisible = ref(true);
@@ -85,39 +94,57 @@ async function togglePet() {
   }
 }
 
+/* ---------- 运行状态：记录中 / 已暂停 / 未连接 ---------- */
 const online = ref(false);
+const paused = ref(false);
 let timer: number | undefined;
+let unlistenState: UnlistenFn | undefined;
 
 async function ping() {
   try {
-    await invoke("today_report");
+    const s = await invoke<{ paused: boolean }>("tracking_state");
+    paused.value = s.paused;
     online.value = true;
   } catch {
     online.value = false;
   }
 }
 
-onMounted(() => {
+const status = computed(() => {
+  if (!online.value) return { text: "未连接", tone: "off" };
+  if (paused.value) return { text: "已暂停", tone: "paused" };
+  return { text: "记录中", tone: "live" };
+});
+
+onMounted(async () => {
   if (mode !== "main") return;
   media = window.matchMedia("(prefers-color-scheme: dark)");
   systemDark.value = media.matches;
   const onScheme = (e: MediaQueryListEvent) => (systemDark.value = e.matches);
   media.addEventListener("change", onScheme);
   ping();
-  timer = window.setInterval(ping, 10000);
+  timer = window.setInterval(ping, 5000);
+  // 托盘切暂停时即时更新，不必等下一次轮询
+  unlistenState = await listen<{ paused: boolean }>("tracking-state", (e) => {
+    paused.value = e.payload.paused;
+    online.value = true;
+  });
 });
-onUnmounted(() => clearInterval(timer));
+onUnmounted(() => {
+  clearInterval(timer);
+  unlistenState?.();
+});
 </script>
 
 <template>
-  <NConfigProvider :theme="naiveTheme">
+  <NConfigProvider :theme="naiveTheme" :locale="zhCN" :date-locale="dateZhCN">
     <ToastStack v-if="mode === 'reminder'" />
     <PetView v-else-if="mode === 'pet'" />
     <div v-else class="shell" :class="{ 'glass-off': !glass }">
       <aside class="side" :class="{ collapsed }">
         <div class="brand">
-          <span v-if="brandLang !== 'en'" class="logo">拾刻</span>
-          <span v-if="!collapsed && brandLang !== 'zh'" class="en">TallyMoment</span>
+          <span class="logo">拾刻</span>
+          <span v-if="!collapsed" class="en">TallyMoment</span>
         </div>
         <nav class="nav">
           <button
@@ -133,17 +160,17 @@ onUnmounted(() => clearInterval(timer));
           </button>
         </nav>
         <div class="side-foot">
-          <button class="nav-item" title="个性化" @click="active = 'settings'">
-            <Icon name="palette" :size="19" />
-            <span v-if="!collapsed" class="nav-label">个性化</span>
+          <button class="nav-item" title="设置" @click="active = 'settings'">
+            <Icon name="settings" :size="19" />
+            <span v-if="!collapsed" class="nav-label">设置</span>
           </button>
           <button class="nav-item" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="toggleCollapse">
             <Icon :name="collapsed ? 'expand' : 'collapse'" :size="19" />
             <span v-if="!collapsed" class="nav-label">收起</span>
           </button>
-          <div class="status" :title="online ? '记录服务正常' : '未连接'">
-            <span class="dot" :class="{ live: online }"></span>
-            <span v-if="!collapsed">{{ online ? "记录中" : "未连接" }}</span>
+          <div class="status" :class="status.tone" :title="status.text">
+            <span class="dot"></span>
+            <span v-if="!collapsed">{{ status.text }}</span>
           </div>
         </div>
       </aside>
@@ -161,10 +188,20 @@ onUnmounted(() => clearInterval(timer));
             <DataCard />
           </div>
         </div>
-        <PetSettingsPage v-show="active === 'petsettings'" />
-        <SettingsPage v-show="active === 'settings'" v-model:theme-pref="themePref"
-          v-model:accent="accent" v-model:brand-lang="brandLang" v-model:glass="glass" v-model:pet-visible="petVisible"
-          @toggle-glass="toggleGlass" @toggle-pet="togglePet" />
+        <PetSettingsPage
+          v-show="active === 'petsettings'"
+          v-model:pet-visible="petVisible"
+          @toggle-pet="togglePet"
+        />
+        <PersonalizePage
+          v-show="active === 'personalize'"
+          v-model:theme-pref="themePref"
+          v-model:accent="accent"
+          v-model:glass="glass"
+          v-model:blur="blur"
+          v-model:bg-alpha="bgAlpha"
+        />
+        <SettingsPage v-show="active === 'settings'" />
       </main>
     </div>
   </NConfigProvider>
@@ -186,13 +223,15 @@ onUnmounted(() => clearInterval(timer));
 
 body {
   margin: 0;
-  background: var(--bg);
+  /* 半透明底 + 窗口特效，才能让桌面透过窗口（此前是不透明的 #0f1116，
+     把整块客户区糊死，只剩没被 webview 覆盖的标题栏能看见亚克力） */
+  background: rgba(var(--bg-rgb), var(--bg-alpha, 1));
   transition: background 0.2s;
 }
 
 /* 毛玻璃关闭时完全实底，遮住窗口特效 */
 body.glass-off {
-  background: var(--bg);
+  background: rgb(var(--bg-rgb));
 }
 
 [data-theme="light"] {
@@ -323,9 +362,25 @@ body.glass-off {
   flex: none;
 }
 
-.status .dot.live {
+.status.live {
+  color: var(--good);
+}
+
+.status.live .dot {
   background: var(--good);
   animation: pulse 2s infinite;
+}
+
+.status.paused {
+  color: var(--warn);
+}
+
+.status.paused .dot {
+  background: var(--warn);
+}
+
+.status.off {
+  color: var(--text-faint);
 }
 
 @keyframes pulse {

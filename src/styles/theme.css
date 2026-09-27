@@ -7,6 +7,9 @@
 :root {
   /* 表面 */
   --bg: #0f1116;
+  /* 界面底色（rgb 分量，供 rgba() 拼不透明度；--bg-alpha 由个性化页写入，默认留一点透光） */
+  --bg-rgb: 15, 17, 22;
+  --bg-alpha: 0.8;
   --bg-glass: rgba(20, 24, 31, 0.58);
   --surface: rgba(255, 255, 255, 0.045);
   --surface-hover: rgba(255, 255, 255, 0.08);
@@ -52,6 +55,7 @@
 /* ---------- 浅色主题 ---------- */
 [data-theme="light"] {
   --bg: #eef0f4;
+  --bg-rgb: 238, 240, 244;
   --bg-glass: rgba(255, 255, 255, 0.6);
   --surface: rgba(255, 255, 255, 0.66);
   --surface-hover: rgba(255, 255, 255, 0.9);

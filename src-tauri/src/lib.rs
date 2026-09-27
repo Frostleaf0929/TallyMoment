@@ -12,7 +12,8 @@ use std::sync::{Mutex, OnceLock};
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    window::{Effect, EffectsBuilder},
+    Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tracker::{Db, TrackerShared, TrayMenu};
 
@@ -203,6 +204,72 @@ fn insights_report(app: tauri::AppHandle) -> Result<insights::InsightReport, Str
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
     insights::report(&conn)
+}
+
+/// 任意周期汇总（历史页：按月 / 按年 / 总计）
+#[tauri::command]
+fn period_report(
+    app: tauri::AppHandle,
+    kind: String,
+    key: String,
+) -> Result<storage::PeriodReport, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::period_report(&conn, &kind, &key)
+}
+
+/// 有数据的月份 / 年份清单
+#[tauri::command]
+fn period_index(app: tauri::AppHandle) -> Result<storage::PeriodIndex, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::period_index(&conn)
+}
+
+/// 数据目录与文件信息（设置页）
+#[tauri::command]
+fn data_info() -> Result<storage::DataInfo, String> {
+    storage::data_info()
+}
+
+/// 用系统文件管理器打开数据目录（走 Rust 侧调用，避免前端 scope 限制）
+#[tauri::command]
+fn open_data_dir(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let info = storage::data_info()?;
+    app.opener()
+        .open_path(info.dir, None::<&str>)
+        .map_err(|e| format!("打开目录失败: {e}"))
+}
+
+/// 窗口特效：acrylic / mica / blur / none（毛玻璃可调，随设置持久化）
+fn apply_window_effect(app: &tauri::AppHandle, kind: &str) -> Result<(), String> {
+    let Some(w) = app.get_webview_window("main") else {
+        return Err("主窗口不存在".into());
+    };
+    let cfg = match kind {
+        "acrylic" => Some(EffectsBuilder::new().effect(Effect::Acrylic).build()),
+        "mica" => Some(EffectsBuilder::new().effect(Effect::Mica).build()),
+        "blur" => Some(EffectsBuilder::new().effect(Effect::Blur).build()),
+        _ => None,
+    };
+    w.set_effects(cfg)
+        .map_err(|e| format!("应用窗口特效失败: {e}"))
+}
+
+#[tauri::command]
+fn set_window_effect(app: tauri::AppHandle, kind: String) -> Result<(), String> {
+    apply_window_effect(&app, &kind)?;
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::set_setting(&conn, "ui.window_effect", &kind)
+}
+
+#[tauri::command]
+fn window_effect_get(app: tauri::AppHandle) -> Result<String, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    Ok(storage::get_setting(&conn, "ui.window_effect").unwrap_or_else(|| "acrylic".into()))
 }
 
 #[tauri::command]
@@ -470,11 +537,41 @@ fn pet_models_list(app: tauri::AppHandle) -> Result<Vec<pet_settings::ModelInfo>
 
 /// 导入 Mver 模型包（文件夹或 ZIP）
 #[tauri::command]
-fn pet_import_model(app: tauri::AppHandle, path: String) -> Result<pet_settings::ModelInfo, String> {
+fn pet_import_model(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<pet_settings::ImportOutcome, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
     let models = pet_settings::models_dir(&conn);
     pet_settings::import_model_in(&models, &path)
+}
+
+/// 改模型显示名（传空或默认名 = 还原）
+#[tauri::command]
+fn pet_model_rename(
+    app: tauri::AppHandle,
+    id: String,
+    name: String,
+) -> Result<Vec<pet_settings::ModelInfo>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let models = pet_settings::models_dir(&conn);
+    pet_settings::set_model_label(&conn, &models, &id, &name)?;
+    pet_settings::list_models(&conn)
+}
+
+/// 一次性读取模型素材（base64，前端转 Blob URL），避免 asset 协议的路径/权限坑
+#[tauri::command]
+fn pet_model_assets(
+    app: tauri::AppHandle,
+    id: String,
+    mode: String,
+) -> Result<Vec<pet_settings::AssetFile>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let models = pet_settings::models_dir(&conn);
+    pet_settings::model_assets_in(&models, &id, &mode)
 }
 
 /// 切换启用模型
@@ -486,9 +583,9 @@ fn pet_model_set_active(
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
     if id != pet_settings::BUILTIN_ID {
-        let dir = pet_settings::models_dir(&conn).join(&id);
-        if !dir.join("config.json").is_file() {
-            return Err("模型不存在".into());
+        let models = pet_settings::models_dir(&conn);
+        if !pet_settings::valid_model_dir(&models, &id) {
+            return Err("模型不存在或文件不完整".into());
         }
     }
     storage::set_setting(&conn, "pet.active_model", &id)?;
@@ -583,6 +680,43 @@ fn pet_stats() -> (u64, u64) {
     input_hook::stats()
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TrackingState {
+    paused: bool,
+}
+
+/// 暂停状态的唯一入口：同步托盘勾选/提示并广播给所有窗口
+/// （此前托盘只改内存变量，界面左下角因此一直显示「记录中」）
+fn set_paused(app: &tauri::AppHandle, paused: bool) {
+    app.state::<TrackerShared>()
+        .paused
+        .store(paused, Ordering::Relaxed);
+    if let Some(p) = app.state::<TrayMenu>().pause.get() {
+        let _ = p.set_checked(paused);
+    }
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let tip = if paused {
+            "拾刻 · 已暂停记录".to_string()
+        } else {
+            let minutes = tracker::today_total(app) / 60;
+            format!("拾刻 · 今日已记录 {minutes} 分钟")
+        };
+        let _ = tray.set_tooltip(Some(tip));
+    }
+    let _ = app.emit("tracking-state", TrackingState { paused });
+}
+
+#[tauri::command]
+fn tracking_state(app: tauri::AppHandle) -> TrackingState {
+    TrackingState {
+        paused: app
+            .state::<TrackerShared>()
+            .paused
+            .load(Ordering::Relaxed),
+    }
+}
+
 /// 切换桌宠显隐（托盘与个性化页共用）
 #[tauri::command]
 fn toggle_pet(app: tauri::AppHandle) -> bool {
@@ -663,14 +797,23 @@ pub fn run() {
             pet_model_set_active,
             pet_model_delete,
             pet_model_config,
+            pet_model_rename,
+            pet_model_assets,
             close_reminder,
             import_tai,
             export_json,
             restore_json,
             pet_stats,
+            tracking_state,
             day_report,
             recent_daily,
             insights_report,
+            period_report,
+            period_index,
+            data_info,
+            open_data_dir,
+            set_window_effect,
+            window_effect_get,
             toggle_pet
         ])
         .setup(|app| {
@@ -701,12 +844,11 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
                     "pause" => {
-                        let shared = app.state::<TrackerShared>();
-                        let new_state = !shared.paused.load(Ordering::Relaxed);
-                        shared.paused.store(new_state, Ordering::Relaxed);
-                        if let Some(p) = app.state::<TrayMenu>().pause.get() {
-                            let _ = p.set_checked(new_state);
-                        }
+                        let paused = !app
+                            .state::<TrackerShared>()
+                            .paused
+                            .load(Ordering::Relaxed);
+                        set_paused(app, paused);
                     }
                     "quit" => app.exit(0),
                     "pet" => {
@@ -741,15 +883,22 @@ pub fn run() {
                 .build(app)?;
 
             // 桌宠窗：读取持久化设置（缩放/位置/置顶/穿透）
-            let pet_s = {
+            let (pet_s, effect_kind) = {
                 let db = app.state::<Db>();
                 let conn = db
                     .0
                     .lock()
                     .map_err(|_| "数据库锁不可用")
                     .unwrap_or_else(|_| panic!("db lock"));
-                pet_settings::load(&conn)
+                (
+                    pet_settings::load(&conn),
+                    storage::get_setting(&conn, "ui.window_effect"),
+                )
             };
+            // 应用持久化的窗口特效（毛玻璃）
+            if let Some(kind) = effect_kind {
+                let _ = apply_window_effect(app.handle(), &kind);
+            }
             let k = pet_s.scale / 100.0;
             let (mut px, mut py) = (-1.0, -1.0);
             if pet_s.pos_x >= 0.0 && pet_s.pos_y >= 0.0 {

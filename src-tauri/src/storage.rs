@@ -104,6 +104,9 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("打开数据库失败: {e}"))?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| format!("设置 WAL 失败: {e}"))?;
+    // 崩溃安全优先：每次提交都真正落盘（落库频率低，性能影响可忽略）
+    conn.pragma_update(None, "synchronous", "FULL")
+        .map_err(|e| format!("设置 synchronous 失败: {e}"))?;
     conn.pragma_update(None, "busy_timeout", 5000)
         .map_err(|e| format!("设置 busy_timeout 失败: {e}"))?;
     conn.pragma_update(None, "foreign_keys", "ON")
@@ -1225,6 +1228,34 @@ pub fn input_daily(conn: &Connection, days: i32) -> Result<Vec<InputDay>, String
     Ok(out)
 }
 
+/// 最近 N 天各小时累计（洞察页「作息分布」用，聚合到 24 小时）
+pub fn recent_hourly(conn: &Connection, days: i32) -> Result<Vec<HourSlice>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT h.hour, a.name, SUM(h.seconds)
+             FROM hourly_stats h JOIN apps a ON a.id = h.app_id
+             WHERE h.date IN (
+                 SELECT DISTINCT date FROM hourly_stats ORDER BY date DESC LIMIT ?1
+             )
+             GROUP BY h.hour, h.app_id",
+        )
+        .map_err(|e| format!("查询作息分布失败: {e}"))?;
+    let rows = stmt
+        .query_map([days], |r| {
+            Ok(HourSlice {
+                hour: r.get(0)?,
+                app_name: r.get(1)?,
+                seconds: r.get(2)?,
+            })
+        })
+        .map_err(|e| format!("查询作息分布失败: {e}"))?;
+    let mut out: Vec<HourSlice> = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取作息分布失败: {e}"))?);
+    }
+    Ok(out)
+}
+
 /// 最近 N 天每日总时长（旧→新）
 pub fn recent_daily(conn: &Connection, days: i32) -> Result<Vec<(String, i64)>, String> {
     let mut stmt = conn
@@ -1242,6 +1273,243 @@ pub fn recent_daily(conn: &Connection, days: i32) -> Result<Vec<(String, i64)>, 
     }
     out.reverse();
     Ok(out)
+}
+
+// ---------- 周期报表（历史页：按月 / 按年 / 总计） ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeriodBucket {
+    /// 显示标签（月视图=日、年视图=月、总视图=年）
+    pub label: String,
+    /// 该桶的首日日期（用于下钻查看某天）
+    pub date: String,
+    pub seconds: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeriodReport {
+    /// month | year | all
+    pub kind: String,
+    pub key: String,
+    pub title: String,
+    pub total_seconds: i64,
+    pub app_count: usize,
+    pub active_days: i64,
+    pub keys: i64,
+    pub clicks: i64,
+    pub apps: Vec<AppUsage>,
+    pub hourly: Vec<HourSlice>,
+    pub buckets: Vec<PeriodBucket>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeriodIndex {
+    /// 有数据的月份，新→旧，如 "2026-09"
+    pub months: Vec<String>,
+    pub years: Vec<String>,
+}
+
+/// 可用周期清单（供历史页下拉选择）
+pub fn period_index(conn: &Connection) -> Result<PeriodIndex, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT substr(date, 1, 7) FROM daily_stats ORDER BY 1 DESC",
+        )
+        .map_err(|e| format!("查询月份清单失败: {e}"))?;
+    let months: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("查询月份清单失败: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+    let years = months
+        .iter()
+        .filter_map(|m| m.split('-').next().map(|s| s.to_string()))
+        .fold(Vec::<String>::new(), |mut acc, y| {
+            if !acc.contains(&y) {
+                acc.push(y);
+            }
+            acc
+        });
+    Ok(PeriodIndex { months, years })
+}
+
+fn period_prefix(kind: &str, key: &str) -> Result<String, String> {
+    match kind {
+        "month" => {
+            let ok = key.len() == 7 && key.as_bytes()[4] == b'-';
+            if !ok {
+                return Err("月份格式需为 YYYY-MM".into());
+            }
+            Ok(format!("{key}-%"))
+        }
+        "year" => {
+            let ok = key.len() == 4 && key.chars().all(|c| c.is_ascii_digit());
+            if !ok {
+                return Err("年份格式需为 YYYY".into());
+            }
+            Ok(format!("{key}-%"))
+        }
+        "all" => Ok("%".into()),
+        _ => Err("周期类型需为 month / year / all".into()),
+    }
+}
+
+/// 任意周期的汇总：区间总时长 + 应用排行 + 24 小时分布 + 趋势桶
+pub fn period_report(conn: &Connection, kind: &str, key: &str) -> Result<PeriodReport, String> {
+    let prefix = period_prefix(kind, key)?;
+
+    let mut app_stmt = conn
+        .prepare(
+            "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds)
+             FROM daily_stats d JOIN apps a ON a.id = d.app_id
+             WHERE d.date LIKE ?1
+             GROUP BY d.app_id ORDER BY 3 DESC LIMIT 60",
+        )
+        .map_err(|e| format!("查询周期应用排行失败: {e}"))?;
+    let apps: Vec<AppUsage> = app_stmt
+        .query_map([&prefix], |r| {
+            Ok(AppUsage {
+                name: r.get(0)?,
+                display_name: r.get(1)?,
+                seconds: r.get(2)?,
+            })
+        })
+        .map_err(|e| format!("查询周期应用排行失败: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut hour_stmt = conn
+        .prepare(
+            "SELECT h.hour, a.name, SUM(h.seconds)
+             FROM hourly_stats h JOIN apps a ON a.id = h.app_id
+             WHERE h.date LIKE ?1
+             GROUP BY h.hour, h.app_id",
+        )
+        .map_err(|e| format!("查询周期时段分布失败: {e}"))?;
+    let hourly: Vec<HourSlice> = hour_stmt
+        .query_map([&prefix], |r| {
+            Ok(HourSlice {
+                hour: r.get(0)?,
+                app_name: r.get(1)?,
+                seconds: r.get(2)?,
+            })
+        })
+        .map_err(|e| format!("查询周期时段分布失败: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // 趋势桶：月视图按天、年视图按月、总计按年
+    let group_expr = match kind {
+        "month" => "d.date",
+        "year" => "substr(d.date, 1, 7)",
+        _ => "substr(d.date, 1, 4)",
+    };
+    let bucket_sql = format!(
+        "SELECT {group_expr} AS k, MIN(d.date), SUM(d.seconds)
+         FROM daily_stats d WHERE d.date LIKE ?1 GROUP BY k ORDER BY k"
+    );
+    let mut bucket_stmt = conn
+        .prepare(&bucket_sql)
+        .map_err(|e| format!("查询周期趋势失败: {e}"))?;
+    let buckets: Vec<PeriodBucket> = bucket_stmt
+        .query_map([&prefix], |r| {
+            let k: String = r.get(0)?;
+            let date: String = r.get(1)?;
+            Ok(PeriodBucket {
+                label: if kind == "month" {
+                    k.get(8..).unwrap_or(&k).trim_start_matches('0').to_string()
+                } else if kind == "year" {
+                    k.get(5..).unwrap_or(&k).to_string()
+                } else {
+                    k.clone()
+                },
+                date,
+                seconds: r.get(2)?,
+            })
+        })
+        .map_err(|e| format!("查询周期趋势失败: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let (keys, clicks) = conn
+        .query_row(
+            "SELECT COALESCE(SUM(key_count), 0), COALESCE(SUM(click_count), 0)
+             FROM input_stats WHERE date LIKE ?1",
+            [&prefix],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .unwrap_or((0, 0));
+    let active_days: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT date) FROM daily_stats WHERE date LIKE ?1",
+            [&prefix],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    let total_seconds = apps.iter().map(|a| a.seconds).sum();
+    let title = match kind {
+        "month" => {
+            let (y, m) = key.split_once('-').unwrap_or((key, ""));
+            format!("{y} 年 {} 月", m.trim_start_matches('0'))
+        }
+        "year" => format!("{key} 年"),
+        _ => "全部时间".into(),
+    };
+    Ok(PeriodReport {
+        kind: kind.into(),
+        key: key.into(),
+        title,
+        total_seconds,
+        app_count: apps.len(),
+        active_days,
+        keys,
+        clicks,
+        apps,
+        hourly,
+        buckets,
+    })
+}
+
+/// 数据目录与文件信息（设置页展示，回答「数据存在哪」）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataInfo {
+    pub dir: String,
+    pub db_path: String,
+    pub db_bytes: u64,
+    pub wal_bytes: u64,
+    pub fallback: bool,
+    pub exists: bool,
+}
+
+pub fn data_info() -> Result<DataInfo, String> {
+    let db_path = resolve_db_path()?;
+    let dir = db_path
+        .parent()
+        .ok_or("数据目录异常")?
+        .to_string_lossy()
+        .to_string();
+    let size = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    let wal = db_path.with_extension("db-wal");
+    let appdata = std::env::var("APPDATA")
+        .map(|d| PathBuf::from(d).join("TallyMoment").join("Data"))
+        .ok();
+    let fallback = appdata
+        .as_ref()
+        .map(|a| db_path.starts_with(a))
+        .unwrap_or(false);
+    Ok(DataInfo {
+        exists: db_path.is_file(),
+        db_bytes: size(&db_path),
+        wal_bytes: size(&wal),
+        db_path: db_path.to_string_lossy().to_string(),
+        dir,
+        fallback,
+    })
 }
 
 /// 解析 Tai 的时间字段 -> (日期 "YYYY-MM-DD", 小时)

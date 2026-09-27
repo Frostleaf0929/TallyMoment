@@ -48,6 +48,8 @@ pub struct InsightReport {
     pub daily: Vec<(String, i64)>,
     pub input_daily: Vec<storage::InputDay>,
     pub spans: Vec<SpanDay>,
+    /// 近 14 天按小时聚合的使用时长（作息分布图）
+    pub hourly14: Vec<storage::HourSlice>,
     pub flow_seconds: i64,
     pub focused_seconds: i64,
     pub fragmented_seconds: i64,
@@ -138,6 +140,7 @@ pub fn report(conn: &Connection) -> Result<InsightReport, String> {
 
     let daily = storage::recent_daily(conn, 14)?;
     let input_daily = storage::input_daily(conn, 14)?;
+    let hourly14 = storage::recent_hourly(conn, 14)?;
 
     // 近 14 天活跃区间（首末活动时刻）
     let all_segments = storage::today_segments(conn, week_ago, day_end)?;
@@ -182,6 +185,7 @@ pub fn report(conn: &Connection) -> Result<InsightReport, String> {
         daily,
         input_daily,
         spans,
+        hourly14,
         flow_seconds,
         focused_seconds,
         fragmented_seconds,

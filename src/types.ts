@@ -44,6 +44,42 @@ export interface DailyTotal {
   seconds: number;
 }
 
+/** 周期报表（历史页 按月/按年/总计） */
+export interface PeriodBucket {
+  label: string;
+  date: string;
+  seconds: number;
+}
+
+export interface PeriodReport {
+  kind: "month" | "year" | "all";
+  key: string;
+  title: string;
+  totalSeconds: number;
+  appCount: number;
+  activeDays: number;
+  keys: number;
+  clicks: number;
+  apps: AppUsage[];
+  hourly: HourSlice[];
+  buckets: PeriodBucket[];
+}
+
+export interface PeriodIndex {
+  months: string[];
+  years: string[];
+}
+
+/** 数据目录与文件信息（设置页） */
+export interface DataInfo {
+  dir: string;
+  dbPath: string;
+  dbBytes: number;
+  walBytes: number;
+  fallback: boolean;
+  exists: boolean;
+}
+
 export interface Insight {
   title: string;
   analysis: string;
@@ -72,6 +108,8 @@ export interface InsightReport {
   daily: { date: string; seconds: number }[];
   inputDaily: { date: string; keys: number; clicks: number }[];
   spans: SpanDay[];
+  /** 近 14 天按小时的累计使用时长 */
+  hourly14: HourSlice[];
   flowSeconds: number;
   focusedSeconds: number;
   fragmentedSeconds: number;

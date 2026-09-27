@@ -1,24 +1,31 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { fmtDuration } from "../lib/format";
 
-// 兔子洞 keyboard 模式（内置）或已导入的 Mver 模型：分层渲染 + 按键矩阵映射
+// 内置原版 BongoCat 分层素材，或已导入的 Mver 模型：分层渲染 + 按键矩阵映射
 interface PetSettingsView {
   scale: number;
   opacity: number;
   mirror: boolean;
   activeModel: string;
   activeModelDir: string | null;
-  mode: "keyboard" | "standard";
+  mode: "keyboard" | "gamepad" | "standard";
+}
+
+interface AssetFile {
+  rel: string;
+  mime: string;
+  data: string;
 }
 
 const settings = ref<PetSettingsView | null>(null);
 const seconds = ref(0);
 const keys = ref(0);
 const clicks = ref(0);
+const loadErr = ref("");
 
 const layerBg = ref<string | null>(null);
 const layerCat = ref<string | null>(null);
@@ -26,12 +33,18 @@ const layerFace = ref<string | null>(null);
 const layerLeft = ref<string | null>(null);
 const layerRight = ref<string | null>(null);
 
+/** 自定义模型素材：rel -> Blob URL（Rust 直读，不走 asset 协议） */
+const assetUrls = new Map<string, string>();
+
 // 按键矩阵（行号 = 帧编号，行内 = VK 码）
 let leftMatrix: number[][] = [];
 let rightMatrix: number[][] = [];
 // 抬爪帧的文件名（keyboard 模式为 leftup/rightup；standard 模式用 0 号帧）
 let leftUpName = "leftup";
 let rightUpName = "rightup";
+// 当前左右手帧的文件名前缀（rel 路径，用于换帧）
+let leftPrefix: string | null = null;
+let rightPrefix: string | null = null;
 
 let unlistenInput: UnlistenFn | undefined;
 let unlistenSettings: UnlistenFn | undefined;
@@ -55,100 +68,148 @@ async function loadSettings() {
   try {
     const s = await invoke<PetSettingsView>("pet_settings_get");
     settings.value = s;
-    await buildModel(s.activeModel, s.activeModelDir, s.mode);
-  } catch {
-    /* 忽略 */
+    await buildModel(s.activeModel, s.mode);
+  } catch (e) {
+    loadErr.value = String(e);
   }
 }
 
-async function buildModel(id: string, dir: string | null, mode: "keyboard" | "standard") {
-  if (id === "builtin" || !dir) {
-    layerBg.value = "/pet/kb/bg.png";
-    layerCat.value = "/pet/kb/cat.png";
-    layerFace.value = "/pet/kb/face/0.png";
-    layerLeft.value = "/pet/kb/lefthand/leftup.png";
-    layerRight.value = "/pet/kb/righthand/rightup.png";
-    leftUpName = "leftup";
-    rightUpName = "rightup";
-    leftMatrix = [
-      [17],
-      [16],
-      [82],
-    ];
-    rightMatrix = [
-      [40],
-      [37],
-      [39],
-      [38],
-    ];
-    try {
-      const cfg = await fetch("/pet/kb/config.json").then((r) => r.json());
+/** base64 -> Blob URL */
+function toBlobUrl(asset: AssetFile): string {
+  const bin = atob(asset.data);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: asset.mime }));
+}
+
+function revokeAssets() {
+  for (const url of assetUrls.values()) URL.revokeObjectURL(url);
+  assetUrls.clear();
+}
+
+/** 内置素材：随前端打包，直接静态路径 */
+function buildBuiltin() {
+  assetUrls.clear();
+  layerBg.value = "/pet/kb/bg.png";
+  layerCat.value = "/pet/kb/cat.png";
+  layerFace.value = "/pet/kb/face/0.png";
+  layerLeft.value = "/pet/kb/lefthand/leftup.png";
+  layerRight.value = "/pet/kb/righthand/rightup.png";
+  leftPrefix = "/pet/kb/lefthand/";
+  rightPrefix = "/pet/kb/righthand/";
+  leftUpName = "leftup";
+  rightUpName = "rightup";
+  leftMatrix = [
+    [17],
+    [16],
+    [82],
+  ];
+  rightMatrix = [
+    [40],
+    [37],
+    [39],
+    [38],
+  ];
+  fetch("/pet/kb/config.json")
+    .then((r) => r.json())
+    .then((cfg) => {
       leftMatrix = cfg?.keyboard?.lefthand ?? leftMatrix;
       rightMatrix = cfg?.keyboard?.righthand ?? rightMatrix;
-    } catch {
+    })
+    .catch(() => {
       /* 用默认矩阵 */
-    }
+    });
+}
+
+async function buildModel(id: string, mode: PetSettingsView["mode"]) {
+  loadErr.value = "";
+  if (id === "builtin") {
+    buildBuiltin();
     return;
   }
-
-  // 自定义模型：经 asset 协议读取
-  const f = (rel: string) => convertFileSrc(`${dir}${dir.endsWith("/") ? "" : "/"}${rel}`);
   try {
-    const cfg = await invoke<Record<string, any>>("pet_model_config", { id });
-    if (mode === "keyboard") {
-      layerBg.value = f("img/keyboard/bg.png");
-      layerCat.value = f("img/keyboard/cat.png");
-      layerFace.value = f("img/keyboard/face/0.png");
-      leftUpName = "leftup";
-      rightUpName = "rightup";
-      layerLeft.value = f("img/keyboard/lefthand/leftup.png");
-      layerRight.value = f("img/keyboard/righthand/rightup.png");
-      leftMatrix = cfg?.keyboard?.lefthand ?? [];
-      rightMatrix = cfg?.keyboard?.righthand ?? [];
-    } else {
-      layerBg.value = null;
-      layerCat.value = f("img/standard/cat.png");
-      layerFace.value = f("img/standard/face/0.png");
+    const files = await invoke<AssetFile[]>("pet_model_assets", { id, mode });
+    revokeAssets();
+    for (const f of files) assetUrls.set(f.rel, toBlobUrl(f));
+    const url = (rel: string) => assetUrls.get(rel) ?? null;
+    const cfg = await invoke<Record<string, unknown>>("pet_model_config", { id });
+
+    if (mode === "standard") {
+      layerBg.value = url("img/standard/mousebg.png");
+      layerCat.value = url("img/standard/cat.png");
+      layerFace.value = url("img/standard/face/0.png");
+      layerLeft.value = url("img/standard/hand/0.png");
+      layerRight.value = null;
+      leftPrefix = "img/standard/hand/";
+      rightPrefix = null;
       leftUpName = "0";
       rightUpName = "0";
-      layerLeft.value = f("img/standard/hand/0.png");
-      layerRight.value = null;
-      leftMatrix = cfg?.standard?.hand ?? [];
+      leftMatrix = (cfg as any)?.standard?.hand ?? [];
       rightMatrix = [];
+    } else {
+      const m = mode === "gamepad" ? "gamepad" : "keyboard";
+      layerBg.value = url(`img/${m}/bg.png`);
+      layerCat.value = url(`img/${m}/cat.png`);
+      layerFace.value = url(`img/${m}/face/0.png`);
+      layerLeft.value = url(`img/${m}/lefthand/leftup.png`) ?? url(`img/${m}/lefthand/0.png`);
+      layerRight.value = url(`img/${m}/righthand/rightup.png`) ?? url(`img/${m}/righthand/0.png`);
+      leftPrefix = `img/${m}/lefthand/`;
+      rightPrefix = `img/${m}/righthand/`;
+      leftUpName = assetUrls.has(`img/${m}/lefthand/leftup.png`) ? "leftup" : "0";
+      rightUpName = assetUrls.has(`img/${m}/righthand/rightup.png`) ? "rightup" : "0";
+      leftMatrix = (cfg as any)?.[m]?.lefthand ?? (cfg as any)?.keyboard?.lefthand ?? [];
+      rightMatrix = (cfg as any)?.[m]?.righthand ?? (cfg as any)?.keyboard?.righthand ?? [];
     }
-  } catch {
-    /* 回退内置 */
-    layerBg.value = "/pet/kb/bg.png";
-    layerCat.value = "/pet/kb/cat.png";
-    layerFace.value = "/pet/kb/face/0.png";
+    if (!layerCat.value && !layerLeft.value) {
+      loadErr.value = "该模型没有可用的图片素材，已回退内置模型";
+      buildBuiltin();
+    }
+  } catch (e) {
+    loadErr.value = String(e).replace(/^.*Error: /, "");
+    buildBuiltin();
   }
+}
+
+/** 换帧：只在 File 存在时才切换，避免出现破图 */
+function setFrame(
+  which: "left" | "right",
+  frame: string
+) {
+  const prefix = which === "left" ? leftPrefix : rightPrefix;
+  if (!prefix) return;
+  const next = `${prefix}${frame}.png`;
+  if (assetUrls.size > 0) {
+    // 自定义模型：素材缺失就保持当前帧
+    const url = assetUrls.get(next);
+    if (!url) return;
+    if (which === "left") layerLeft.value = url;
+    else layerRight.value = url;
+    return;
+  }
+  // 内置素材：静态路径，先探测存在性再换，避免破图
+  const probe = new Image();
+  probe.onload = () => {
+    if (which === "left") layerLeft.value = next;
+    else layerRight.value = next;
+  };
+  probe.src = next;
 }
 
 function pressLeft(frame: string) {
-  layerLeft.value =
-    layerLeft.value && layerLeft.value.includes("/")
-      ? layerLeft.value.replace(/[^/]+\.png$/, `${frame}.png`)
-      : layerLeft.value;
+  setFrame("left", frame);
   if (revertTimer) clearTimeout(revertTimer);
   revertTimer = window.setTimeout(() => {
-    layerLeft.value =
-      layerLeft.value?.replace(/[^/]+\.png$/, `${leftUpName}.png`) ?? layerLeft.value;
-    layerRight.value =
-      layerRight.value?.replace(/[^/]+\.png$/, `${rightUpName}.png`) ?? layerRight.value;
+    setFrame("left", leftUpName);
+    setFrame("right", rightUpName);
   }, 260);
 }
 
 function pressRight(frame: string) {
-  layerRight.value =
-    layerRight.value && layerRight.value.includes("/")
-      ? layerRight.value.replace(/[^/]+\.png$/, `${frame}.png`)
-      : layerRight.value;
+  setFrame("right", frame);
   if (revertTimer) clearTimeout(revertTimer);
   revertTimer = window.setTimeout(() => {
-    layerLeft.value =
-      layerLeft.value?.replace(/[^/]+\.png$/, `${leftUpName}.png`) ?? layerLeft.value;
-    layerRight.value =
-      layerRight.value?.replace(/[^/]+\.png$/, `${rightUpName}.png`) ?? layerRight.value;
+    setFrame("left", leftUpName);
+    setFrame("right", rightUpName);
   }, 260);
 }
 
@@ -213,17 +274,6 @@ function onMouseUp() {
 }
 
 onMounted(async () => {
-  // 预加载内置帧
-  [
-    "/pet/kb/bg.png",
-    "/pet/kb/cat.png",
-    "/pet/kb/face/0.png",
-    "/pet/kb/lefthand/leftup.png",
-    "/pet/kb/righthand/rightup.png",
-  ].forEach((src) => {
-    const img = new Image();
-    img.src = src;
-  });
   await loadSettings();
   refresh();
   pollTimer = window.setInterval(refresh, 5000);
@@ -241,6 +291,7 @@ onUnmounted(() => {
   unlistenSettings?.();
   clearInterval(pollTimer);
   if (revertTimer) clearTimeout(revertTimer);
+  revokeAssets();
   window.removeEventListener("mouseup", onMouseUp);
 });
 </script>
@@ -260,6 +311,7 @@ onUnmounted(() => {
       <span title="自启动以来键入次数">{{ keys }} 键</span>
       <span class="sep">·</span>
       <span title="自启动以来点击次数">{{ clicks }} 击</span>
+      <span v-if="loadErr" class="sep" :title="loadErr">· 模型异常</span>
     </div>
   </div>
 </template>

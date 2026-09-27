@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import * as echarts from "echarts";
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { InsightReport } from "../types";
 import { fmtDuration } from "../lib/format";
 import Icon from "../components/Icon.vue";
+import DayBars from "../components/DayBars.vue";
 
 const report = ref<InsightReport | null>(null);
 const loading = ref(true);
@@ -12,12 +13,6 @@ const renderErr = ref("");
 
 const chartEl = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
-
-const stateLabel: Record<string, string> = {
-  flow: "心流",
-  focused: "专注",
-  fragmented: "碎片",
-};
 
 function fakeReport(): InsightReport {
   const now = Math.floor(Date.now() / 1000);
@@ -29,17 +24,22 @@ function fakeReport(): InsightReport {
   const daily: { date: string; seconds: number }[] = [];
   const inputDaily: { date: string; keys: number; clicks: number }[] = [];
   const spans: { date: string; firstTs: number; lastTs: number }[] = [];
+  const hourly14: { hour: number; appName: string; seconds: number }[] = [];
   for (let i = 13; i >= 0; i--) {
     const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
     daily.push({ date: d, seconds: 3000 + Math.round(Math.sin(i) * 800) });
     inputDaily.push({ date: d, keys: 800 + i * 60, clicks: 300 + i * 20 });
     spans.push({ date: d, firstTs: now - i * 86400000 - 30000, lastTs: now - i * 86400000 + 40000 });
   }
+  for (let h = 8; h < 22; h++) {
+    hourly14.push({ hour: h, appName: "zcode.exe", seconds: 1800 });
+  }
   return {
     blocks,
     daily,
     inputDaily,
     spans,
+    hourly14,
     flowSeconds: 1800,
     focusedSeconds: 500,
     fragmentedSeconds: 150,
@@ -128,6 +128,54 @@ function renderChart() {
   );
 }
 
+const HOURS = Array.from({ length: 24 }, (_, i) => `${i}`);
+
+/** 今日各小时按推断状态堆叠（粗粒度，替代原来的细条纹时间线） */
+const stateBars = computed(() => {
+  const flow = new Array(24).fill(0);
+  const focused = new Array(24).fill(0);
+  const fragmented = new Array(24).fill(0);
+  for (const b of report.value?.blocks ?? []) {
+    // 块内可能含空闲间隙：按活跃占比折算，避免虚高
+    const ratio = b.span > 0 ? Math.min(1, b.seconds / b.span) : 1;
+    let cur = b.startTs;
+    while (cur < b.endTs) {
+      const end = Math.min(Math.floor(cur / 3600) * 3600 + 3600, b.endTs);
+      const minutes = ((end - cur) / 60) * ratio;
+      const h = new Date(cur * 1000).getHours();
+      if (b.state === "flow") flow[h] += minutes;
+      else if (b.state === "focused") focused[h] += minutes;
+      else fragmented[h] += minutes;
+      cur = end;
+    }
+  }
+  const r = (a: number[]) => a.map((v) => Math.round(v));
+  return {
+    labels: HOURS,
+    series: [
+      { name: "心流", color: "#7b84ec", data: r(flow) },
+      { name: "专注", color: "#7d92cf", data: r(focused) },
+      { name: "碎片", color: "#d3a95e", data: r(fragmented) },
+    ],
+  };
+});
+
+/** 近 14 天作息分布：按小时累计（替代原来的每日活跃带细条） */
+const hourBars = computed(() => {
+  const arr = new Array(24).fill(0);
+  for (const s of report.value?.hourly14 ?? []) arr[s.hour] += s.seconds / 60;
+  return {
+    labels: HOURS,
+    series: [
+      {
+        name: "近 14 天累计",
+        color: "rgba(123,132,236,0.75)",
+        data: arr.map((v) => Math.round(v)),
+      },
+    ],
+  };
+});
+
 function onResize() {
   chart?.resize();
 }
@@ -147,37 +195,6 @@ onUnmounted(() => {
   chart = null;
 });
 
-const dayStart = () => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return Math.floor(d.getTime() / 1000);
-};
-const blocksWithPos = () =>
-  (report.value?.blocks ?? []).map((b) => ({
-    ...b,
-    left: ((b.startTs - dayStart()) / 86400) * 100,
-    width: Math.max(0.4, ((b.endTs - b.startTs) / 86400) * 100),
-    tip: `${hhmm(b.startTs)}–${hhmm(b.endTs)} · ${b.apps
-      .map((a) => a.replace(/\.exe$/i, ""))
-      .join("、")} · ${fmtDuration(b.span)} · ${stateLabel[b.state] ?? b.state}`,
-  }));
-const nowPct = () => ((Date.now() / 1000 - dayStart()) / 86400) * 100;
-
-function hhmm(ts: number): string {
-  return new Date(ts * 1000).toTimeString().slice(0, 5);
-}
-
-const spanRows = () =>
-  (report.value?.spans ?? []).map((s) => {
-    const d0 = Math.floor(new Date(s.date + "T00:00:00").getTime() / 1000);
-    return {
-      date: s.date,
-      label: s.date.slice(5).replace("-", "/"),
-      left: ((s.firstTs - d0) / 86400) * 100,
-      width: Math.max(0.5, ((s.lastTs - s.firstTs) / 86400) * 100),
-      tip: `${hhmm(s.firstTs)} – ${hhmm(s.lastTs)}`,
-    };
-  });
 </script>
 
 <template>
@@ -208,31 +225,13 @@ const spanRows = () =>
       </div>
     </section>
 
-    <!-- 心流时间线 -->
+    <!-- 今日状态分布（按小时） -->
     <section class="glass-card wide">
-      <h2>今日专注块时间线（按推断状态着色）</h2>
-      <div class="flow-strip">
-        <div
-          v-for="b in blocksWithPos()"
-          :key="b.startTs"
-          class="fblock"
-          :class="b.state"
-          :style="{ left: b.left + '%', width: b.width + '%' }"
-          :title="b.tip"
-        ></div>
-        <div class="nowline" :style="{ left: nowPct() + '%' }"></div>
-      </div>
-      <div class="ruler">
-        <span v-for="t in [0, 4, 8, 12, 16, 20, 24]" :key="t" class="tick" :style="{ left: (t / 24) * 100 + '%' }">
-          {{ t }}时
-        </span>
-      </div>
-      <div class="legend">
-        <span><i class="ldot" style="background: var(--accent)"></i>心流</span>
-        <span><i class="ldot" style="background: var(--info)"></i>专注</span>
-        <span><i class="ldot" style="background: var(--warn)"></i>碎片</span>
-        <span class="hint">块 = 间隔不足 5 分钟的使用归并；无色 = 未使用</span>
-      </div>
+      <h2>今日各小时状态（按推断状态堆叠）</h2>
+      <DayBars :labels="stateBars.labels" :series="stateBars.series" />
+      <p class="hint">
+        块 = 间隔不足 5 分钟的使用归并；心流/专注/碎片为本地规则推断，不是精确值。
+      </p>
     </section>
 
     <!-- 使用频率 -->
@@ -241,23 +240,11 @@ const spanRows = () =>
       <div ref="chartEl" class="chart"></div>
     </section>
 
-    <!-- 作息带 -->
+    <!-- 作息分布 -->
     <section class="glass-card wide">
-      <h2>使用区间 · 每日活跃带（首末活动时刻）</h2>
-      <div class="spans">
-        <div v-for="s in spanRows()" :key="s.date" class="srow">
-          <span class="sdate">{{ s.label }}</span>
-          <div class="strack">
-            <div class="sbar" :style="{ left: s.left + '%', width: s.width + '%' }" :title="s.tip"></div>
-          </div>
-        </div>
-        <p v-if="!(report?.spans ?? []).length" class="empty">还没有足够数据</p>
-      </div>
-      <div class="ruler">
-        <span v-for="t in [0, 4, 8, 12, 16, 20, 24]" :key="t" class="tick" :style="{ left: (t / 24) * 100 + '%' }">
-          {{ t }}时
-        </span>
-      </div>
+      <h2>作息分布 · 近 14 天按小时累计</h2>
+      <DayBars :labels="hourBars.labels" :series="hourBars.series" />
+      <p class="hint">一眼看出你最常在哪些时段用电脑，适合用来安排需要专注的时段。</p>
     </section>
 
     <!-- 分析与建议 -->

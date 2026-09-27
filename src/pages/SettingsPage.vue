@@ -1,36 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { onMounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { NSwitch } from "naive-ui";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import Icon from "../components/Icon.vue";
 
-type ThemePref = "dark" | "light" | "system";
-
-const props = defineProps<{
-  themePref: ThemePref;
-  accent: string;
-  glass: boolean;
-  petVisible: boolean;
-  brandLang: string;
-}>();
-
-const emit = defineEmits<{
-  (e: "update:themePref", v: ThemePref): void;
-  (e: "update:accent", v: string): void;
-  (e: "update:glass", v: boolean): void;
-  (e: "update:petVisible", v: boolean): void;
-  (e: "toggleGlass"): void;
-  (e: "togglePet"): void;
-  (e: "update:brandLang", v: string): void;
-}>();
-
-const themes: { key: ThemePref; label: string; icon: string }[] = [
-  { key: "dark", label: "深色", icon: "moon" },
-  { key: "light", label: "浅色", icon: "sun" },
-  { key: "system", label: "跟随系统", icon: "settings" },
-];
+interface DataInfo {
+  dir: string;
+  dbPath: string;
+  dbBytes: number;
+  walBytes: number;
+  fallback: boolean;
+  exists: boolean;
+}
 
 const autoStart = ref(false);
+const data = ref<DataInfo | null>(null);
+const msg = ref("");
 
 async function toggleAutoStart(v: boolean) {
   try {
@@ -42,120 +27,98 @@ async function toggleAutoStart(v: boolean) {
   }
 }
 
+async function openDataDir() {
+  msg.value = "";
+  try {
+    await invoke("open_data_dir");
+  } catch (e) {
+    msg.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+function fmtSize(bytes: number): string {
+  if (bytes <= 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
 onMounted(async () => {
   try {
     autoStart.value = await isEnabled();
   } catch {
     autoStart.value = false;
   }
+  try {
+    data.value = await invoke<DataInfo>("data_info");
+  } catch {
+    /* 忽略 */
+  }
 });
-
-const brandLang = computed({
-  get: () => props.brandLang as string,
-  set: (v: string) => emit("update:brandLang", v),
-});
-
-const brandOptions = [
-  { key: "zh", label: "中文 · 拾刻" },
-  { key: "en", label: "英文 · TallyMoment" },
-  { key: "both", label: "双语 · 拾刻 TallyMoment" },
-];
-
-const accents: { key: string; color: string; label: string }[] = [
-  { key: "indigo", color: "#7b84ec", label: "靛蓝" },
-  { key: "teal", color: "#58b3c4", label: "青" },
-  { key: "green", color: "#6fb59a", label: "薄荷" },
-  { key: "violet", color: "#a08fe0", label: "紫藤" },
-  { key: "amber", color: "#d3a35e", label: "琥珀" },
-  { key: "rose", color: "#d3859b", label: "蔷薇" },
-];
 </script>
 
 <template>
   <div class="page">
     <header class="phead">
-      <h1>个性化</h1>
-      <span class="sub">外观与桌宠</span>
+      <h1>设置</h1>
+      <span class="sub">系统行为、数据与关于</span>
     </header>
-
-    <div class="glass-card card">
-      <h2>主题</h2>
-      <div class="seg">
-        <button
-          v-for="t in themes"
-          :key="t.key"
-          class="seg-item"
-          :class="{ active: themePref === t.key }"
-          @click="emit('update:themePref', t.key)"
-        >
-          <Icon :name="t.icon" :size="16" />
-          <span>{{ t.label }}</span>
-        </button>
-      </div>
-    </div>
-
-    <div class="glass-card card">
-      <h2>品牌语言</h2>
-      <div class="seg">
-        <button
-          v-for="b in brandOptions"
-          :key="b.key"
-          class="seg-item"
-          :class="{ active: brandLang === b.key }"
-          @click="brandLang = b.key"
-        >
-          {{ b.label }}
-        </button>
-      </div>
-    </div>
-
-    <div class="glass-card card">
-      <h2>强调色</h2>
-      <div class="accents">
-        <button
-          v-for="a in accents"
-          :key="a.key"
-          class="swatch"
-          :class="{ active: accent === a.key }"
-          :style="{ background: a.color }"
-          :title="a.label"
-          @click="emit('update:accent', a.key)"
-        ></button>
-      </div>
-    </div>
-
-    <div class="glass-card card">
-      <h2>效果</h2>
-      <div class="row">
-        <div>
-          <p class="rt">毛玻璃</p>
-          <p class="rd">半透明卡片与侧栏（低配设备可关闭）</p>
-        </div>
-        <NSwitch :value="glass" @update:value="() => emit('toggleGlass')" />
-      </div>
-    </div>
 
     <div class="glass-card card">
       <h2>系统</h2>
       <div class="row">
-        <div>
+        <div class="rlabel">
           <p class="rt">开机自启动</p>
           <p class="rd">登录 Windows 后自动在后台运行并开始记录</p>
         </div>
         <NSwitch :value="autoStart" @update:value="toggleAutoStart" />
       </div>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">记录</p>
+          <p class="rd">记录开关在托盘右键菜单里（暂停记录 / 显示桌宠）</p>
+        </div>
+      </div>
     </div>
 
     <div class="glass-card card">
-      <h2>桌宠</h2>
-      <div class="row">
-        <div>
-          <p class="rt">显示桌宠</p>
-          <p class="rd">屏幕右下角的猫，也可以在托盘菜单开关</p>
-        </div>
-        <NSwitch :value="petVisible" @update:value="() => emit('togglePet')" />
+      <h2>数据</h2>
+      <div class="rows">
+        <p class="kv"><span>存放位置</span><b>{{ data?.dir ?? "读取中…" }}</b></p>
+        <p class="kv"><span>数据库</span><b>{{ fmtSize(data?.dbBytes ?? 0) }}</b></p>
+        <p class="kv"><span>未合并日志(WAL)</span><b>{{ fmtSize(data?.walBytes ?? 0) }}</b></p>
+        <p class="kv">
+          <span>位置来源</span>
+          <b>{{ data?.fallback ? "程序目录不可写，已回退到用户目录" : "程序目录旁的 Data 文件夹" }}</b>
+        </p>
       </div>
-      <p class="rd more">更多桌宠设置（缩放/透明度/模型导入）将在桌宠增强批次提供</p>
+      <div class="acts">
+        <button class="btn" @click="openDataDir">打开数据目录</button>
+      </div>
+      <p class="rd more">
+        数据只存在本机、不上传。<b>崩溃安全</b>：切换应用、离开键盘 60 秒、退出程序时都会立即落库；
+        长会话每分钟打一次检查点；键鼠计数每 5 秒落一次。也就是说意外崩溃最多损失 1 分钟记录，
+        已落库的数据在 WAL 日志保护下不会损坏。
+      </p>
+      <p v-if="msg" class="err">{{ msg }}</p>
+    </div>
+
+    <div class="glass-card card">
+      <h2>关于</h2>
+      <div class="rows">
+        <p class="kv"><span>名称</span><b>拾刻 · TallyMoment</b></p>
+        <p class="kv"><span>版本</span><b>0.1.0</b></p>
+        <p class="kv"><span>数据</span><b>本地优先，不联网、不上传</b></p>
+      </div>
+      <p class="rd more">
+        图标：Solar Line Duotone（480 Design，CC BY 4.0，经由 Iconify）。<br />
+        桌宠：Bongo Cat Mver 兼容模型；内置素材为原版 BongoCat 分层图，
+        「兔子洞」皮肤为 Live2D 素材（版权归原作者，仅个人使用）。
+      </p>
+      <p class="rd more">
+        软件名与图标会写进 exe 与安装包（任务栏、后台视图显示的就是这个）；
+        改名需要重新打包，属于打包批次的工作。
+      </p>
     </div>
   </div>
 </template>
@@ -195,82 +158,81 @@ const accents: { key: string; color: string; label: string }[] = [
   color: var(--text-muted);
 }
 
-.seg {
-  display: inline-flex;
-  gap: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 4px;
-  background: var(--surface);
-}
-
-.seg-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-family: inherit;
-  padding: 7px 14px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-}
-
-.seg-item.active {
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
-
-.accents {
-  display: flex;
-  gap: 10px;
-}
-
-.swatch {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  cursor: pointer;
-  transition: transform 0.12s, box-shadow 0.12s;
-}
-
-.swatch:hover {
-  transform: scale(1.1);
-}
-
-.swatch.active {
-  border-color: var(--text);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
 .row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  padding: 6px 0;
 }
 
-.rt {
+.rlabel .rt {
   margin: 0 0 2px;
   font-size: 14px;
   color: var(--text);
 }
 
-.rd {
+.rlabel .rd {
   margin: 0;
   font-size: 12px;
   color: var(--text-muted);
 }
 
-.rd.more {
-  margin-top: 10px;
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.kv {
+  margin: 0;
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.kv span {
+  flex: none;
+  width: 116px;
   color: var(--text-faint);
 }
 
-button {
+.kv b {
+  color: var(--text);
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.acts {
+  margin-top: 12px;
+}
+
+.btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  font-size: 12px;
   font-family: inherit;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: var(--surface-hover);
+}
+
+.rd.more {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-faint);
+}
+
+.err {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--danger);
 }
 </style>
