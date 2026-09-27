@@ -245,8 +245,8 @@ html[data-mode="pet"] body {
 
 /* 窗口外框：2px，与侧栏共用同一条边，避免"三块拼接"的观感 */
 .shell-frame {
-  border: 5px solid var(--frame);
-  border-radius: 14px;
+  border: 7px solid var(--frame);
+  border-radius: 16px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
 }
 
