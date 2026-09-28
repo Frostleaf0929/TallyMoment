@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { NDatePicker, NInput } from "naive-ui";
+import { NInput } from "naive-ui";
 import type { AppUsage, RangeReport } from "../types";
 import { fmtDuration } from "../lib/format";
 import { colorFor } from "../lib/colors";
@@ -11,6 +11,8 @@ import { iconColor, iconUrl, requestIcons } from "../lib/appIcons";
 import { navIntent } from "../lib/uiState";
 import BallLoader from "../components/BallLoader.vue";
 import DayDetail from "../components/DayDetail.vue";
+import RangeCard from "../components/RangeCard.vue";
+import CalendarHeat from "../components/CalendarHeat.vue";
 import DayBars from "../components/DayBars.vue";
 import HourlyChart from "../components/HourlyChart.vue";
 
@@ -24,6 +26,14 @@ type RangeKey = "day" | "week" | "month" | "year" | "all";
 const view = ref<"time" | "items">("time");
 const itemDate = ref<number>(Date.now());
 const itemDateStr = computed(() => ymd(new Date(itemDate.value)));
+const itemRange = ref<RangeKey>("day");
+const itemFrom = ref("");
+const itemTo = ref("");
+
+/** 事项视角里选某一天 */
+function onPickItemDay(date: string) {
+  itemDate.value = new Date(`${date}T00:00:00`).getTime();
+}
 
 const rangeKey = ref<RangeKey>("week");
 const loading = ref(false);
@@ -33,13 +43,6 @@ const keyword = ref("");
 const err = ref("");
 const fallbackNote = ref("");
 
-const ranges: { key: RangeKey; label: string; text: string }[] = [
-  { key: "day", label: "天", text: "今天" },
-  { key: "week", label: "周", text: "本周" },
-  { key: "month", label: "月", text: "本月" },
-  { key: "year", label: "年", text: "本年" },
-  { key: "all", label: "总共", text: "全部时间" },
-];
 
 function ymd(d: Date): string {
   const m = `${d.getMonth() + 1}`.padStart(2, "0");
@@ -69,8 +72,6 @@ function rangeOf(k: RangeKey): { from: string; to: string } {
   }
   return { from: "2000-01-01", to: today };
 }
-
-const rangeText = computed(() => ranges.find((r) => r.key === rangeKey.value)?.text ?? "");
 
 async function load(autoFallback = false) {
   const { from, to } = rangeOf(rangeKey.value);
@@ -158,7 +159,14 @@ watchEffect(() => {
 
 // 从今日页/排行跳转过来：选中该应用，若当前范围没数据自动退到"总共"
 watch(navIntent, (n) => {
-  if (!n || n.view !== "app") return;
+  if (!n) return;
+  if (n.view === "items") {
+    view.value = "items";
+    if (n.date) itemDate.value = new Date(`${n.date}T00:00:00`).getTime();
+    return;
+  }
+  if (n.view !== "app") return;
+  view.value = "time";
   selectedApp.value = n.app ?? null;
   void load(true);
 });
@@ -172,24 +180,39 @@ watch(navIntent, (n) => {
     </header>
 
     <div class="viewseg">
-      <button class="vbtn" :class="{ active: view === 'time' }" @click="view = 'time'">时间</button>
+      <button class="vbtn" :class="{ active: view === 'time' }" @click="view = 'time'">应用</button>
       <button class="vbtn" :class="{ active: view === 'items' }" @click="view = 'items'">事项</button>
     </div>
 
     <!-- 事项视角：直接复用某天对照详情 -->
-    <section v-if="view === 'items'" class="glass-card itemsview">
-      <div class="itemshead">
-        <h2>{{ itemDateStr }} · 事项与记录</h2>
-        <NDatePicker
-          v-model:value="itemDate"
-          type="date"
-          :actions="['confirm']"
-          :clearable="false"
-          style="width: 160px"
+    <template v-if="view === 'items'">
+      <!-- 与「详细 · 应用」同款的 时间范围 卡（后续周/月/年/总共的聚合在这里接） -->
+      <section class="glass-card rangecard">
+        <RangeCard
+          v-model="itemRange"
+          :from="itemFrom"
+          :to="itemTo"
+          note="周 / 月 / 年 / 总共的范围聚合后续接上；现在先在左侧月历点选某一天查看"
         />
-      </div>
-      <DayDetail :date="itemDateStr" />
-    </section>
+      </section>
+      <section class="glass-card itemsview">
+        <div class="itemshead">
+          <h2>事项与记录</h2>
+          <span class="itemsday">{{ itemDateStr }}</span>
+        </div>
+        <div class="itemsgrid">
+          <CalendarHeat
+            compact
+            :selected="itemDateStr"
+            @pick="onPickItemDay"
+            @locate="onPickItemDay"
+          />
+          <div class="itemsdetail">
+            <DayDetail :date="itemDateStr" />
+          </div>
+        </div>
+      </section>
+    </template>
 
     <div v-if="view === 'time'" class="split">
       <!-- 应用列表（主入口）：外层只负责撑高，内层绝对定位贴合 → 底部与右列对齐且不撑长页面 -->
@@ -228,25 +251,15 @@ watch(navIntent, (n) => {
       </div>
 
       <div class="right">
-        <!-- 时间范围卡（原来"区间总时长"的位置）：只做相对区间文字切换 -->
-        <section class="glass-card rangerow">
-          <div class="rangehead">
-            <h2>时间范围</h2>
-            <span class="rangetext">{{ rangeText }}</span>
-          </div>
-          <div class="rangeopts">
-            <button
-              v-for="r in ranges"
-              :key="r.key"
-              class="rangeopt"
-              :class="{ active: rangeKey === r.key }"
-              @click="pickRange(r.key)"
-            >
-              {{ r.label }}
-            </button>
-          </div>
-          <p v-if="report" class="spantext">{{ report.from }} ~ {{ report.to }}</p>
-          <p v-if="fallbackNote" class="note">{{ fallbackNote }}</p>
+        <!-- 时间范围卡（与事项视角共用同一组件） -->
+        <section class="glass-card rangecard">
+          <RangeCard
+            :model-value="rangeKey"
+            :from="report?.from"
+            :to="report?.to"
+            :note="fallbackNote"
+            @update:model-value="pickRange"
+          />
         </section>
 
         <section class="cards">
@@ -319,6 +332,34 @@ watch(navIntent, (n) => {
 .vbtn.active {
   color: var(--accent-text);
   background: var(--accent-soft);
+}
+
+.rangecard {
+  padding: 14px 16px;
+}
+
+.itemsgrid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.itemsdetail {
+  min-width: 0;
+}
+
+.itemsday {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 980px) {
+  .itemsgrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .itemsview {

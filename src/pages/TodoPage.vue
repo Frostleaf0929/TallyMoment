@@ -10,6 +10,7 @@ import ReminderRules from "../components/ReminderRules.vue";
 import CalendarHeat from "../components/CalendarHeat.vue";
 import NotesPanel from "../components/NotesPanel.vue";
 import DayDetail from "../components/DayDetail.vue";
+import { jumpTo } from "../lib/uiState";
 
 const tasks = ref<Task[]>([]);
 const rules = ref<ReminderRule[]>([]);
@@ -126,6 +127,12 @@ const sheetBig = ref(false);
 
 function openDetail(date: string) {
   detailDate.value = date;
+}
+
+/** 放大：不在这里放大，而是跳到 详细 · 事项 里看同一天 */
+function openInDetail() {
+  jumpTo("items", undefined, detailDate.value);
+  detailDate.value = "";
 }
 
 /** 点日历：切到那天 + 打开二级界面 */
@@ -338,15 +345,21 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
          不 Teleport 的话 position:fixed 会被困在卡片内部（表现成"同级卡片"） -->
     <Teleport to="body">
       <div v-show="detailDate" class="mask" @click.self="detailDate = ''">
+        <span class="grain" aria-hidden="true"></span>
       <div class="sheet glass-card" :class="{ big: sheetBig }">
         <div class="modhead">
           <h2>{{ detailDate }} · 那天</h2>
           <div class="dacts">
-            <button class="dbtn" :title="sheetBig ? '还原' : '放大'" @click="sheetBig = !sheetBig">
-              <Icon :name="sheetBig ? 'collapse' : 'expand'" :size="15" />
+            <!-- 与窗口控制同款图标：□ 放大（跳转到 详细 · 事项）、× 关闭 -->
+            <button class="wbtn" title="在「详细 · 事项」中打开" @click="openInDetail">
+              <svg width="12" height="12" viewBox="0 0 12 12">
+                <rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+              </svg>
             </button>
-            <button class="dbtn" title="关闭" @click="detailDate = ''">
-              <Icon name="close" :size="15" />
+            <button class="wbtn" title="关闭" @click="detailDate = ''">
+              <svg width="12" height="12" viewBox="0 0 12 12">
+                <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.2" />
+              </svg>
             </button>
           </div>
         </div>
@@ -488,15 +501,25 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   inset: 16px;
   z-index: 40;
   /* 遮罩用主题底色而不是纯黑：浅色模式下不再"压黑" */
-  /* 背景更重的毛玻璃：遮罩本身也做模糊，突出二级界面 */
-  background: rgba(var(--bg-rgb), 0.42);
-  backdrop-filter: blur(26px) saturate(1.2);
-  -webkit-backdrop-filter: blur(26px) saturate(1.2);
+  /* 磨砂玻璃：更重的模糊 + 轻微降亮 + 一层细颗粒（否则只是"糊"，没有质感） */
+  background: rgba(var(--bg-rgb), 0.34);
+  backdrop-filter: blur(46px) saturate(1.15) brightness(0.92);
+  -webkit-backdrop-filter: blur(46px) saturate(1.15) brightness(0.92);
   border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
+}
+
+/* 细颗粒层：给磨砂玻璃一点"砂"的质感 */
+.grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  border-radius: 16px;
+  background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
 }
 
 .dacts {
@@ -505,8 +528,8 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   gap: 2px;
 }
 
-.dbtn {
-  width: 26px;
+.wbtn {
+  width: 28px;
   height: 26px;
   border: 0;
   background: transparent;

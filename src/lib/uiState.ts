@@ -9,9 +9,11 @@ export const isLight = ref(false);
 /** 应用排行显示条数（设置页可调 5~20） */
 export const appsTopN = ref(10);
 
-/** 跨页跳转意图（今日卡片、应用排行 → 历史页/详细页） */
-export const navIntent = ref<{ view: "recent" | "app"; app?: string; at: number } | null>(null);
+/** 跨页跳转意图（今日卡片、应用排行、某天弹层 → 历史页/详细页） */
+export const navIntent = ref<{ view: "recent" | "app" | "items"; app?: string; date?: string; at: number } | null>(
+  null
+);
 
-export function jumpTo(view: "recent" | "app", app?: string) {
-  navIntent.value = { view, app, at: Date.now() };
+export function jumpTo(view: "recent" | "app" | "items", app?: string, date?: string) {
+  navIntent.value = { view, app, date, at: Date.now() };
 }
