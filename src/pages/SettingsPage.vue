@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { NSlider, NSwitch } from "naive-ui";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { appsTopN } from "../lib/uiState";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import DataCard from "../components/DataCard.vue";
 import { appColorMode } from "../lib/appearance";
 
@@ -19,6 +20,78 @@ interface DataInfo {
 /** 开发模式下自启动会因缺少 dev 服务器而报连接错误，界面上直接说明 */
 const isDev = import.meta.env.DEV;
 const autoStart = ref(false);
+type DataMod = "tasks" | "rules" | "all";
+const mod = ref<DataMod>("tasks");
+const dataMsg = ref("");
+const dataErr = ref("");
+const stamp = () => new Date().toISOString().slice(0, 10);
+
+/** 导出所选模块 */
+async function exportModule() {
+  dataMsg.value = "";
+  dataErr.value = "";
+  try {
+    if (mod.value === "tasks") {
+      const p = await save({
+        title: "导出任务（Markdown）",
+        defaultPath: `拾刻待办-${stamp()}.md`,
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (!p) return;
+      const f = await invoke<string>("tasks_export_md", { path: p });
+      dataMsg.value = `已导出任务：${f}`;
+      return;
+    }
+    if (mod.value === "rules") {
+      const p = await save({
+        title: "导出提醒规则（JSON）",
+        defaultPath: `拾刻提醒规则-${stamp()}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!p) return;
+      const f = await invoke<string>("rules_export_json", { path: p });
+      dataMsg.value = `已导出规则：${f}`;
+      return;
+    }
+    const p = await save({
+      title: "整包导出（任务 + 提醒规则）",
+      defaultPath: `拾刻导出-${stamp()}.md`,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (!p) return;
+    const dir = String(p).replace(/[^\/]*$/, "");
+    await invoke("tasks_export_md", { path: p });
+    await invoke("rules_export_json", { path: `${dir}拾刻提醒规则-${stamp()}.json` });
+    dataMsg.value = `已整包导出到：${dir}`;
+  } catch (e) {
+    dataErr.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+/** 导入：按扩展名自动识别是任务(md)还是规则(json) */
+async function importModule() {
+  dataMsg.value = "";
+  dataErr.value = "";
+  try {
+    const p = await open({
+      multiple: false,
+      directory: false,
+      title: "选择要导入的文件",
+      filters: [{ name: "Markdown / JSON", extensions: ["md", "markdown", "json", "txt"] }],
+    });
+    if (!p || Array.isArray(p)) return;
+    const lower = String(p).toLowerCase();
+    if (lower.endsWith(".json")) {
+      const [added, skipped] = await invoke<[number, number]>("rules_import_json", { path: p });
+      dataMsg.value = `导入提醒规则 ${added} 条，跳过同名 ${skipped} 条`;
+    } else {
+      const sum = await invoke<{ skipped: number }>("tasks_import_md", { path: p });
+      dataMsg.value = `导入任务完成，跳过 ${sum.skipped} 条已存在的`;
+    }
+  } catch (e) {
+    dataErr.value = String(e).replace(/^.*Error: /, "");
+  }
+}
 const data = ref<DataInfo | null>(null);
 const msg = ref("");
 
@@ -172,6 +245,41 @@ onMounted(async () => {
       <div class="acts">
         <button class="btn" @click="openDataDir">打开数据目录</button>
       </div>
+      <!-- 分模块导入导出（日志随日志功能上线后加入） -->
+      <div class="datacard">
+        <p class="rt">分模块导入 / 导出</p>
+        <div class="seg">
+          <button
+            class="seg-item"
+            :class="{ active: mod === 'tasks' }"
+            @click="mod = 'tasks'"
+          >
+            任务
+          </button>
+          <button
+            class="seg-item"
+            :class="{ active: mod === 'rules' }"
+            @click="mod = 'rules'"
+          >
+            提醒规则
+          </button>
+          <button class="seg-item" :class="{ active: mod === 'all' }" @click="mod = 'all'">
+            全部待办
+          </button>
+        </div>
+        <div class="acts">
+          <button class="btn" @click="exportModule">导出所选模块</button>
+          <button class="btn" @click="importModule">导入（按文件类型自动识别）</button>
+        </div>
+        <p class="rd more">
+          任务用 <b>Markdown</b>（Obsidian / Notion 可直接打开，行尾带回优先级与到期）；
+          提醒规则用 <b>JSON</b>（间隔、定点时间、卡片时长等结构化字段 Markdown 表达不了）；
+          「每日日志」的导入导出随日志功能一起上线。
+        </p>
+        <p v-if="dataMsg" class="okline">{{ dataMsg }}</p>
+        <p v-if="dataErr" class="err">{{ dataErr }}</p>
+      </div>
+
       <div class="datacard">
         <DataCard />
       </div>
@@ -346,6 +454,13 @@ onMounted(async () => {
   font-size: 11.5px;
   line-height: 1.7;
   color: var(--text-faint);
+}
+
+.okline {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--good);
+  word-break: break-all;
 }
 
 .err {

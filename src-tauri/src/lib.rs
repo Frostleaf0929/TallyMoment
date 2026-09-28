@@ -288,6 +288,28 @@ fn tasks_import_md(app: tauri::AppHandle, path: String) -> Result<storage::Impor
     storage::tasks_import_md(&conn, &path)
 }
 
+/// 导出提醒规则（JSON）
+#[tauri::command]
+fn rules_export_json(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let p = std::path::PathBuf::from(&path);
+    let dir = p.parent().ok_or("导出路径异常")?.to_path_buf();
+    let name = p
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .ok_or("导出路径异常")?;
+    storage::rules_export_json(&conn, &dir, &name)
+}
+
+/// 导入提醒规则（按标题去重）
+#[tauri::command]
+fn rules_import_json(app: tauri::AppHandle, path: String) -> Result<(usize, usize), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::rules_import_json(&conn, &path)
+}
+
 /// 任意日期区间报表（详细页）
 #[tauri::command]
 fn range_report(
@@ -987,6 +1009,8 @@ pub fn run() {
             insights_report,
             period_report,
             period_index,
+            rules_export_json,
+            rules_import_json,
             tasks_export_md,
             tasks_import_md,
             app_icons,

@@ -60,6 +60,61 @@ async function importMd() {
   }
 }
 
+/** 提醒规则：结构化字段多，用 JSON 才能完整回环 */
+async function exportRules() {
+  err.value = "";
+  try {
+    const picked = await save({
+      title: "导出提醒规则",
+      defaultPath: `拾刻提醒规则-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!picked) return;
+    const file = await invoke<string>("rules_export_json", { path: picked });
+    msg.value = `已导出规则：${file}`;
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+async function importRules() {
+  err.value = "";
+  try {
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      title: "选择规则 JSON",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!picked || Array.isArray(picked)) return;
+    const [added, skipped] = await invoke<[number, number]>("rules_import_json", { path: picked });
+    await load();
+    msg.value = `导入规则 ${added} 条，跳过同名的 ${skipped} 条`;
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+/** 整包导出：任务 MD + 规则 JSON（同一目录、同一时间戳） */
+async function exportAll() {
+  err.value = "";
+  try {
+    const picked = await save({
+      title: "整包导出（任务 + 提醒规则）",
+      defaultPath: `拾刻导出-${new Date().toISOString().slice(0, 10)}.md`,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (!picked) return;
+    const stamp = new Date().toISOString().slice(0, 10);
+    const dir = String(picked).replace(/[^\/]*$/, "");
+    await invoke("tasks_export_md", { path: picked });
+    await invoke("rules_export_json", { path: `${dir}拾刻提醒规则-${stamp}.json` });
+    msg.value = `已整包导出到：${dir}`;
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
 async function load() {
   try {
     tasks.value = await invoke<Task[]>("task_list");
@@ -105,8 +160,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
       <h1>待办</h1>
       <span class="sub">任务、提醒与完成率</span>
       <div class="headacts">
-        <NButton size="small" secondary @click="importMd">导入 MD</NButton>
-        <NButton size="small" secondary @click="exportMd">导出 MD</NButton>
+        <NButton size="small" secondary @click="exportAll">整包导出</NButton>
       </div>
     </header>
     <p v-if="msg" class="okline">{{ msg }}</p>
@@ -133,7 +187,13 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 
     <!-- 任务看板 -->
     <section class="glass-card">
-      <h2>任务</h2>
+      <div class="modhead">
+        <h2>任务</h2>
+        <div class="modacts">
+          <NButton size="tiny" quaternary @click="importMd">导入 MD</NButton>
+          <NButton size="tiny" quaternary @click="exportMd">导出 MD</NButton>
+        </div>
+      </div>
       <div class="add">
         <NInput
           v-model:value="newContent"
@@ -178,7 +238,13 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 
     <!-- 提醒规则 -->
     <section class="glass-card">
-      <h2>提醒规则（到点在右下角弹卡）</h2>
+      <div class="modhead">
+        <h2>提醒规则（到点弹卡 / 全屏）</h2>
+        <div class="modacts">
+          <NButton size="tiny" quaternary @click="importRules">导入 JSON</NButton>
+          <NButton size="tiny" quaternary @click="exportRules">导出 JSON</NButton>
+        </div>
+      </div>
       <ReminderRules :rules="rules" @reload="load" />
     </section>
   </div>
@@ -189,6 +255,18 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.modhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.modacts {
+  display: flex;
+  gap: 4px;
 }
 
 .headacts {

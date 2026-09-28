@@ -1972,6 +1972,74 @@ pub fn tasks_import_md(conn: &Connection, path: &str) -> Result<ImportSummary, S
     })
 }
 
+// ---------- 提醒规则 JSON 导入导出（结构化字段多，Markdown 表达不了，故用 JSON） ----------
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RulePack {
+    title: String,
+    body: String,
+    mode: String,
+    interval_minutes: Option<i64>,
+    daily_times: Vec<String>,
+    sticky: bool,
+    card_duration_sec: i32,
+    accent_color: Option<String>,
+}
+
+pub fn rules_export_json(conn: &Connection, dir: &std::path::Path, file_name: &str) -> Result<String, String> {
+    let rules = rule_list(conn)?;
+    let pack: Vec<RulePack> = rules
+        .into_iter()
+        .map(|r| RulePack {
+            title: r.title,
+            body: r.body,
+            mode: r.mode,
+            interval_minutes: r.interval_minutes,
+            daily_times: r.daily_times,
+            sticky: r.sticky,
+            card_duration_sec: r.card_duration_sec,
+            accent_color: r.accent_color,
+        })
+        .collect();
+    let json = serde_json::to_string_pretty(&pack).map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败: {e}"))?;
+    let path = dir.join(file_name);
+    std::fs::write(&path, json).map_err(|e| format!("写入失败: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 导入提醒规则：按标题去重，返回(新增, 跳过)
+pub fn rules_import_json(conn: &Connection, path: &str) -> Result<(usize, usize), String> {
+    let p = std::path::PathBuf::from(path);
+    let size = std::fs::metadata(&p).map_err(|e| format!("读取文件失败: {e}"))?.len();
+    if size > 2 * 1024 * 1024 {
+        return Err("文件过大（超过 2MB）".into());
+    }
+    let text = std::fs::read_to_string(&p).map_err(|e| format!("读取失败: {e}"))?;
+    let pack: Vec<RulePack> = serde_json::from_str(&text).map_err(|e| format!("解析失败（需要是导出的规则 JSON）: {e}"))?;
+    let existing: Vec<String> = rule_list(conn)?.into_iter().map(|r| r.title).collect();
+    let (mut added, mut skipped) = (0usize, 0usize);
+    for r in pack {
+        if existing.contains(&r.title) {
+            skipped += 1;
+            continue;
+        }
+        rule_add(
+            conn,
+            &r.title,
+            &r.body,
+            &r.mode,
+            r.interval_minutes,
+            r.daily_times,
+            r.sticky,
+            r.card_duration_sec,
+            r.accent_color,
+        )?;
+        added += 1;
+    }
+    Ok((added, skipped))
+}
+
 // ---------- 壁纸与主题包（个性化页；墙纸只存本机数据目录） ----------
 
 const WALLPAPER_MAX_BYTES: u64 = 16 * 1024 * 1024;
