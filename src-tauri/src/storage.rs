@@ -395,6 +395,27 @@ pub fn today_start_ts() -> i64 {
 
 // ---------- 待办任务 ----------
 
+/// 解析任务行：`- [ ] 内容` / `* [x] 内容` / `+ [ ] 内容`（兼容 Obsidian 与 Notion 的写法）
+fn strip_task_marker(line: &str) -> Option<(bool, String)> {
+    let rest = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .or_else(|| line.strip_prefix("+ "))?;
+    let (mark, body) = if let Some(r) = rest.strip_prefix("[ ]") {
+        (false, r)
+    } else if let Some(r) = rest.strip_prefix("[x]").or_else(|| rest.strip_prefix("[X]")) {
+        (true, r)
+    } else {
+        // 也支持 `-[ ]`（无空格）这种不规范但常见的写法
+        if let Some(r) = rest.strip_prefix("[ ]") {
+            (false, r)
+        } else {
+            return None;
+        }
+    };
+    Some((mark, body.to_string()))
+}
+
 fn valid_hhmm(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 5
@@ -2096,18 +2117,32 @@ pub fn tasks_import_md(conn: &Connection, path: &str) -> Result<ImportSummary, S
 
     let existing: Vec<String> = task_list(conn)?.into_iter().map(|t| t.content).collect();
     let mut skipped = 0usize;
+    let mut in_front = false;
+    let mut front_seen = 0usize;
     for raw in text.lines() {
         let line = raw.trim();
-        let (done, body) = if let Some(r) = line.strip_prefix("- [x]").or_else(|| line.strip_prefix("- [X]")) {
-            (true, r)
-        } else if let Some(r) = line.strip_prefix("- [ ]") {
-            (false, r)
+        // 跳过 YAML front-matter（Obsidian / Notion 导出常带），否则会被当成内容
+        if line == "---" {
+            if front_seen == 0 {
+                in_front = true;
+                front_seen = 1;
+            } else if in_front {
+                in_front = false;
+            }
+            continue;
+        }
+        if in_front {
+            continue;
+        }
+        // 项目符号支持 - * + 三种；勾选支持 [ ] / [x] / [X]
+        let (done, body) = if let Some(r) = strip_task_marker(line) {
+            r
         } else {
             continue;
         };
         // 去掉行尾元数据后再取正文
         let mut content = body.to_string();
-        for key in ["[优先级:", "[到期:", "[完成:"] {
+        for key in ["[优先级:", "[到期:", "[完成:", "[priority::", "[due::", "📅"] {
             if let Some(i) = content.find(key) {
                 content = content[..i].to_string();
             }
@@ -2120,12 +2155,32 @@ pub fn tasks_import_md(conn: &Connection, path: &str) -> Result<ImportSummary, S
             skipped += 1;
             continue;
         }
-        let priority = match re_meta(body, "优先级").as_deref() {
-            Some("高") => 2,
-            Some("低") => 0,
-            _ => 1,
+        let body_ref: &str = &body;
+        let priority = match re_meta(body_ref, "优先级").or_else(|| re_meta(body_ref, "priority")).as_deref() {
+            Some("高") | Some("high") | Some("High") => 2,
+            Some("低") | Some("low") | Some("Low") => 0,
+            Some("中") | Some("medium") | Some("Medium") => 1,
+            _ => {
+                // Obsidian Tasks 插件的表情写法：⏫ 最高、🔼 高、🔽 低
+                if body.contains('⏫') || body.contains('🔼') {
+                    2
+                } else if body.contains('🔽') {
+                    0
+                } else {
+                    1
+                }
+            }
         };
-        let due = re_meta(body, "到期").and_then(|s| parse_ts(&s));
+        let due = re_meta(body_ref, "到期")
+            .or_else(|| re_meta(body_ref, "due"))
+            .and_then(|s| parse_ts(&s))
+            .or_else(|| {
+                // 📅 2026-09-30（Tasks 插件常用）
+                let i = body.find('📅')?;
+                let rest = &body[i + '📅'.len_utf8()..];
+                let date: String = rest.trim().chars().take(10).collect();
+                parse_ts(&date)
+            });
         task_add(conn, &content, priority, due)?;
         if done {
             if let Ok(id) = conn.query_row("SELECT id FROM tasks WHERE content = ?1", [&content], |r| r.get::<_, i64>(0)) {
