@@ -62,6 +62,22 @@ async function load() {
   }
 }
 
+/** 回到本月并选中今天 */
+function goToday() {
+  cursor.value = new Date();
+  void load();
+  emit("pick", ymd(new Date()));
+}
+
+/** 滚轮换月（60ms 防抖，避免一次滚动跳好几个月） */
+let wheelLock = 0;
+function onWheel(e: WheelEvent) {
+  const now = Date.now();
+  if (now - wheelLock < 60) return;
+  wheelLock = now;
+  shift(e.deltaY > 0 ? 1 : -1);
+}
+
 function shift(delta: number) {
   cursor.value = new Date(cursor.value.getFullYear(), cursor.value.getMonth() + delta, 1);
   void load();
@@ -74,11 +90,20 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="cal" :class="{ compact: props.compact }">
+  <div class="cal" :class="{ compact: props.compact }" @wheel.prevent="onWheel">
     <div class="head">
       <button class="nav" title="上个月" @click="shift(-1)">‹</button>
       <span class="label">{{ monthLabel }}</span>
       <button class="nav" title="下个月" @click="shift(1)">›</button>
+      <!-- 定位：回到本月并选中今天（悬停时胶囊左右展开，与删除按钮同一套动效） -->
+      <button class="locate" title="回到本月今天" @click="goToday">
+        <svg viewBox="0 0 24 24" class="licon" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.6" />
+          <circle cx="12" cy="12" r="2.6" fill="currentColor" />
+          <path d="M12 2.6v2.6M12 18.8v2.6M2.6 12h2.6M18.8 12h2.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+        <span class="ltxt">本月</span>
+      </button>
     </div>
     <div class="week">
       <span v-for="w in ['一', '二', '三', '四', '五', '六', '日']" :key="w">{{ w }}</span>
@@ -146,6 +171,57 @@ onMounted(load);
 .nav:hover {
   color: var(--text);
   background: var(--surface-hover);
+}
+
+.wheel {
+  height: 0;
+}
+
+/* 定位按钮：默认圆形图标，悬停横向展开成胶囊并浮出文字 */
+.locate {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  overflow: hidden;
+  transition: width var(--dur) cubic-bezier(0.22, 0.61, 0.36, 1),
+    background var(--dur), color var(--dur), border-color var(--dur);
+}
+
+.licon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.ltxt {
+  max-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0;
+  transition: max-width var(--dur), opacity var(--dur), margin-left var(--dur);
+}
+
+.locate:hover {
+  width: 64px;
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.locate:hover .ltxt {
+  max-width: 32px;
+  opacity: 1;
+  margin-left: 4px;
 }
 
 .week {

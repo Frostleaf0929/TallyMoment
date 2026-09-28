@@ -169,12 +169,64 @@ fn dominant(bgra: &[u8]) -> String {
     if n == 0 {
         return "#7b84ec".into();
     }
+    let (r, g, b) = (
+        (sr / n as u64) as f64,
+        (sg / n as u64) as f64,
+        (sb / n as u64) as f64,
+    );
+    let (r, g, b) = limit_saturation(r, g, b, 0.45);
     format!(
         "#{:02x}{:02x}{:02x}",
-        (sr / n as u64) as u8,
-        (sg / n as u64) as u8,
-        (sb / n as u64) as u8
+        r.round().clamp(0.0, 255.0) as u8,
+        g.round().clamp(0.0, 255.0) as u8,
+        b.round().clamp(0.0, 255.0) as u8
     )
+}
+
+/// 限制饱和度：太艳丽（如纯红纯绿）的图标主色会被压到 max_s 以内，
+/// 以免色点在浅色界面上刺眼（用户反馈"取色不要过于艳丽"）
+fn limit_saturation(r: f64, g: f64, b: f64, max_s: f64) -> (f64, f64, f64) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d <= 0.0 {
+        return (r, g, b);
+    }
+    let s = if l > 127.5 {
+        d / (510.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+    if s <= max_s {
+        return (r, g, b);
+    }
+    let s_new = max_s;
+    let h = if max == r {
+        ((g - b) / d + if g < b { 6.0 } else { 0.0 }) / 6.0
+    } else if max == g {
+        ((b - r) / d + 2.0) / 6.0
+    } else {
+        ((r - g) / d + 4.0) / 6.0
+    };
+    // HSL -> RGB，仅换饱和度
+    let c = (1.0 - (2.0 * l / 255.0 - 1.0).abs()) * s_new * 255.0;
+    let x = c * (1.0 - ((h * 6.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r1, g1, b1) = if h < 1.0 / 6.0 {
+        (c, x, 0.0)
+    } else if h < 2.0 / 6.0 {
+        (x, c, 0.0)
+    } else if h < 3.0 / 6.0 {
+        (0.0, c, x)
+    } else if h < 4.0 / 6.0 {
+        (0.0, x, c)
+    } else if h < 5.0 / 6.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    (r1 + m, g1 + m, b1 + m)
 }
 
 #[cfg(test)]
@@ -195,5 +247,12 @@ mod tests {
         // 缓存命中也应返回同样尺寸
         let again = extract_cached(p).expect("缓存读取失败");
         assert_eq!(again.w, d.w);
+
+        // 主色饱和度必须被压到阈值内（纯红 r=255,g=0,b=0 的 S 会从 1.0 降到 0.45）
+        let (r, g, b) = limit_saturation(255.0, 0.0, 0.0, 0.45);
+        assert!(g > 0.0 && b > 0.0, "限饱和后应不再是纯红: {r},{g},{b}");
+        // 低饱和颜色不受影响
+        let (r2, g2, b2) = limit_saturation(120.0, 120.0, 120.0, 0.45);
+        assert_eq!((r2, g2, b2), (120.0, 120.0, 120.0));
     }
 }

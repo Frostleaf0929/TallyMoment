@@ -162,6 +162,8 @@ async function toggleTask(t: Task) {
 const detailDate = ref("");
 const dayReport = ref<DayReport | null>(null);
 const detailNote = ref("");
+const detailImages = ref<string[]>([]);
+const preview = ref("");
 
 async function openDetail(date: string) {
   detailDate.value = date;
@@ -172,9 +174,18 @@ async function openDetail(date: string) {
   } catch {
     dayReport.value = null;
   }
+  detailImages.value = [];
   try {
-    const n = await invoke<{ content: string } | null>("notes_get", { date });
+    const n = await invoke<{ content: string; images: string[] } | null>("notes_get", { date });
     detailNote.value = (n?.content ?? "").split(String.fromCharCode(10)).slice(0, 3).join(" ");
+    for (const name of n?.images ?? []) {
+      try {
+        const [mime, b64] = await invoke<[string, string]>("notes_image_data", { date, name });
+        detailImages.value.push(`data:${mime};base64,${b64}`);
+      } catch {
+        /* 单张失败忽略 */
+      }
+    }
   } catch {
     /* 忽略 */
   }
@@ -341,8 +352,10 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
       </div>
       <ReminderRules :rules="rules" @reload="load" />
     </section>
-    <!-- 某天详情（二级视图，先搭框架） -->
-    <div v-if="detailDate" class="mask" @click.self="detailDate = ''">
+    <!-- 某天详情（二级视图，先搭框架）。Teleport 到 body：卡片的 backdrop-filter 会创建包含块，
+         不 Teleport 的话 position:fixed 会被困在卡片内部（表现成"同级卡片"） -->
+    <Teleport to="body">
+      <div v-if="detailDate" class="mask" @click.self="detailDate = ''">
       <div class="sheet glass-card">
         <div class="modhead">
           <h2>{{ detailDate }} · 那天</h2>
@@ -363,12 +376,28 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
           <p class="dl">那天写了什么</p>
           <p class="dtext">{{ detailNote || "（这天还没有日志，可在下面日志卡片里补写）" }}</p>
         </div>
+        <div v-if="detailImages.length" class="dsec">
+          <p class="dl">那天的图片（{{ detailImages.length }} 张）</p>
+          <div class="dimgs">
+            <img
+              v-for="(src, i) in detailImages"
+              :key="i"
+              :src="src"
+              alt=""
+              @click="preview = src"
+            />
+          </div>
+        </div>
         <div class="dsec">
           <p class="dl">状态 / 分析 / 完成率</p>
           <p class="dtext">框架已就位，细化的状态判定、分析与完成率对比后续继续打磨。</p>
         </div>
       </div>
-    </div>
+      </div>
+      <div v-if="preview" class="mask" @click.self="preview = ''">
+        <img class="big" :src="preview" alt="" />
+      </div>
+    </Teleport>
 
     <!-- 每日日志 -->
     <section class="glass-card">
@@ -393,10 +422,27 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 
 /* 顶部两列：月历 3 : 今日待办 2，等高对齐 */
 .toprow {
-  display: grid;
-  grid-template-columns: 3fr 2fr;
+  display: flex;
   gap: 14px;
   align-items: stretch;
+}
+
+/* 月历 3 : 今日待办 2，两卡等高 */
+.calcard {
+  flex: 3 1 0;
+  min-width: 0;
+}
+
+.todaycard {
+  flex: 2 1 0;
+  min-width: 0;
+}
+
+/* 窗口太窄时改为上下堆叠，避免挤成一团 */
+@media (max-width: 900px) {
+  .toprow {
+    flex-direction: column;
+  }
 }
 
 .calcard,
@@ -533,6 +579,28 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 .dsec {
   border-top: 1px solid var(--border);
   padding-top: 10px;
+}
+
+.dimgs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dimgs img {
+  width: 108px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  cursor: zoom-in;
+}
+
+.big {
+  max-width: min(900px, 92%);
+  max-height: 92%;
+  border-radius: var(--r-md);
+  box-shadow: var(--card-shadow-hover);
 }
 
 .dtext {
