@@ -21,3 +21,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# 构建产物与本地数据（永不上传）
+src-tauri/target
+**/Data/
+*.db
+*.db-wal
+*.db-shm

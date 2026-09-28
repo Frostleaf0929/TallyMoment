@@ -227,13 +227,13 @@ onMounted(async () => {
       <h2>关于</h2>
       <div class="rows">
         <p class="kv"><span>名称</span><b>拾刻 · TallyMoment</b></p>
-        <p class="kv"><span>版本</span><b>0.1.0</b></p>
+        <p class="kv"><span>版本</span><b>0.2.0</b></p>
         <p class="kv"><span>数据</span><b>本地优先，不联网、不上传</b></p>
       </div>
       <p class="rd more">
-        图标：Solar Line Duotone（480 Design，CC BY 4.0，经由 Iconify）。<br />
-        桌宠：Bongo Cat Mver 兼容模型；内置素材为原版 BongoCat 分层图，
-        「兔子洞」皮肤为 Live2D 素材（版权归原作者，仅个人使用）。
+        图标：Solar Line Duotone（480 Design, CC BY 4.0，来自 svgrepo 图标库）。<br />
+        动效启发：uiverse.io ｜ 借鉴：Tai、Catrace ｜ 灵感：flow-insight<br />
+        本软件为 vibe coding 产物，由 GLM-5.3-flash 与 DeepSeek-V4.1 在 ZCode 中开发。
       </p>
       <p class="rd more">
         软件名与图标会写进 exe 与安装包（任务栏、后台视图显示的就是这个）；
