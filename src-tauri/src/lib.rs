@@ -615,6 +615,28 @@ fn rule_add(
     )
 }
 
+/// 设置/读取/清除全屏提醒的自定义背景图
+#[tauri::command]
+fn reminder_bg_set(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::reminder_bg_set(&conn, &path)
+}
+
+#[tauri::command]
+fn reminder_bg_get(app: tauri::AppHandle) -> Result<Option<storage::WallpaperFile>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::reminder_bg_get(&conn)
+}
+
+#[tauri::command]
+fn reminder_bg_clear(app: tauri::AppHandle) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::reminder_bg_clear(&conn)
+}
+
 /// 关闭全屏提醒窗
 #[tauri::command]
 fn close_reminder_full(app: tauri::AppHandle) {
@@ -1098,6 +1120,9 @@ pub fn run() {
             pet_live2d_status,
             close_reminder,
             close_reminder_full,
+            reminder_bg_set,
+            reminder_bg_get,
+            reminder_bg_clear,
             import_tai,
             export_json,
             restore_json,

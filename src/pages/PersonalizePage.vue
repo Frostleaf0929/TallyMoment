@@ -34,6 +34,7 @@ import {
 const emit = defineEmits<{ (e: "wallpaper-changed"): void }>();
 
 const msg = ref("");
+const reminderBgSet = ref(false);
 const err = ref("");
 
 const themes: { key: "dark" | "light" | "system"; label: string; icon: string }[] = [
@@ -169,6 +170,41 @@ async function importTheme() {
     err.value = String(e).replace(/^.*Error: /, "");
   }
 }
+async function pickReminderBg() {
+  msg.value = "";
+  err.value = "";
+  try {
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      title: "选择全屏提醒背景图",
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }],
+    });
+    if (!picked || Array.isArray(picked)) return;
+    await invoke("reminder_bg_set", { path: picked });
+    reminderBgSet.value = true;
+    msg.value = "全屏提醒背景已设置";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+async function clearReminderBg() {
+  msg.value = "";
+  err.value = "";
+  try {
+    await invoke("reminder_bg_clear");
+    reminderBgSet.value = false;
+    msg.value = "已移除，回到默认柔光背景";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+void invoke<{ mime: string; data: string } | null>("reminder_bg_get")
+  .then((w) => (reminderBgSet.value = !!w))
+  .catch(() => (reminderBgSet.value = false));
+
 </script>
 
 <template>
@@ -376,6 +412,22 @@ async function importTheme() {
       <SettingSlider v-model="cardBlur" label="卡片亚克力模糊" desc="0 ~ 60px" :min="0" :max="60" suffix="px" />
       <SettingSlider v-model="cardAlpha" label="卡片不透明度" desc="50% ~ 100%" :min="50" :max="100" suffix="%" />
       <SettingSlider v-model="cardShadow" label="卡片阴影强度" desc="0 = 无阴影（扁平）；1 = 标准；越大浮起感越强" :min="0" :max="2" :step="0.1" suffix="×" />
+    </div>
+
+    <!-- 全屏提醒背景 -->
+    <div class="glass-card card">
+      <h2>全屏提醒背景</h2>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">自定义图片</p>
+          <p class="rd">全屏休息提醒时铺满屏幕；不设则用默认的柔光背景</p>
+        </div>
+        <div class="acts">
+          <button class="ghost" @click="pickReminderBg">选择图片</button>
+          <button class="ghost danger" @click="clearReminderBg">移除</button>
+        </div>
+      </div>
+      <p v-if="reminderBgSet" class="ok">已设置（存本机数据目录，不上传）</p>
     </div>
 
     <!-- 动效 -->

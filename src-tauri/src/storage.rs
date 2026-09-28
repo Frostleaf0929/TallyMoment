@@ -882,7 +882,8 @@ pub fn rule_update(
             serde_json::to_string(&daily_times).unwrap_or_else(|_| "[]".into()),
             sticky as i64,
             card_duration_sec,
-            accent_color
+            accent_color,
+            style
         ],
     )
     .map_err(|e| format!("更新提醒规则失败: {e}"))?;
@@ -2287,6 +2288,73 @@ pub fn wallpaper_get(conn: &Connection) -> Result<Option<WallpaperFile>, String>
         mime: mime.into(),
         data: crate::pet_settings::base64_encode(&data),
     }))
+}
+
+/// 全屏提醒的背景图（独立于桌面壁纸，存同一目录、前缀 rbg.）
+pub fn reminder_bg_set(conn: &Connection, src_path: &str) -> Result<(), String> {
+    let src = PathBuf::from(src_path);
+    if !src.is_file() {
+        return Err("所选图片不存在或无法读取".into());
+    }
+    let ext = src
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if !["png", "jpg", "jpeg", "webp", "gif", "bmp"].contains(&ext.as_str()) {
+        return Err("只支持图片格式：png / jpg / webp / gif / bmp".into());
+    }
+    let size = std::fs::metadata(&src).map_err(|e| format!("读取图片失败: {e}"))?.len();
+    if size > WALLPAPER_MAX_BYTES {
+        return Err("图片过大（超过 16MB）".into());
+    }
+    let dir = wallpaper_dir()?;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.filter_map(|e| e.ok()) {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with("rbg.") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    let dst = dir.join(format!("rbg.{ext}"));
+    std::fs::copy(&src, &dst).map_err(|e| format!("保存图片失败: {e}"))?;
+    set_setting(conn, "ui.reminder_bg", &dst.to_string_lossy())
+}
+
+pub fn reminder_bg_get(conn: &Connection) -> Result<Option<WallpaperFile>, String> {
+    let Some(path) = get_setting(conn, "ui.reminder_bg") else {
+        return Ok(None);
+    };
+    let p = PathBuf::from(&path);
+    if !p.is_file() {
+        return Ok(None);
+    }
+    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        _ => "image/png",
+    };
+    let data = std::fs::read(&p).map_err(|e| format!("读取图片失败: {e}"))?;
+    Ok(Some(WallpaperFile {
+        mime: mime.into(),
+        data: crate::pet_settings::base64_encode(&data),
+    }))
+}
+
+pub fn reminder_bg_clear(conn: &Connection) -> Result<(), String> {
+    if let Ok(dir) = wallpaper_dir() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.filter_map(|e| e.ok()) {
+                if e.file_name().to_string_lossy().starts_with("rbg.") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+    set_setting(conn, "ui.reminder_bg", "")
 }
 
 pub fn wallpaper_clear(conn: &Connection) -> Result<(), String> {

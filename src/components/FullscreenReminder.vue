@@ -16,6 +16,8 @@ interface Payload {
 }
 
 const item = ref<Payload | null>(null);
+/** 自定义背景图（个性化里设置；没有则用默认分层柔光） */
+const bg = ref("");
 const leaving = ref(false);
 let unlisten: UnlistenFn | undefined;
 let autoClose: number | undefined;
@@ -28,6 +30,11 @@ function apply(p: Payload) {
 }
 
 onMounted(async () => {
+  void invoke<{ mime: string; data: string } | null>("reminder_bg_get")
+    .then((w) => {
+      if (w) bg.value = `data:${w.mime};base64,${w.data}`;
+    })
+    .catch(() => (bg.value = ""));
   try {
     const pending = await invoke<Payload[]>("reminder_pending");
     if (pending.length) apply(pending[pending.length - 1]);
@@ -66,7 +73,9 @@ async function dismiss(action: string) {
 </script>
 
 <template>
-  <div class="full" :class="{ leaving }">
+  <div class="full" :class="{ leaving, hasbg: !!bg }">
+    <div v-if="bg" class="bgimg" :style="{ backgroundImage: `url(${bg})` }"></div>
+    <div v-if="bg" class="scrim"></div>
     <div class="glow g1"></div>
     <div class="glow g2"></div>
     <div class="glow g3"></div>
@@ -121,6 +130,24 @@ async function dismiss(action: string) {
   to {
     opacity: 1;
   }
+}
+
+/* 自定义背景图 + 暗色压层（保证文字可读） */
+.bgimg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(8, 10, 16, 0.62), rgba(8, 10, 16, 0.78));
+}
+
+.full.hasbg .glow {
+  opacity: 0.25;
 }
 
 .glow {

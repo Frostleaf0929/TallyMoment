@@ -99,6 +99,7 @@ pub fn show(app: &AppHandle, payload: Payload) {
         .position(x, y)
         .decorations(false)
         .transparent(true)
+        .background_color(tauri::window::Color(0, 0, 0, 0))
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
@@ -117,15 +118,24 @@ pub fn show(app: &AppHandle, payload: Payload) {
 #[cfg(windows)]
 fn kill_border(win: &tauri::WebviewWindow) {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
+    };
     if let Ok(hwnd) = win.hwnd() {
-        // DWMWA_COLOR_NONE = 0xFFFFFFFE
+        // DWMWA_COLOR_NONE = 0xFFFFFFFE；圆角偏好 DWMWCP_DONOTROUND = 1
         let none: u32 = 0xFFFF_FFFE;
+        let no_round: u32 = 1;
         unsafe {
             let _ = DwmSetWindowAttribute(
                 HWND(hwnd.0),
                 DWMWA_BORDER_COLOR,
                 &none as *const _ as *const std::ffi::c_void,
+                4,
+            );
+            let _ = DwmSetWindowAttribute(
+                HWND(hwnd.0),
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &no_round as *const _ as *const std::ffi::c_void,
                 4,
             );
         }
