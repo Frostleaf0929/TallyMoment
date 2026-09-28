@@ -88,6 +88,10 @@ const winErr = ref("");
 
 async function startDrag(e: MouseEvent) {
   if (e.buttons !== 1) return;
+  // 双击不拖窗（双击是最大化）；点在按钮上也不拖（否则会出现"点一下窗口就跟着鼠标走"的粘滞拖动）
+  if (e.detail > 1) return;
+  const t = e.target as HTMLElement | null;
+  if (t?.closest("button, input, a, .collapse-btn, .logo-btn")) return;
   try {
     await win?.startDragging();
   } catch {

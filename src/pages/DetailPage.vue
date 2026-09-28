@@ -468,10 +468,11 @@ watch(navIntent, (n) => {
 
 .approw {
   display: grid;
-  grid-template-columns: 10px 1fr auto;
+  /* 序号位/图标位/名称/时长：图标列 22px，避免 16px 图标溢出压字 */
+  grid-template-columns: 22px 1fr auto;
   grid-template-rows: auto auto;
   align-items: center;
-  gap: 4px 8px;
+  gap: 4px 10px;
   border: 1px solid transparent;
   background: var(--surface);
   color: var(--text-muted);
@@ -496,12 +497,16 @@ watch(navIntent, (n) => {
 }
 
 .adot {
+  grid-column: 1;
+  justify-self: center;
   width: 8px;
   height: 8px;
   border-radius: 50%;
 }
 
 .aicon {
+  grid-column: 1;
+  justify-self: center;
   width: 16px;
   height: 16px;
   border-radius: 4px;

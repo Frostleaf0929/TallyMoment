@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { NSlider, NSwitch } from "naive-ui";
+import { NSwitch } from "naive-ui";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { appsTopN } from "../lib/uiState";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import DataCard from "../components/DataCard.vue";
-import { appColorMode } from "../lib/appearance";
 
 interface DataInfo {
   dir: string;
@@ -121,14 +119,6 @@ function fmtSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
-async function saveTopN(v: number) {
-  try {
-    const p = await invoke<{ appsTopN: number }>("prefs_set", { appsTopN: v });
-    appsTopN.value = p.appsTopN;
-  } catch {
-    /* 忽略 */
-  }
-}
 
 onMounted(async () => {
   try {
@@ -170,64 +160,6 @@ onMounted(async () => {
           <p class="rt">记录</p>
           <p class="rd">记录开关在托盘右键菜单里（暂停记录 / 显示桌宠）</p>
         </div>
-      </div>
-    </div>
-
-    <div class="glass-card card">
-      <h2>显示</h2>
-      <div class="row">
-        <div class="rlabel">
-          <p class="rt">应用配色</p>
-          <p class="rd">
-            随机色更易区分；跟随强调色更整体；按图标取色=从程序图标里取主色；显示应用图标=直接显示 exe 图标
-          </p>
-        </div>
-        <div class="seg">
-          <button
-            class="seg-item"
-            :class="{ active: appColorMode === 'random' }"
-            @click="appColorMode = 'random'"
-          >
-            随机色
-          </button>
-          <button
-            class="seg-item"
-            :class="{ active: appColorMode === 'accent' }"
-            @click="appColorMode = 'accent'"
-          >
-            跟随强调色
-          </button>
-          <button
-            class="seg-item"
-            :class="{ active: appColorMode === 'iconColor' }"
-            @click="appColorMode = 'iconColor'"
-          >
-            按图标取色
-          </button>
-          <button
-            class="seg-item"
-            :class="{ active: appColorMode === 'icon' }"
-            @click="appColorMode = 'icon'"
-          >
-            显示应用图标
-          </button>
-        </div>
-      </div>
-      <div class="row col">
-        <div class="rlabel">
-          <p class="rt">应用排行显示条数</p>
-          <p class="rd">5 ~ 20 条，默认 10 条</p>
-        </div>
-        <NSlider
-          :value="appsTopN"
-          :min="5"
-          :max="20"
-          :step="1"
-          :format-tooltip="(v: number) => v + ' 条'"
-          style="max-width: 320px"
-          @update:value="(v: number) => (appsTopN = v)"
-          @change="saveTopN"
-        />
       </div>
     </div>
 

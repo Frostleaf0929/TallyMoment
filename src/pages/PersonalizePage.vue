@@ -5,6 +5,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { NSwitch } from "naive-ui";
 import Icon from "../components/Icon.vue";
 import SettingSlider from "../components/SettingSlider.vue";
+import { appsTopN } from "../lib/uiState";
 import {
   accent,
   accentIsPreset,
@@ -16,6 +17,7 @@ import {
   sideBlur,
   cardBlur,
   cardShadow,
+  appColorMode,
   exportPack,
   glass,
   importPack,
@@ -175,6 +177,57 @@ async function importTheme() {
       <h1>个性化</h1>
       <span class="sub">皮肤预设 · 壁纸 · 玻璃材质 · 透明度 · 动效</span>
     </header>
+
+    <!-- 显示（原在设置页，按用户要求移到这里，放在皮肤预设之前） -->
+    <div class="glass-card card">
+      <h2>显示</h2>
+      <div class="row col">
+        <div class="rlabel">
+          <p class="rt">应用配色</p>
+          <p class="rd">
+            随机色更易区分；跟随强调色更整体；按图标取色＝从程序图标提取主色；显示应用图标＝直接显示 exe 图标
+          </p>
+        </div>
+        <div class="seg wrap">
+          <button
+            class="seg-item"
+            :class="{ active: appColorMode === 'random' }"
+            @click="appColorMode = 'random'"
+          >
+            随机色
+          </button>
+          <button
+            class="seg-item"
+            :class="{ active: appColorMode === 'accent' }"
+            @click="appColorMode = 'accent'"
+          >
+            跟随强调色
+          </button>
+          <button
+            class="seg-item"
+            :class="{ active: appColorMode === 'iconColor' }"
+            @click="appColorMode = 'iconColor'"
+          >
+            按图标取色
+          </button>
+          <button
+            class="seg-item"
+            :class="{ active: appColorMode === 'icon' }"
+            @click="appColorMode = 'icon'"
+          >
+            显示应用图标
+          </button>
+        </div>
+      </div>
+      <SettingSlider
+        v-model="appsTopN"
+        label="应用排行显示条数"
+        desc="5 ~ 20 条，默认 10 条"
+        :min="5"
+        :max="20"
+        suffix=" 条"
+      />
+    </div>
 
     <!-- 皮肤预设 -->
     <div class="glass-card card">
