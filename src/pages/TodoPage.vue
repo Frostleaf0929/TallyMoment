@@ -170,6 +170,10 @@ const dayReport = ref<DayReport | null>(null);
 const detailNote = ref("");
 const detailImages = ref<string[]>([]);
 const preview = ref("");
+const sheetBig = ref(false);
+/** 缩略图（原图只用于点开预览）——原图 base64 直接塞进 DOM 是卡顿主因 */
+const detailThumbs = ref<string[]>([]);
+const imgLoading = ref(false);
 
 async function openDetail(date: string) {
   detailDate.value = date;
@@ -181,18 +185,52 @@ async function openDetail(date: string) {
     dayReport.value = null;
   }
   detailImages.value = [];
+  detailThumbs.value = [];
+  // 数据与日志并行取，弹层先出数据再补图
+  const [rep, note] = await Promise.all([
+    invoke<DayReport>("day_report", { date }).catch(() => null),
+    invoke<{ content: string; images: string[] } | null>("notes_get", { date }).catch(() => null),
+  ]);
+  dayReport.value = rep;
+  detailNote.value = (note?.content ?? "").split(String.fromCharCode(10)).slice(0, 3).join(" ");
+  const names = note?.images ?? [];
+  if (!names.length) return;
+  imgLoading.value = true;
   try {
-    const n = await invoke<{ content: string; images: string[] } | null>("notes_get", { date });
-    detailNote.value = (n?.content ?? "").split(String.fromCharCode(10)).slice(0, 3).join(" ");
-    const names = n?.images ?? [];
-    if (names.length) {
-      // 一次 IPC 拿全天图片（逐张取会让弹层明显卡顿）
-      const list = await invoke<[string, string, string][]>("notes_images", { date, names });
-      detailImages.value = list.map(([, mime, b64]) => `data:${mime};base64,${b64}`);
-    }
+    const list = await invoke<[string, string, string][]>("notes_images", { date, names });
+    const urls = list.map(([, mime, b64]) => `data:${mime};base64,${b64}`);
+    detailImages.value = urls;
+    detailThumbs.value = await Promise.all(urls.map(toThumb));
   } catch {
     /* 忽略 */
+  } finally {
+    imgLoading.value = false;
   }
+}
+
+/** 前端缩放成 320px 缩略图：避免把几 MB 的原图丢进 DOM 造成卡顿 */
+function toThumb(dataUrl: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => {
+      try {
+        const max = 320;
+        const k = Math.min(1, max / Math.max(img.width, img.height));
+        const cv = document.createElement("canvas");
+        cv.width = Math.max(1, Math.round(img.width * k));
+        cv.height = Math.max(1, Math.round(img.height * k));
+        const ctx = cv.getContext("2d");
+        if (!ctx) return resolve(dataUrl);
+        ctx.drawImage(img, 0, 0, cv.width, cv.height);
+        resolve(cv.toDataURL("image/jpeg", 0.82));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
 }
 
 function pct(v: number): number {
@@ -365,10 +403,15 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
          不 Teleport 的话 position:fixed 会被困在卡片内部（表现成"同级卡片"） -->
     <Teleport to="body">
       <div v-show="detailDate" class="mask" @click.self="detailDate = ''">
-      <div class="sheet glass-card">
+      <div class="sheet glass-card" :class="{ big: sheetBig }">
         <div class="modhead">
           <h2>{{ detailDate }} · 那天</h2>
-          <NButton size="tiny" quaternary @click="detailDate = ''">关闭</NButton>
+          <div class="dacts">
+            <NButton size="tiny" quaternary @click="sheetBig = !sheetBig">
+              {{ sheetBig ? "还原" : "放大" }}
+            </NButton>
+            <NButton size="tiny" quaternary @click="detailDate = ''">关闭</NButton>
+          </div>
         </div>
         <div v-if="stats" class="dcards">
           <div class="dstat"><p class="dl">今日完成</p><p class="dv">{{ stats.todayDone }} 件</p></div>
@@ -395,13 +438,16 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
           <p class="dl">那天的图片（{{ detailImages.length }} 张）</p>
           <div class="dimgs">
             <img
-              v-for="(src, i) in detailImages"
+              v-for="(src, i) in detailThumbs"
               :key="i"
               :src="src"
               alt=""
-              @click="preview = src"
+              loading="lazy"
+              decoding="async"
+              @click="preview = detailImages[i]"
             />
           </div>
+          <p v-if="imgLoading" class="dtext">图片加载中…</p>
         </div>
         <div class="dsec">
           <p class="dl">状态 / 分析 / 完成率</p>
@@ -546,12 +592,19 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   position: fixed;
   inset: 16px;
   z-index: 40;
-  background: rgba(0, 0, 0, 0.35);
+  /* 遮罩用主题底色而不是纯黑：浅色模式下不再"压黑" */
+  background: rgba(var(--bg-rgb), 0.45);
   border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
+}
+
+.dacts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .sheet {
@@ -562,6 +615,16 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   flex-direction: column;
   gap: 12px;
   padding: 18px 20px;
+  transition: width var(--dur) ease, height var(--dur) ease;
+  /* 弹层本身就用卡片那套材质与配色 */
+  background: var(--bg-glass);
+}
+
+/* 放大：铺满可用区域（类似 Notion 的展开查看） */
+.sheet.big {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
 }
 
 .dcards {

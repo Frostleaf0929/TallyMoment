@@ -203,14 +203,13 @@ onMounted(load);
 }
 
 .ltxt {
-  width: 24px;
-  flex: none;
+  max-width: 0;
+  overflow: hidden;
   font-size: 11px;
   line-height: 1;
   white-space: nowrap;
   opacity: 0;
-  transform: translateX(-4px);
-  transition: opacity var(--dur) ease, transform var(--dur) ease;
+  transition: max-width var(--dur) ease, opacity var(--dur) ease, margin-left var(--dur) ease;
 }
 
 .locate:hover {
@@ -221,8 +220,9 @@ onMounted(load);
 }
 
 .locate:hover .ltxt {
+  max-width: 30px;
   opacity: 1;
-  transform: translateX(0);
+  margin-left: 4px;
 }
 
 .week {
