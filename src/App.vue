@@ -7,6 +7,7 @@ import { darkTheme, dateZhCN, NConfigProvider, zhCN, type GlobalTheme } from "na
 import Icon from "./components/Icon.vue";
 import PetView from "./components/PetView.vue";
 import ToastStack from "./components/ToastStack.vue";
+import FullscreenReminder from "./components/FullscreenReminder.vue";
 import TodayPage from "./pages/TodayPage.vue";
 import HistoryPage from "./pages/HistoryPage.vue";
 import DetailPage from "./pages/DetailPage.vue";
@@ -30,6 +31,7 @@ let mode = "main";
 try {
   const label = getCurrentWebviewWindow().label;
   if (label === "reminder") mode = "reminder";
+  else if (label === "reminder_full") mode = "reminder_full";
   else if (label === "pet") mode = "pet";
 } catch {
   /* 浏览器直开时按主面板处理 */
@@ -216,7 +218,8 @@ onUnmounted(() => {
 
 <template>
   <NConfigProvider :theme="naiveTheme" :locale="zhCN" :date-locale="dateZhCN">
-    <ToastStack v-if="mode === 'reminder'" />
+    <FullscreenReminder v-if="mode === 'reminder_full'" />
+    <ToastStack v-else-if="mode === 'reminder'" />
     <PetView v-else-if="mode === 'pet'" />
     <div v-else class="shell shell-frame" :class="{ 'glass-off': !glass }">
       <div class="wall" aria-hidden="true"></div>

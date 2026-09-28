@@ -18,6 +18,7 @@ const draft = ref({
   dailyTimes: [] as string[],
   sticky: false,
   cardDurationSec: 10,
+  style: "card" as "card" | "fullscreen",
 });
 
 const err = ref("");
@@ -34,6 +35,7 @@ function openNew() {
     dailyTimes: [],
     sticky: false,
     cardDurationSec: 10,
+    style: "card",
   };
 }
 
@@ -48,6 +50,7 @@ function openEdit(r: ReminderRule) {
     dailyTime: "",
     dailyTimes: [...r.dailyTimes],
     sticky: r.sticky,
+    style: (r.style || "card") as "card" | "fullscreen",
     cardDurationSec: r.cardDurationSec,
   };
 }
@@ -77,6 +80,7 @@ async function save() {
     sticky: draft.value.sticky,
     cardDurationSec: draft.value.cardDurationSec,
     accentColor: null,
+    style: draft.value.style,
   };
   try {
     await invoke(isNew ? "rule_add" : "rule_update", isNew ? args : { id: editingId.value, ...args });
@@ -165,6 +169,31 @@ const modeLabel = (r: ReminderRule) =>
 </template>
 
 <style scoped>
+.seg {
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 4px;
+  background: var(--surface);
+}
+
+.seg-item {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.seg-item.active {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
 .toolbar {
   display: flex;
   align-items: center;

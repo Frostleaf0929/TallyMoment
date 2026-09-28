@@ -61,6 +61,8 @@ pub struct ReminderRule {
     pub card_duration_sec: i32,
     pub accent_color: Option<String>,
     pub enabled: bool,
+    /// card | fullscreen
+    pub style: String,
 }
 
 #[derive(Serialize)]
@@ -196,6 +198,7 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         "ALTER TABLE tasks ADD COLUMN repeat_mode TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN template_id INTEGER",
         "ALTER TABLE tasks ADD COLUMN start_ts INTEGER",
+        "ALTER TABLE reminder_rules ADD COLUMN style TEXT NOT NULL DEFAULT 'card'",
     ] {
         let _ = conn.execute(sql, []);
     }
@@ -721,11 +724,13 @@ fn rule_row(row: &rusqlite::Row) -> rusqlite::Result<ReminderRule> {
         card_duration_sec: row.get(7)?,
         accent_color: row.get(8)?,
         enabled: row.get::<_, i64>(9)? != 0,
+        style: row.get::<_, Option<String>>(10)?.unwrap_or_else(|| "card".into()),
     })
 }
 
 const RULE_COLS: &str =
-    "id, title, body, mode, interval_minutes, sticky, daily_times, card_duration_sec, accent_color, enabled";
+    "id, title, body, mode, interval_minutes, sticky, daily_times, card_duration_sec, accent_color, enabled,
+     COALESCE(style, 'card')";
 
 pub fn rule_list(conn: &Connection) -> Result<Vec<ReminderRule>, String> {
     let mut stmt = conn
@@ -793,10 +798,41 @@ pub fn rule_add(
     card_duration_sec: i32,
     accent_color: Option<String>,
 ) -> Result<(), String> {
+    rule_add_style(
+        conn,
+        title,
+        body,
+        mode,
+        interval_minutes,
+        daily_times,
+        sticky,
+        card_duration_sec,
+        accent_color,
+        "card",
+    )
+}
+
+/// 新增提醒规则（style: card | fullscreen）
+#[allow(clippy::too_many_arguments)]
+pub fn rule_add_style(
+    conn: &Connection,
+    title: &str,
+    body: &str,
+    mode: &str,
+    interval_minutes: Option<i64>,
+    daily_times: Vec<String>,
+    sticky: bool,
+    card_duration_sec: i32,
+    accent_color: Option<String>,
+    style: &str,
+) -> Result<(), String> {
+    if style != "card" && style != "fullscreen" {
+        return Err("提醒方式需为 card 或 fullscreen".into());
+    }
     validate_rule(title, mode, interval_minutes, &daily_times, card_duration_sec)?;
     conn.execute(
-        "INSERT INTO reminder_rules(title, body, mode, interval_minutes, daily_times, sticky, card_duration_sec, accent_color, last_fired_key)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO reminder_rules(title, body, mode, interval_minutes, daily_times, sticky, card_duration_sec, accent_color, last_fired_key, style)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         rusqlite::params![
             title.trim(),
             body.trim(),
@@ -806,7 +842,8 @@ pub fn rule_add(
             sticky as i64,
             card_duration_sec,
             accent_color,
-            Local::now().timestamp().to_string()
+            Local::now().timestamp().to_string(),
+            style
         ],
     )
     .map_err(|e| format!("新增提醒规则失败: {e}"))?;
@@ -825,11 +862,17 @@ pub fn rule_update(
     sticky: bool,
     card_duration_sec: i32,
     accent_color: Option<String>,
+    style: Option<String>,
 ) -> Result<(), String> {
+    let style = style.unwrap_or_else(|| "card".into());
+    if style != "card" && style != "fullscreen" {
+        return Err("提醒方式需为 card 或 fullscreen".into());
+    }
     validate_rule(title, mode, interval_minutes, &daily_times, card_duration_sec)?;
     conn.execute(
         "UPDATE reminder_rules SET title = ?2, body = ?3, mode = ?4, interval_minutes = ?5,
-         daily_times = ?6, sticky = ?7, card_duration_sec = ?8, accent_color = ?9 WHERE id = ?1",
+         daily_times = ?6, sticky = ?7, card_duration_sec = ?8, accent_color = ?9,
+         style = ?10 WHERE id = ?1",
         rusqlite::params![
             id,
             title.trim(),
@@ -873,6 +916,8 @@ pub struct RuleDue {
     pub card_duration_sec: i32,
     pub accent_color: Option<String>,
     pub last_fired_key: String,
+    /// card | fullscreen
+    pub style: String,
 }
 
 pub fn rule_enabled(conn: &Connection) -> Result<Vec<RuleDue>, String> {
@@ -885,7 +930,7 @@ pub fn rule_enabled(conn: &Connection) -> Result<Vec<RuleDue>, String> {
     let rows = stmt
         .query_map([], |row| {
             let r = rule_row(row)?;
-            let last = row.get::<_, String>(10)?;
+            let last = row.get::<_, String>(11)?;
             Ok(RuleDue {
                 id: r.id,
                 title: r.title,
@@ -897,6 +942,7 @@ pub fn rule_enabled(conn: &Connection) -> Result<Vec<RuleDue>, String> {
                 card_duration_sec: r.card_duration_sec,
                 accent_color: r.accent_color,
                 last_fired_key: last,
+                style: r.style,
             })
         })
         .map_err(|e| format!("查询提醒规则失败: {e}"))?;
@@ -2918,6 +2964,30 @@ mod tests {
             .query_row("SELECT display_name FROM apps WHERE name = 'chrome.exe'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(display, "谷歌浏览器", "别名应作为显示名");
+    }
+
+    #[test]
+    fn reminder_style_roundtrip() {
+        let path = std::env::temp_dir().join("tm-style.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        let _ = conn.execute("DELETE FROM reminder_rules", []);
+        rule_add_style(
+            &conn, "全屏休息", "起来走走", "interval", Some(45), vec![], true, 15, None, "fullscreen",
+        )
+        .unwrap();
+        rule_add(&conn, "普通卡片", "喝水", "interval", Some(30), vec![], false, 10, None).unwrap();
+        let list = rule_list(&conn).unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().any(|r| r.style == "fullscreen"));
+        assert!(list.iter().any(|r| r.style == "card"));
+        // 非法方式被拒
+        assert!(rule_add_style(&conn, "x", "", "interval", Some(1), vec![], false, 10, None, "popup").is_err());
+        // 调度用的查询也要带出 style
+        let due = rule_enabled(&conn).unwrap();
+        assert!(due.iter().any(|r| r.style == "fullscreen"));
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

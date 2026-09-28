@@ -181,6 +181,8 @@ export interface ReminderRule {
   cardDurationSec: number;
   accentColor: string | null;
   enabled: boolean;
+  /** card | fullscreen */
+  style: string;
 }
 
 export interface TodoStats {

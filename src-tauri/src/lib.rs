@@ -597,10 +597,11 @@ fn rule_add(
     sticky: bool,
     card_duration_sec: i32,
     accent_color: Option<String>,
+    style: Option<String>,
 ) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    storage::rule_add(
+    storage::rule_add_style(
         &conn,
         &title,
         &body,
@@ -610,7 +611,14 @@ fn rule_add(
         sticky,
         card_duration_sec,
         accent_color,
+        style.as_deref().unwrap_or("card"),
     )
+}
+
+/// 关闭全屏提醒窗
+#[tauri::command]
+fn close_reminder_full(app: tauri::AppHandle) {
+    reminder::close_full(&app);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -626,6 +634,7 @@ fn rule_update(
     sticky: bool,
     card_duration_sec: i32,
     accent_color: Option<String>,
+    style: Option<String>,
 ) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
@@ -640,6 +649,7 @@ fn rule_update(
         sticky,
         card_duration_sec,
         accent_color,
+        style,
     )
 }
 
@@ -1087,6 +1097,7 @@ pub fn run() {
             pet_live2d_report,
             pet_live2d_status,
             close_reminder,
+            close_reminder_full,
             import_tai,
             export_json,
             restore_json,

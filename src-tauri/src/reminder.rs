@@ -35,6 +35,8 @@ pub struct Payload {
     pub duration_ms: u64,
     pub accent: Option<String>,
     pub actions: Vec<ActionDef>,
+    /// card | fullscreen（全屏提醒方式）
+    pub style: String,
 }
 
 impl Payload {
@@ -49,6 +51,7 @@ impl Payload {
             duration_ms: 10_000,
             accent: None,
             actions: vec![ActionDef::new("ack", "知道了")],
+            style: "card".into(),
         }
     }
 }
@@ -76,6 +79,10 @@ pub fn take_pending() -> Vec<Payload> {
 /// 弹出右下角提醒小窗；窗口已存在则直接追加卡片
 pub fn show(app: &AppHandle, payload: Payload) {
     eprintln!("[reminder] show kind={} ref={}", payload.kind, payload.ref_id);
+    if payload.style == "fullscreen" {
+        show_fullscreen(app, payload);
+        return;
+    }
     if let Some(win) = app.get_webview_window("reminder") {
         eprintln!("[reminder] window exists, emit to webview");
         let _ = win.show();
@@ -106,6 +113,47 @@ pub fn show(app: &AppHandle, payload: Payload) {
 }
 
 /// 前端按卡片数量上报内容高度，窗口随之缩放并保持右下角锚定
+/// 全屏提醒：铺满主屏的置顶无边框窗口（"该休息了"那一类）
+fn show_fullscreen(app: &AppHandle, payload: Payload) {
+    if let Some(win) = app.get_webview_window("reminder_full") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        let _ = app.emit_to("reminder_full", "reminder-show", payload);
+        return;
+    }
+    push_pending(payload);
+    let (w, h) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            let sc = m.scale_factor();
+            (m.size().width as f64 / sc, m.size().height as f64 / sc)
+        })
+        .unwrap_or((1280.0, 800.0));
+    let build = WebviewWindowBuilder::new(app, "reminder_full", WebviewUrl::App("index.html".into()))
+        .title("拾刻 · 休息提醒")
+        .inner_size(w, h)
+        .position(0.0, 0.0)
+        .decorations(false)
+        .transparent(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .visible(true)
+        .build();
+    if let Err(e) = build {
+        eprintln!("[reminder] 全屏提醒窗创建失败: {e}");
+    }
+}
+
+/// 关闭全屏提醒窗
+pub fn close_full(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("reminder_full") {
+        let _ = win.hide();
+    }
+}
+
 pub fn resize(app: &AppHandle, content_height: f64) {
     if let Some(win) = app.get_webview_window("reminder") {
         let h = (content_height + 24.0).max(REMINDER_MIN_H);

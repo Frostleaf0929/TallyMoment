@@ -287,6 +287,7 @@ fn check_reminders(app: &AppHandle, now: chrono::DateTime<chrono::Local>) {
         payload.sticky = r.sticky;
         payload.duration_ms = r.card_duration_sec as u64 * 1000;
         payload.accent = r.accent_color.clone();
+        payload.style = r.style.clone();
         payload.actions = vec![
             reminder::ActionDef::new("ack", "知道了"),
             reminder::ActionDef::new("snooze5", "5 分钟后"),

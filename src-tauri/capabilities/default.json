@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window and the reminder popup",
-  "windows": ["main", "reminder", "pet"],
+  "windows": ["main", "reminder", "reminder_full"],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",
