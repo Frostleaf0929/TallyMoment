@@ -117,6 +117,9 @@ const modeLabel = (r: ReminderRule) =>
         <span class="title" :title="r.title">{{ r.title }}</span>
         <span class="tag">{{ modeLabel(r) }}</span>
         <span class="tag">{{ r.sticky ? "卡片常驻" : `停留 ${r.cardDurationSec}s` }}</span>
+        <span class="tag" :class="{ full: r.style === 'fullscreen' }">
+          {{ r.style === "fullscreen" ? "全屏" : "卡片" }}
+        </span>
         <NSwitch size="small" :value="r.enabled" @update:value="(v: boolean) => toggle(r, v)" />
         <NButton quaternary size="tiny" @click="openEdit(r)">编辑</NButton>
         <NPopconfirm @positive-click="remove(r)">
@@ -141,6 +144,19 @@ const modeLabel = (r: ReminderRule) =>
         </button>
         <button class="seg-i" :class="{ on: draft.mode === 'daily' }" @click="draft.mode = 'daily'">
           每日定点
+        </button>
+      </div>
+      <!-- 提醒方式：卡片（右下角）/ 全屏（该休息了） -->
+      <div class="seg">
+        <button class="seg-i" :class="{ on: draft.style === 'card' }" @click="draft.style = 'card'">
+          右下角卡片
+        </button>
+        <button
+          class="seg-i"
+          :class="{ on: draft.style === 'fullscreen' }"
+          @click="draft.style = 'fullscreen'"
+        >
+          全屏提醒
         </button>
       </div>
       <div v-if="draft.mode === 'interval'" class="frow">
@@ -233,6 +249,11 @@ const modeLabel = (r: ReminderRule) =>
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tag.full {
+  color: var(--accent-text);
+  background: var(--accent-soft);
 }
 
 .tag {

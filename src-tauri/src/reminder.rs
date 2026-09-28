@@ -106,13 +106,35 @@ pub fn show(app: &AppHandle, payload: Payload) {
         .shadow(false)
         .visible(false);
 
-    if let Err(e) = build.build() {
-        eprintln!("[reminder] 创建提醒窗口失败: {e}");
-        return;
+    match build.build() {
+        Ok(win) => kill_border(&win),
+        Err(e) => eprintln!("[reminder] 创建提醒窗口失败: {e}"),
     }
 }
 
 /// 前端按卡片数量上报内容高度，窗口随之缩放并保持右下角锚定
+/// 去掉 Windows 给窗口画的 1px DWM 边框（透明窗口上就是用户说的"灰框"）
+#[cfg(windows)]
+fn kill_border(win: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
+    if let Ok(hwnd) = win.hwnd() {
+        // DWMWA_COLOR_NONE = 0xFFFFFFFE
+        let none: u32 = 0xFFFF_FFFE;
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                HWND(hwnd.0),
+                DWMWA_BORDER_COLOR,
+                &none as *const _ as *const std::ffi::c_void,
+                4,
+            );
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn kill_border(_win: &tauri::WebviewWindow) {}
+
 /// 全屏提醒：铺满主屏的置顶无边框窗口（"该休息了"那一类）
 fn show_fullscreen(app: &AppHandle, payload: Payload) {
     if let Some(win) = app.get_webview_window("reminder_full") {
@@ -142,8 +164,9 @@ fn show_fullscreen(app: &AppHandle, payload: Payload) {
         .resizable(false)
         .visible(true)
         .build();
-    if let Err(e) = build {
-        eprintln!("[reminder] 全屏提醒窗创建失败: {e}");
+    match build {
+        Ok(win) => kill_border(&win),
+        Err(e) => eprintln!("[reminder] 全屏提醒窗创建失败: {e}"),
     }
 }
 
