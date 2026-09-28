@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { NButton, NDatePicker, NInput } from "naive-ui";
+import MarkdownPreview from "./MarkdownPreview.vue";
+import { appendBlock } from "../lib/mdBlocks";
 
 /** 每日日志：Markdown 正文 + 图片附件（后端 notes.rs） */
 const props = defineProps<{ dayTs?: number }>();
@@ -21,6 +23,9 @@ const recent = ref<DailyNote[]>([]);
 const msg = ref("");
 const err = ref("");
 const busy = ref(false);
+/** 预览（块式），插入的图片宽度 */
+const showPreview = ref(true);
+const imgWidth = ref<"100%" | "60%" | "33%">("100%");
 
 function ymd(ts: number): string {
   const d = new Date(ts);
@@ -79,6 +84,30 @@ async function saveDay() {
   }
 }
 
+/* ---------- 块工具栏：把内容按"块"追加，再用预览里的 ↑↓ 调整顺序 ---------- */
+function insertBlock(raw: string) {
+  content.value = appendBlock(content.value, raw);
+}
+
+/** 插入图片块：按所选宽度写成 <img>，全宽时用标准 ![]() 写法（Obsidian 兼容） */
+function insertImageBlock(name: string) {
+  const raw =
+    imgWidth.value === "100%"
+      ? `![](images/${name})`
+      : `<img src="images/${name}" width="${imgWidth.value}">`;
+  insertBlock(raw);
+}
+
+/** 缩略图映射：给预览渲染用 */
+const imageMap = computed(() => {
+  const m: Record<string, string> = {};
+  for (const name of images.value) {
+    const url = thumbs[`${dateStr()}/${name}`];
+    if (url) m[name] = url;
+  }
+  return m;
+});
+
 async function addImage() {
   err.value = "";
   try {
@@ -93,7 +122,8 @@ async function addImage() {
     for (const p of list) {
       const name = await invoke<string>("notes_add_image", { date: dateStr(), path: p });
       images.value.push(name);
-      void ensureThumb(dateStr(), name);
+      await ensureThumb(dateStr(), name);
+      insertImageBlock(name);
     }
     msg.value = `已添加 ${list.length} 张图片（点保存后写入当天日志）`;
   } catch (e) {
@@ -192,12 +222,42 @@ onMounted(async () => {
       <span v-if="!recent.length" class="empty">还没有日志，写第一条试试</span>
     </div>
 
+    <!-- 块工具栏：点一下就往正文追加一个"块"，顺序可在下面预览里用 ↑↓ 调整 -->
+    <div class="blocks">
+      <button class="tb" @click="insertBlock('# ' + '标题')">标题</button>
+      <button class="tb" @click="insertBlock('正文')">正文</button>
+      <button class="tb" @click="insertBlock('- [ ] ' + '待办')">待办</button>
+      <button class="tb" @click="insertBlock('- ' + '列表项')">列表</button>
+      <button class="tb" @click="insertBlock('> ' + '引用')">引用</button>
+      <button class="tb" @click="insertBlock('---')">分割线</button>
+      <button class="tb" @click="insertBlock('**加粗文字**')">加粗</button>
+      <span class="tb-sep"></span>
+      <button class="tb" @click="addImage">图片…</button>
+      <span class="tb-w">
+        宽度
+        <button class="tb sm" :class="{ active: imgWidth === '33%' }" @click="imgWidth = '33%'">小</button>
+        <button class="tb sm" :class="{ active: imgWidth === '60%' }" @click="imgWidth = '60%'">中</button>
+        <button class="tb sm" :class="{ active: imgWidth === '100%' }" @click="imgWidth = '100%'">全宽</button>
+      </span>
+      <button class="tb" style="margin-left: auto" @click="showPreview = !showPreview">
+        {{ showPreview ? "隐藏预览" : "显示预览" }}
+      </button>
+    </div>
+
     <NInput
       v-model:value="content"
       type="textarea"
-      placeholder="写点什么…支持 Markdown（# 标题、- 列表、**加粗**、`代码`）"
-      :autosize="{ minRows: 6, maxRows: 18 }"
+      placeholder="写点什么…也可以直接手写 Markdown"
+      :autosize="{ minRows: 5, maxRows: 14 }"
     />
+
+    <div v-if="showPreview" class="preview">
+      <MarkdownPreview
+        :content="content"
+        :images="imageMap"
+        @update:content="(v: string) => (content = v)"
+      />
+    </div>
 
     <div v-if="images.length" class="imgs">
       <div v-for="name in images" :key="name" class="img">
@@ -217,6 +277,65 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.blocks {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.tb {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: var(--r-sm);
+  font-size: 11.5px;
+  font-family: inherit;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: background var(--dur), color var(--dur), border-color var(--dur);
+}
+
+.tb:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.tb.sm {
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.tb.sm.active {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.tb-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 2px;
+}
+
+.tb-w {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.preview {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .bar {

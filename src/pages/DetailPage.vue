@@ -181,18 +181,20 @@ watch(navIntent, (n) => {
     <header class="head">
       <h1>详细</h1>
       <span class="sub">按应用查看 · 选中左侧应用可下钻</span>
-      <!-- 从待办跳过来时的返回按钮：默认圆形图标，悬停展开成胶囊（与月历定位同款动效） -->
+    </header>
+
+    <div class="segrow">
+      <div class="viewseg">
+        <button class="vbtn" :class="{ active: view === 'time' }" @click="view = 'time'">应用</button>
+        <button class="vbtn" :class="{ active: view === 'items' }" @click="view = 'items'">事项</button>
+      </div>
+      <!-- 从待办跳过来时的返回按钮：与上面这排对齐，默认圆形图标、悬停展开成胶囊 -->
       <button v-if="fromTodo" class="back" title="返回待办" @click="goTab('todo')">
         <svg viewBox="0 0 24 24" class="bkicon" aria-hidden="true">
           <path d="M14.5 5.5L8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
         <span class="bktxt">返回待办</span>
       </button>
-    </header>
-
-    <div class="viewseg">
-      <button class="vbtn" :class="{ active: view === 'time' }" @click="view = 'time'">应用</button>
-      <button class="vbtn" :class="{ active: view === 'items' }" @click="view = 'items'">事项</button>
     </div>
 
     <!-- 事项视角：直接复用某天对照详情 -->
@@ -322,6 +324,13 @@ watch(navIntent, (n) => {
   padding: 4px;
   background: var(--surface);
   width: fit-content;
+}
+
+/* 分段切换与返回按钮同一行、baseline 对齐 */
+.segrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 /* 返回待办：图标 -> 悬停展开成胶囊 */
