@@ -7,6 +7,8 @@ import type { ReminderRule, Task, TodoStats } from "../types";
 import Icon from "../components/Icon.vue";
 import TaskBoard from "../components/TaskBoard.vue";
 import ReminderRules from "../components/ReminderRules.vue";
+import CalendarHeat from "../components/CalendarHeat.vue";
+import NotesPanel from "../components/NotesPanel.vue";
 
 const tasks = ref<Task[]>([]);
 const rules = ref<ReminderRule[]>([]);
@@ -17,6 +19,8 @@ const newPriority = ref(1);
 const newDue = ref<string | null>(null);
 const err = ref("");
 const msg = ref("");
+/** 月历选中的那天，传给日志面板 */
+const pickedDay = ref<number>(Date.now());
 
 const priorityOptions = [
   { label: "高", value: 2 },
@@ -115,6 +119,10 @@ async function exportAll() {
   }
 }
 
+function onPickDay(date: string) {
+  pickedDay.value = new Date(`${date}T00:00:00`).getTime();
+}
+
 async function load() {
   try {
     tasks.value = await invoke<Task[]>("task_list");
@@ -164,6 +172,13 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
       </div>
     </header>
     <p v-if="msg" class="okline">{{ msg }}</p>
+
+    <!-- 日程月历 -->
+    <section class="glass-card">
+      <h2>日程 · 月历</h2>
+      <CalendarHeat :selected="new Date(pickedDay).toISOString().slice(0, 10)" @pick="onPickDay" />
+      <p class="hint">点某一天可以跳到那天的日志；颜色越深表示那天用得越久</p>
+    </section>
 
     <!-- 完成率统计 -->
     <section class="cards">
@@ -247,6 +262,11 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
       </div>
       <ReminderRules :rules="rules" @reload="load" />
     </section>
+    <!-- 每日日志 -->
+    <section class="glass-card">
+      <h2>日志（Markdown + 图片）</h2>
+      <NotesPanel :day-ts="pickedDay" />
+    </section>
   </div>
 </template>
 
@@ -255,6 +275,12 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-faint);
 }
 
 .modhead {
