@@ -15,6 +15,8 @@ interface DataInfo {
   exists: boolean;
 }
 
+/** 开发模式下自启动会因缺少 dev 服务器而报连接错误，界面上直接说明 */
+const isDev = import.meta.env.DEV;
 const autoStart = ref(false);
 const data = ref<DataInfo | null>(null);
 const msg = ref("");
@@ -84,6 +86,11 @@ onMounted(async () => {
         </div>
         <NSwitch :value="autoStart" @update:value="toggleAutoStart" />
       </div>
+      <p v-if="isDev" class="rd more">
+        注意：当前是<b>开发模式</b>（pnpm tauri dev）。自启动会拉起开发版程序，而开发版的界面是从本地开发服务器加载的，
+        开机时那个服务器没在运行，所以会弹出「无法访问此页面 / localhost 拒绝连接」——这是开发模式的必然现象，
+        不是自启动没注册。打包之后（pnpm tauri build）界面从程序自带文件加载，自启动就正常了。
+      </p>
       <div class="row">
         <div class="rlabel">
           <p class="rt">记录</p>

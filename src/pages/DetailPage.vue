@@ -166,7 +166,8 @@ watch(navIntent, (n) => {
     </header>
 
     <div class="split">
-      <!-- 应用列表（主入口） -->
+      <!-- 应用列表（主入口）：外层只负责撑高，内层绝对定位贴合 → 底部与右列对齐且不撑长页面 -->
+      <div class="applist-wrap">
       <aside class="glass-card applist">
         <div class="listhead">
           <h2>应用</h2>
@@ -198,6 +199,7 @@ watch(navIntent, (n) => {
           <p v-if="!filteredApps.length" class="empty">这个范围没有记录</p>
         </div>
       </aside>
+      </div>
 
       <div class="right">
         <!-- 时间范围卡（原来"区间总时长"的位置）：只做相对区间文字切换 -->
@@ -428,13 +430,17 @@ watch(navIntent, (n) => {
 }
 
 /* 应用列表撑满所在列，底部与右侧列对齐 */
-/* 列表高度跟随右列（底部对齐），但不超过视口：超过就在卡片内滚动，不再一路往下延展 */
+/* 外层：撑满右列（不参与高度计算），内层绝对定位贴合 → 卡片底部与右列平齐 */
+.applist-wrap {
+  position: relative;
+  min-height: 320px;
+}
+
 .applist {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  height: 100%;
-  max-height: calc(100vh - 200px);
   overflow: hidden;
 }
 

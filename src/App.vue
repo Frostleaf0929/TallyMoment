@@ -218,17 +218,28 @@ onUnmounted(() => {
 
       <aside class="side" :class="{ collapsed }">
         <div class="brand" @mousedown="startDrag" @dblclick="toggleMaxWin">
+          <!-- 折叠时：应用图标就是"展开"入口 -->
           <button
+            v-if="collapsed"
             class="logo-btn"
-            :title="collapsed ? '展开侧栏' : '收起侧栏'"
+            title="展开侧栏"
             @mousedown.stop
             @click="toggleCollapse"
           >
             <img class="logoimg" src="/app-icon.svg" alt="拾刻" draggable="false" />
           </button>
-          <template v-if="!collapsed">
+          <!-- 展开时：品牌文字 + 原来的收起图标（不放应用图标） -->
+          <template v-else>
             <span class="logo">拾刻</span>
             <span class="en">TallyMoment</span>
+            <button
+              class="collapse-btn"
+              title="收起侧栏"
+              @mousedown.stop
+              @click="toggleCollapse"
+            >
+              <Icon name="collapse" :size="16" />
+            </button>
           </template>
         </div>
 
@@ -396,6 +407,28 @@ body.glass-off {
   height: 26px;
   border-radius: 8px;
   display: block;
+}
+
+/* 展开状态下的收起按钮（沿用原来的双箭头图标） */
+.collapse-btn {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: var(--r-sm);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+  transition: background var(--dur), color var(--dur);
+}
+
+.collapse-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 .side.collapsed .brand {

@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NButton, NInput, NSelect } from "naive-ui";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type { ReminderRule, Task, TodoStats } from "../types";
 import Icon from "../components/Icon.vue";
 import TaskBoard from "../components/TaskBoard.vue";
@@ -15,12 +16,49 @@ const newContent = ref("");
 const newPriority = ref(1);
 const newDue = ref<string | null>(null);
 const err = ref("");
+const msg = ref("");
 
 const priorityOptions = [
   { label: "高", value: 2 },
   { label: "中", value: 1 },
   { label: "低", value: 0 },
 ];
+
+/** Markdown 导出（对齐 Obsidian / Notion 的 - [ ] 语法） */
+async function exportMd() {
+  err.value = "";
+  try {
+    const picked = await save({
+      title: "导出待办为 Markdown",
+      defaultPath: `拾刻待办-${new Date().toISOString().slice(0, 10)}.md`,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (!picked) return;
+    const file = await invoke<string>("tasks_export_md", { path: picked });
+    msg.value = `已导出：${file}`;
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+/** Markdown 导入（同内容的任务自动跳过） */
+async function importMd() {
+  err.value = "";
+  try {
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      title: "选择 Markdown 文件",
+      filters: [{ name: "Markdown", extensions: ["md", "markdown", "txt"] }],
+    });
+    if (!picked || Array.isArray(picked)) return;
+    const sum = await invoke<{ skipped: number }>("tasks_import_md", { path: picked });
+    await load();
+    msg.value = `导入完成，跳过 ${sum.skipped} 条已存在的任务`;
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
 
 async function load() {
   try {
@@ -66,7 +104,12 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     <header class="head">
       <h1>待办</h1>
       <span class="sub">任务、提醒与完成率</span>
+      <div class="headacts">
+        <NButton size="small" secondary @click="importMd">导入 MD</NButton>
+        <NButton size="small" secondary @click="exportMd">导出 MD</NButton>
+      </div>
     </header>
+    <p v-if="msg" class="okline">{{ msg }}</p>
 
     <!-- 完成率统计 -->
     <section class="cards">
@@ -146,6 +189,19 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.headacts {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.okline {
+  margin: 0;
+  font-size: 12px;
+  color: var(--good);
+  word-break: break-all;
 }
 
 .head {

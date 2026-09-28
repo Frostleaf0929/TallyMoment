@@ -266,6 +266,28 @@ fn app_icons(app: tauri::AppHandle, names: Vec<String>) -> Vec<AppIconOut> {
     out
 }
 
+/// 导出待办为 Markdown（用户选路径；返回实际写入的文件）
+#[tauri::command]
+fn tasks_export_md(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let p = std::path::PathBuf::from(&path);
+    let dir = p.parent().ok_or("导出路径异常")?.to_path_buf();
+    let name = p
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .ok_or("导出路径异常")?;
+    storage::tasks_export_md(&conn, &dir, &name)
+}
+
+/// 从 Markdown 导入待办（跳过已存在的同内容任务）
+#[tauri::command]
+fn tasks_import_md(app: tauri::AppHandle, path: String) -> Result<storage::ImportSummary, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::tasks_import_md(&conn, &path)
+}
+
 /// 任意日期区间报表（详细页）
 #[tauri::command]
 fn range_report(
@@ -965,6 +987,8 @@ pub fn run() {
             insights_report,
             period_report,
             period_index,
+            tasks_export_md,
+            tasks_import_md,
             app_icons,
             range_report,
             app_list,

@@ -84,7 +84,8 @@ watchEffect(() => {
 
 .row {
   width: 100%;
-  grid-template-columns: 16px 22px 1fr auto;
+  grid-template-columns: 16px 20px 1fr auto;
+  column-gap: 12px;
   border: 0;
   background: transparent;
   font-family: inherit;
@@ -113,6 +114,7 @@ watchEffect(() => {
   grid-row: 1;
   width: 18px;
   height: 18px;
+  margin-right: 2px;
   border-radius: 5px;
   object-fit: contain;
 }

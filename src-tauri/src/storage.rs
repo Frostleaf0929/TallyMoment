@@ -1829,6 +1829,149 @@ pub fn range_report(
     })
 }
 
+// ---------- 待办 Markdown 导入导出（对齐 Obsidian / Notion 的 checkbox 语法） ----------
+
+/// 导出为 Markdown：`- [ ] 内容 [优先级:高] [到期:YYYY-MM-DD HH:MM] [完成:…]`
+pub fn tasks_export_md(conn: &Connection, dir: &std::path::Path, file_name: &str) -> Result<String, String> {
+    let tasks = task_list(conn)?;
+    let mut done: Vec<&Task> = Vec::new();
+    let mut undone: Vec<&Task> = Vec::new();
+    for t in &tasks {
+        if t.done {
+            done.push(t);
+        } else {
+            undone.push(t);
+        }
+    }
+    let fmt_due = |ts: Option<i64>| -> String {
+        match ts {
+            Some(v) => chrono::Local
+                .timestamp_opt(v, 0)
+                .single()
+                .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_default(),
+            None => String::new(),
+        }
+    };
+    let prio = |p: i32| match p {
+        2 => "高",
+        0 => "低",
+        _ => "中",
+    };
+    let today = today_date();
+    let mut out = String::new();
+    out.push_str(&format!("# 拾刻待办 · {today}\n\n"));
+    out.push_str("> 说明：本文件可直接用 Obsidian / Notion 打开；勾选状态用 `- [ ] / - [x]` 表示，\n> 行尾的 `[优先级:…] [到期:…]` 是附加信息，导入时会读回。\n\n");
+
+    let section = |title: &str, list: &Vec<&Task>, out: &mut String| {
+        if list.is_empty() {
+            return;
+        }
+        out.push_str(&format!("## {title}\n\n"));
+        for t in list {
+            let mark = if t.done { "x" } else { " " };
+            let mut line = format!("- [{mark}] {}", t.content);
+            if t.priority != 1 {
+                line.push_str(&format!(" [优先级:{}]", prio(t.priority)));
+            }
+            if let Some(ts) = t.due_ts {
+                line.push_str(&format!(" [到期:{}]", fmt_due(Some(ts))));
+            }
+            if t.done {
+                if let Some(ts) = t.done_ts {
+                    line.push_str(&format!(" [完成:{}]", fmt_due(Some(ts))));
+                }
+            }
+            out.push_str(&line);
+            out.push_str("\n");
+        }
+        out.push('\n');
+    };
+    section("未完成", &undone, &mut out);
+    section("已完成", &done, &mut out);
+
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败: {e}"))?;
+    let path = dir.join(file_name);
+    std::fs::write(&path, out).map_err(|e| format!("写入 Markdown 失败: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 从 Markdown 导入：识别 `- [ ] 内容` / `- [x] 内容` 行，行尾元数据可读回
+pub fn tasks_import_md(conn: &Connection, path: &str) -> Result<ImportSummary, String> {
+    let p = std::path::PathBuf::from(path);
+    let size = std::fs::metadata(&p).map_err(|e| format!("读取文件失败: {e}"))?.len();
+    if size > 4 * 1024 * 1024 {
+        return Err("文件过大（超过 4MB）".into());
+    }
+    let text = std::fs::read_to_string(&p).map_err(|e| format!("读取失败（需要 UTF-8 文本）: {e}"))?;
+
+    let re_meta = |line: &str, key: &str| -> Option<String> {
+        let open = format!("[{key}:");
+        let i = line.find(&open)?;
+        let rest = &line[i + open.len()..];
+        let j = rest.find(']')?;
+        Some(rest[..j].trim().to_string())
+    };
+    let parse_ts = |s: &str| -> Option<i64> {
+        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M")
+            .ok()
+            .map(|d| d.and_utc().timestamp() - chrono::Local::now().offset().local_minus_utc() as i64)
+            .or_else(|| {
+                chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|d| d.and_hms_opt(9, 0, 0))
+                    .map(|d| d.and_utc().timestamp() - chrono::Local::now().offset().local_minus_utc() as i64)
+            })
+    };
+
+    let existing: Vec<String> = task_list(conn)?.into_iter().map(|t| t.content).collect();
+    let mut skipped = 0usize;
+    for raw in text.lines() {
+        let line = raw.trim();
+        let (done, body) = if let Some(r) = line.strip_prefix("- [x]").or_else(|| line.strip_prefix("- [X]")) {
+            (true, r)
+        } else if let Some(r) = line.strip_prefix("- [ ]") {
+            (false, r)
+        } else {
+            continue;
+        };
+        // 去掉行尾元数据后再取正文
+        let mut content = body.to_string();
+        for key in ["[优先级:", "[到期:", "[完成:"] {
+            if let Some(i) = content.find(key) {
+                content = content[..i].to_string();
+            }
+        }
+        let content = content.trim().to_string();
+        if content.is_empty() {
+            continue;
+        }
+        if existing.contains(&content) {
+            skipped += 1;
+            continue;
+        }
+        let priority = match re_meta(body, "优先级").as_deref() {
+            Some("高") => 2,
+            Some("低") => 0,
+            _ => 1,
+        };
+        let due = re_meta(body, "到期").and_then(|s| parse_ts(&s));
+        task_add(conn, &content, priority, due)?;
+        if done {
+            if let Ok(id) = conn.query_row("SELECT id FROM tasks WHERE content = ?1", [&content], |r| r.get::<_, i64>(0)) {
+                let _ = task_set_done(conn, id, true);
+            }
+        }
+    }
+    Ok(ImportSummary {
+        apps: 0,
+        daily_rows: 0,
+        hourly_rows: 0,
+        segments: 0,
+        skipped,
+    })
+}
+
 // ---------- 壁纸与主题包（个性化页；墙纸只存本机数据目录） ----------
 
 const WALLPAPER_MAX_BYTES: u64 = 16 * 1024 * 1024;
