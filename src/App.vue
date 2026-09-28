@@ -5,7 +5,6 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { darkTheme, dateZhCN, NConfigProvider, zhCN, type GlobalTheme } from "naive-ui";
 import Icon from "./components/Icon.vue";
-import DataCard from "./components/DataCard.vue";
 import PetView from "./components/PetView.vue";
 import ToastStack from "./components/ToastStack.vue";
 import TodayPage from "./pages/TodayPage.vue";
@@ -43,7 +42,6 @@ type Tab =
   | "detail"
   | "insights"
   | "todo"
-  | "data"
   | "personalize"
   | "settings";
 const tabs: { key: Tab; label: string; icon: string }[] = [
@@ -52,7 +50,6 @@ const tabs: { key: Tab; label: string; icon: string }[] = [
   { key: "detail", label: "详细", icon: "detail" },
   { key: "insights", label: "洞察", icon: "graph" },
   { key: "todo", label: "待办", icon: "checklist" },
-  { key: "data", label: "数据", icon: "database" },
   { key: "personalize", label: "个性化", icon: "palette" },
 ];
 const active = ref<Tab>("today");
@@ -275,15 +272,6 @@ onUnmounted(() => {
         <DetailPage v-show="active === 'detail'" />
         <InsightsPage v-show="active === 'insights'" />
         <TodoPage v-show="active === 'todo'" />
-        <div v-show="active === 'data'" class="page">
-          <header class="phead">
-            <h1>数据</h1>
-            <span class="sub">导出 / 恢复 / 删除</span>
-          </header>
-          <div class="glass-card card">
-            <DataCard />
-          </div>
-        </div>
         <!-- 桌宠模块已停用（用户决定降优先级，代码保留在 pages/PetSettingsPage.vue） -->
         <PersonalizePage v-show="active === 'personalize'" @wallpaper-changed="loadWallpaper" />
         <SettingsPage v-show="active === 'settings'" />

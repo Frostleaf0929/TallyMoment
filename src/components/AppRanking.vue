@@ -84,19 +84,18 @@ watchEffect(() => {
 
 .row {
   width: 100%;
-  grid-template-columns: 16px 20px 1fr auto;
-  column-gap: 12px;
   border: 0;
   background: transparent;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
   display: grid;
-  grid-template-columns: 16px 10px 1fr auto;
+  /* 序号 / 图标 / 名称 / 时长 —— 图标列要够宽，否则会压到名称上 */
+  grid-template-columns: 18px 26px 1fr auto;
   grid-template-rows: auto auto;
-  column-gap: 8px;
+  column-gap: 12px;
   align-items: center;
-  transition: transform 0.15s;
+  transition: transform var(--dur);
 }
 
 .row:hover {
@@ -112,15 +111,18 @@ watchEffect(() => {
 
 .iapp {
   grid-row: 1;
+  grid-column: 2;
+  justify-self: center;
   width: 18px;
   height: 18px;
-  margin-right: 2px;
   border-radius: 5px;
   object-fit: contain;
 }
 
 .dot {
   grid-row: 1;
+  grid-column: 2;
+  justify-self: center;
   width: 8px;
   height: 8px;
   border-radius: 50%;

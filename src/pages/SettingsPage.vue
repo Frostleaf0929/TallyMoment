@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { NSlider, NSwitch } from "naive-ui";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { appsTopN } from "../lib/uiState";
+import DataCard from "../components/DataCard.vue";
 import { appColorMode } from "../lib/appearance";
 
 interface DataInfo {
@@ -171,6 +172,9 @@ onMounted(async () => {
       <div class="acts">
         <button class="btn" @click="openDataDir">打开数据目录</button>
       </div>
+      <div class="datacard">
+        <DataCard />
+      </div>
       <p class="rd more">
         数据只存在本机、不上传。<b>崩溃安全</b>：切换应用、离开键盘 60 秒、退出程序时都会立即落库；
         长会话每分钟打一次检查点；键鼠计数每 5 秒落一次。也就是说意外崩溃最多损失 1 分钟记录，
@@ -313,6 +317,13 @@ onMounted(async () => {
 
 .acts {
   margin-top: 12px;
+}
+
+/* 原来「数据」页的导入/导出/恢复/删除，直接并进这张卡片 */
+.datacard {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 
 .btn {
