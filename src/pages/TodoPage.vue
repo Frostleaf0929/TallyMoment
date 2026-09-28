@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NButton, NInput, NSelect } from "naive-ui";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ReminderRule, Task, TodoStats } from "../types";
+import type { DayReport, ReminderRule, Task, TodoStats } from "../types";
+import { fmtDuration } from "../lib/format";
+import HourlyChart from "../components/HourlyChart.vue";
 import Icon from "../components/Icon.vue";
 import TaskBoard from "../components/TaskBoard.vue";
 import ReminderRules from "../components/ReminderRules.vue";
@@ -121,6 +123,61 @@ async function exportAll() {
 
 function onPickDay(date: string) {
   pickedDay.value = new Date(`${date}T00:00:00`).getTime();
+  void openDetail(date);
+}
+
+/* ---------- 今日待办：今天到期 + 未填时间的（默认按当天算） ---------- */
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const taskDay = (t: Task) =>
+  t.dueTs ? new Date(t.dueTs * 1000).toISOString().slice(0, 10) : todayStr();
+
+const todayTasks = computed(() =>
+  tasks.value
+    .filter((t) => taskDay(t) === todayStr())
+    .sort((a, b) => {
+      if (a.done !== b.done) return a.done ? 1 : -1;
+      const at = a.dueTs ?? Number.MAX_SAFE_INTEGER;
+      const bt = b.dueTs ?? Number.MAX_SAFE_INTEGER;
+      if (at !== bt) return at - bt;
+      return b.priority - a.priority;
+    })
+);
+
+function dueLabel(t: Task): string {
+  if (!t.dueTs) return "今天";
+  const d = new Date(t.dueTs * 1000);
+  return `${`${d.getHours()}`.padStart(2, "0")}:${`${d.getMinutes()}`.padStart(2, "0")}`;
+}
+
+async function toggleTask(t: Task) {
+  try {
+    await invoke("task_set_done", { id: t.id, done: !t.done });
+    await load();
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+/* ---------- 二级视图：某天详情 ---------- */
+const detailDate = ref("");
+const dayReport = ref<DayReport | null>(null);
+const detailNote = ref("");
+
+async function openDetail(date: string) {
+  detailDate.value = date;
+  dayReport.value = null;
+  detailNote.value = "";
+  try {
+    dayReport.value = await invoke<DayReport>("day_report", { date });
+  } catch {
+    dayReport.value = null;
+  }
+  try {
+    const n = await invoke<{ content: string } | null>("notes_get", { date });
+    detailNote.value = (n?.content ?? "").split(String.fromCharCode(10)).slice(0, 3).join(" ");
+  } catch {
+    /* 忽略 */
+  }
 }
 
 async function load() {
@@ -132,6 +189,7 @@ async function load() {
     /* 忽略 */
   }
 }
+
 
 async function addTask() {
   err.value = "";
@@ -173,11 +231,32 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     </header>
     <p v-if="msg" class="okline">{{ msg }}</p>
 
-    <!-- 日程月历 -->
-    <section class="glass-card">
-      <h2>日程 · 月历</h2>
-      <CalendarHeat :selected="new Date(pickedDay).toISOString().slice(0, 10)" @pick="onPickDay" />
-      <p class="hint">点某一天可以跳到那天的日志；颜色越深表示那天用得越久</p>
+    <!-- 顶部：左月历 + 右今日待办（约 3:2，等高对齐） -->
+    <section class="toprow">
+      <div class="glass-card calcard">
+        <h2>日程 · 月历</h2>
+        <CalendarHeat
+          compact
+          :selected="new Date(pickedDay).toISOString().slice(0, 10)"
+          @pick="onPickDay"
+        />
+        <p class="hint">点某一天进入那天的详情；颜色越深表示那天用得越久</p>
+      </div>
+      <div class="glass-card todaycard">
+        <div class="modhead">
+          <h2>今日待办</h2>
+          <span class="cnt">{{ todayTasks.length }} 项</span>
+        </div>
+        <div class="todaylist">
+          <label v-for="t in todayTasks" :key="t.id" class="trow" :class="{ done: t.done }">
+            <input type="checkbox" :checked="t.done" @change="toggleTask(t)" />
+            <span class="tname">{{ t.content }}</span>
+            <span class="ttime">{{ dueLabel(t) }}</span>
+            <span class="tpri" :class="`p${t.priority}`">{{ ["低", "中", "高"][t.priority] ?? "中" }}</span>
+          </label>
+          <p v-if="!todayTasks.length" class="empty">今天没有待办，去下面加一条吧</p>
+        </div>
+      </div>
     </section>
 
     <!-- 完成率统计 -->
@@ -262,6 +341,35 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
       </div>
       <ReminderRules :rules="rules" @reload="load" />
     </section>
+    <!-- 某天详情（二级视图，先搭框架） -->
+    <div v-if="detailDate" class="mask" @click.self="detailDate = ''">
+      <div class="sheet glass-card">
+        <div class="modhead">
+          <h2>{{ detailDate }} · 那天</h2>
+          <NButton size="tiny" quaternary @click="detailDate = ''">关闭</NButton>
+        </div>
+        <div v-if="dayReport" class="dcards">
+          <div class="dstat"><p class="dl">使用时长</p><p class="dv">{{ fmtDuration(dayReport.totalSeconds) }}</p></div>
+          <div class="dstat"><p class="dl">应用数</p><p class="dv">{{ dayReport.appCount }} 个</p></div>
+          <div class="dstat"><p class="dl">键 / 击</p><p class="dv">{{ dayReport.keys }} / {{ dayReport.clicks }}</p></div>
+          <div class="dstat"><p class="dl">专注块</p><p class="dv">{{ dayReport.blockIndex }} 个</p></div>
+        </div>
+        <p v-else class="empty">这天没有记录</p>
+        <div class="dsec">
+          <p class="dl">那天的小时分布</p>
+          <HourlyChart :slices="dayReport?.hourly ?? []" :height="180" />
+        </div>
+        <div class="dsec">
+          <p class="dl">那天写了什么</p>
+          <p class="dtext">{{ detailNote || "（这天还没有日志，可在下面日志卡片里补写）" }}</p>
+        </div>
+        <div class="dsec">
+          <p class="dl">状态 / 分析 / 完成率</p>
+          <p class="dtext">框架已就位，细化的状态判定、分析与完成率对比后续继续打磨。</p>
+        </div>
+      </div>
+    </div>
+
     <!-- 每日日志 -->
     <section class="glass-card">
       <h2>日志（Markdown + 图片）</h2>
@@ -281,6 +389,157 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   margin: 8px 0 0;
   font-size: 11px;
   color: var(--text-faint);
+}
+
+/* 顶部两列：月历 3 : 今日待办 2，等高对齐 */
+.toprow {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.calcard,
+.todaycard {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cnt {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.todaylist {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 4px;
+}
+
+.trow {
+  display: grid;
+  grid-template-columns: 16px 1fr auto 22px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  padding: 6px 9px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--dur), transform var(--dur), border-color var(--dur);
+}
+
+.trow:hover {
+  background: var(--surface-hover);
+  transform: translateX(calc(2px * var(--motion)));
+}
+
+.trow.done .tname {
+  text-decoration: line-through;
+  color: var(--text-faint);
+}
+
+.tname {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.ttime {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.tpri {
+  font-size: 10px;
+  text-align: center;
+  border-radius: var(--r-full);
+  padding: 1px 0;
+}
+
+.tpri.p2 {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.tpri.p1 {
+  color: var(--info);
+  background: var(--info-soft);
+}
+
+.tpri.p0 {
+  color: var(--text-faint);
+  background: var(--surface-hover);
+}
+
+/* 二级视图（某天详情） */
+.mask {
+  position: fixed;
+  inset: 16px;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.sheet {
+  width: min(720px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+}
+
+.dcards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.dstat {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+}
+
+.dl {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.dv {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.dsec {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.dtext {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.7;
 }
 
 .modhead {

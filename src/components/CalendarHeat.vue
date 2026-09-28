@@ -8,7 +8,9 @@ import { fmtDuration } from "../lib/format";
  * 月历热力图（对标 Catrace 的日历视图）：按天显示使用强度
  * 数据来自 range_report（区间 ≤62 天时后端按天分桶）
  */
-const props = defineProps<{ selected?: string }>();
+const props = withDefaults(defineProps<{ selected?: string; compact?: boolean }>(), {
+  compact: false,
+});
 const emit = defineEmits<{ (e: "pick", date: string): void }>();
 
 const cursor = ref(new Date());
@@ -72,7 +74,7 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="cal">
+  <div class="cal" :class="{ compact: props.compact }">
     <div class="head">
       <button class="nav" title="上个月" @click="shift(-1)">‹</button>
       <span class="label">{{ monthLabel }}</span>
@@ -106,6 +108,15 @@ onMounted(load);
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* 紧凑版：整体限宽 + 格子压扁（用于和右侧卡片并排） */
+.cal.compact {
+  max-width: 470px;
+}
+
+.cal.compact .cell {
+  aspect-ratio: 1.55;
 }
 
 .head {
