@@ -166,6 +166,12 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
             enabled          INTEGER NOT NULL DEFAULT 1,
             last_fired_key   TEXT
         );
+        CREATE TABLE IF NOT EXISTS daily_notes (
+            date       TEXT PRIMARY KEY,
+            content    TEXT NOT NULL DEFAULT '',
+            images     TEXT NOT NULL DEFAULT '[]',
+            updated_ts INTEGER NOT NULL DEFAULT 0
+        );
         CREATE TABLE IF NOT EXISTS input_stats (
             date        TEXT NOT NULL,
             hour        INTEGER NOT NULL,

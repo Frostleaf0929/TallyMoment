@@ -1,4 +1,5 @@
 mod app_icon;
+mod notes;
 mod input_hook;
 mod insights;
 mod pet_settings;
@@ -286,6 +287,63 @@ fn tasks_import_md(app: tauri::AppHandle, path: String) -> Result<storage::Impor
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
     storage::tasks_import_md(&conn, &path)
+}
+
+/// 读取某天日志
+#[tauri::command]
+fn notes_get(app: tauri::AppHandle, date: String) -> Result<Option<notes::DailyNote>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    notes::get(&conn, &date)
+}
+
+/// 保存某天日志
+#[tauri::command]
+fn notes_save(
+    app: tauri::AppHandle,
+    date: String,
+    content: String,
+    images: Vec<String>,
+) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    notes::save(&conn, &date, &content, &images)
+}
+
+/// 最近日志列表
+#[tauri::command]
+fn notes_recent(app: tauri::AppHandle, limit: Option<i64>) -> Result<Vec<notes::DailyNote>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    notes::recent(&conn, limit.unwrap_or(60).clamp(1, 3650))
+}
+
+/// 给某天日志添加图片附件（复制进数据目录）
+#[tauri::command]
+fn notes_add_image(date: String, path: String) -> Result<String, String> {
+    notes::add_image(&date, &path)
+}
+
+/// 读取日志附件（base64）
+#[tauri::command]
+fn notes_image_data(date: String, name: String) -> Result<(String, String), String> {
+    notes::image_data(&date, &name)
+}
+
+/// 导出全部日志为 Markdown
+#[tauri::command]
+fn notes_export_md(app: tauri::AppHandle, dir: String) -> Result<usize, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    notes::export_md(&conn, std::path::Path::new(&dir))
+}
+
+/// 导入单个 Markdown 为日志
+#[tauri::command]
+fn notes_import_md(app: tauri::AppHandle, path: String) -> Result<(usize, usize), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    notes::import_md(&conn, &path)
 }
 
 /// 导出提醒规则（JSON）
@@ -1009,6 +1067,13 @@ pub fn run() {
             insights_report,
             period_report,
             period_index,
+            notes_get,
+            notes_save,
+            notes_recent,
+            notes_add_image,
+            notes_image_data,
+            notes_export_md,
+            notes_import_md,
             rules_export_json,
             rules_import_json,
             tasks_export_md,
