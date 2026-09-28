@@ -58,7 +58,8 @@ const active = ref<Tab>("today");
 watchEffect(() => {
   const n = navIntent.value;
   if (!n) return;
-  active.value = n.view === "app" ? "detail" : "history";
+  // 应用排行 / 某天弹层放大 → 详细页；其余 → 历史页
+  active.value = n.view === "app" || n.view === "items" ? "detail" : "history";
 });
 const collapsed = ref(localStorage.getItem("ui.side") === "collapsed");
 

@@ -498,14 +498,15 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 /* 二级视图（某天详情） */
 .mask {
   position: fixed;
-  inset: 16px;
+  /* 覆盖整窗（含外壳那 16px 留白），否则页面滚动条会露在未磨砂区域 */
+  inset: 0;
   z-index: 40;
   /* 遮罩用主题底色而不是纯黑：浅色模式下不再"压黑" */
   /* 磨砂玻璃：更重的模糊 + 轻微降亮 + 一层细颗粒（否则只是"糊"，没有质感） */
-  background: rgba(var(--bg-rgb), 0.34);
-  backdrop-filter: blur(46px) saturate(1.15) brightness(0.92);
-  -webkit-backdrop-filter: blur(46px) saturate(1.15) brightness(0.92);
-  border-radius: 16px;
+  background: rgba(var(--bg-rgb), 0.3);
+  backdrop-filter: blur(24px) saturate(1.12) brightness(0.97);
+  -webkit-backdrop-filter: blur(24px) saturate(1.12) brightness(0.97);
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -517,8 +518,8 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.5;
-  border-radius: 16px;
+  opacity: 0.4;
+  border-radius: 0;
   background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
 }
 

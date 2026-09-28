@@ -12,7 +12,6 @@ import { navIntent } from "../lib/uiState";
 import BallLoader from "../components/BallLoader.vue";
 import DayDetail from "../components/DayDetail.vue";
 import RangeCard from "../components/RangeCard.vue";
-import CalendarHeat from "../components/CalendarHeat.vue";
 import DayBars from "../components/DayBars.vue";
 import HourlyChart from "../components/HourlyChart.vue";
 
@@ -30,9 +29,11 @@ const itemRange = ref<RangeKey>("day");
 const itemFrom = ref("");
 const itemTo = ref("");
 
-/** 事项视角里选某一天 */
-function onPickItemDay(date: string) {
-  itemDate.value = new Date(`${date}T00:00:00`).getTime();
+
+/** 前后翻一天 */
+function shiftItemDay(delta: number) {
+  const d = new Date(itemDate.value);
+  itemDate.value = new Date(d.getFullYear(), d.getMonth(), d.getDate() + delta).getTime();
 }
 
 const rangeKey = ref<RangeKey>("week");
@@ -198,19 +199,14 @@ watch(navIntent, (n) => {
       <section class="glass-card itemsview">
         <div class="itemshead">
           <h2>事项与记录</h2>
-          <span class="itemsday">{{ itemDateStr }}</span>
         </div>
-        <div class="itemsgrid">
-          <CalendarHeat
-            compact
-            :selected="itemDateStr"
-            @pick="onPickItemDay"
-            @locate="onPickItemDay"
-          />
-          <div class="itemsdetail">
-            <DayDetail :date="itemDateStr" />
-          </div>
+        <div class="daynav">
+          <button class="dnav" title="前一天" @click="shiftItemDay(-1)">‹</button>
+          <span class="dnavday">{{ itemDateStr }}</span>
+          <button class="dnav" title="后一天" @click="shiftItemDay(1)">›</button>
+          <span class="dnavhint">也可以从〈待办〉的月历点某天、再点弹层右上角 □ 跳到这里</span>
         </div>
+        <DayDetail :date="itemDateStr" />
       </section>
     </template>
 
@@ -338,22 +334,40 @@ watch(navIntent, (n) => {
   padding: 14px 16px;
 }
 
-.itemsgrid {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 16px;
-  align-items: start;
+.daynav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.itemsdetail {
-  min-width: 0;
+.dnav {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: var(--r-sm);
+  width: 24px;
+  height: 24px;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
 }
 
-.itemsday {
-  font-size: 13px;
+.dnav:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.dnavday {
+  font-size: 14px;
   font-weight: 700;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+.dnavhint {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
 }
 
 @media (max-width: 980px) {
