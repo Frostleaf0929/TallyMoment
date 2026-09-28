@@ -511,14 +511,37 @@ fn window_effect_get(app: tauri::AppHandle) -> Result<String, String> {
 fn task_list(app: tauri::AppHandle) -> Result<Vec<storage::Task>, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    // 顺手补一次固定事项（应用长时间不关时也能跨天生成）
+    let _ = storage::materialize_repeats(&conn, &storage::today_date());
     storage::task_list(&conn)
 }
 
 #[tauri::command]
-fn task_add(app: tauri::AppHandle, content: String, priority: i32, due_ts: Option<i64>) -> Result<(), String> {
+fn task_add(
+    app: tauri::AppHandle,
+    content: String,
+    priority: i32,
+    due_ts: Option<i64>,
+    repeat_mode: Option<String>,
+) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    storage::task_add(&conn, &content, priority, due_ts)
+    storage::task_add_repeat(
+        &conn,
+        &content,
+        priority,
+        due_ts,
+        repeat_mode.as_deref().unwrap_or(""),
+        None,
+    )
+}
+
+/// 记录/清除"开始做"的时间（每日任务追踪）
+#[tauri::command]
+fn task_set_started(app: tauri::AppHandle, id: i64, ts: Option<i64>) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::task_set_started(&conn, id, ts)
 }
 
 #[tauri::command]
@@ -1033,6 +1056,7 @@ pub fn run() {
             today_report,
             task_list,
             task_add,
+            task_set_started,
             task_update,
             task_set_done,
             task_delete,
@@ -1167,6 +1191,19 @@ pub fn run() {
             };
             if let Some(kind) = effect_kind {
                 let _ = apply_window_effect(app.handle(), &kind);
+            }
+
+            // 固定事项：启动时把今天该出现的实例生成出来
+            {
+                let db = app.state::<Db>().inner().clone();
+                if let Ok(conn) = db.0.lock() {
+                    let today = storage::today_date();
+                    match storage::materialize_repeats(&conn, &today) {
+                        Ok(n) if n > 0 => eprintln!("[todo] 固定事项生成了 {n} 条今日实例"),
+                        Ok(_) => {}
+                        Err(e) => eprintln!("[todo] 固定事项生成失败: {e}"),
+                    }
+                }
             }
 
             tracker::spawn(app.handle().clone());

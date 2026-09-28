@@ -38,6 +38,14 @@ pub struct Task {
     pub done: bool,
     pub done_ts: Option<i64>,
     pub created_ts: i64,
+    /// 固定事项的重复方式：空 = 一次性；daily / weekly / monthly / yearly
+    pub repeat_mode: String,
+    /// 由哪个固定事项（模板）生成的；模板自身为 None
+    pub template_id: Option<i64>,
+    /// 开始做的时间（每日追踪用）
+    pub start_ts: Option<i64>,
+    /// 是否有今天是它的一次"实例"（固定事项列表算出来的，不落库）
+    pub is_template: bool,
 }
 
 #[derive(Serialize)]
@@ -153,6 +161,7 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
             created_ts  INTEGER NOT NULL,
             reminded_key TEXT
         );
+
         CREATE TABLE IF NOT EXISTS reminder_rules (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             title            TEXT NOT NULL,
@@ -181,6 +190,15 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         );",
     )
     .map_err(|e| format!("建表失败: {e}"))?;
+    // B3 迁移：固定事项与每日追踪。单独执行且**逐个容错**——
+    // 建表批处理遇到第一个错误会整体中断，老库重开时"列已存在"会直接导致启动失败。
+    for sql in [
+        "ALTER TABLE tasks ADD COLUMN repeat_mode TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN template_id INTEGER",
+        "ALTER TABLE tasks ADD COLUMN start_ts INTEGER",
+    ] {
+        let _ = conn.execute(sql, []);
+    }
     Ok(conn)
 }
 
@@ -391,13 +409,21 @@ fn task_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         done: row.get::<_, i64>(4)? != 0,
         done_ts: row.get(5)?,
         created_ts: row.get(6)?,
+        repeat_mode: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        template_id: row.get(8)?,
+        start_ts: row.get(9)?,
+        // 列表查询会额外传入一列"今天是否该出现"（见 task_list）
+        is_template: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
     })
 }
 
 pub fn task_list(conn: &Connection) -> Result<Vec<Task>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, content, priority, due_ts, done, done_ts, created_ts FROM tasks
+            "SELECT id, content, priority, due_ts, done, done_ts, created_ts,
+                    repeat_mode, template_id, start_ts,
+                    CASE WHEN repeat_mode = '' THEN 0 ELSE 1 END
+             FROM tasks
              ORDER BY done ASC,
                       CASE WHEN due_ts IS NULL THEN 1 ELSE 0 END ASC, due_ts ASC,
                       priority DESC, created_ts DESC",
@@ -414,6 +440,18 @@ pub fn task_list(conn: &Connection) -> Result<Vec<Task>, String> {
 }
 
 pub fn task_add(conn: &Connection, content: &str, priority: i32, due_ts: Option<i64>) -> Result<(), String> {
+    task_add_repeat(conn, content, priority, due_ts, "", None)
+}
+
+/// 新增任务 / 固定事项（repeat 为空 = 一次性；template_id 为模板 id，实例用）
+pub fn task_add_repeat(
+    conn: &Connection,
+    content: &str,
+    priority: i32,
+    due_ts: Option<i64>,
+    repeat_mode: &str,
+    template_id: Option<i64>,
+) -> Result<(), String> {
     let content = content.trim();
     if content.is_empty() || content.chars().count() > 200 {
         return Err("任务内容需为 1~200 个字符".into());
@@ -421,9 +459,14 @@ pub fn task_add(conn: &Connection, content: &str, priority: i32, due_ts: Option<
     if !(0..=2).contains(&priority) {
         return Err("优先级非法".into());
     }
+    let mode = match repeat_mode {
+        "" | "daily" | "weekly" | "monthly" | "yearly" => repeat_mode,
+        _ => return Err("重复方式非法".into()),
+    };
     conn.execute(
-        "INSERT INTO tasks(content, priority, due_ts, created_ts) VALUES(?1, ?2, ?3, ?4)",
-        rusqlite::params![content, priority, due_ts, Local::now().timestamp()],
+        "INSERT INTO tasks(content, priority, due_ts, created_ts, repeat_mode, template_id)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![content, priority, due_ts, Local::now().timestamp(), mode, template_id],
     )
     .map_err(|e| format!("新增任务失败: {e}"))?;
     Ok(())
@@ -449,6 +492,80 @@ pub fn task_update(
     )
     .map_err(|e| format!("更新任务失败: {e}"))?;
     Ok(())
+}
+
+/// 记录"开始做"的时间（每日追踪）
+pub fn task_set_started(conn: &Connection, id: i64, ts: Option<i64>) -> Result<(), String> {
+    conn.execute("UPDATE tasks SET start_ts = ?2 WHERE id = ?1", rusqlite::params![id, ts])
+        .map_err(|e| format!("记录开始时间失败: {e}"))?;
+    Ok(())
+}
+
+/// 固定事项：为"今天该出现"的模板生成实例（幂等，可反复调用）
+pub fn materialize_repeats(conn: &Connection, today: &str) -> Result<usize, String> {
+    use chrono::{Datelike, NaiveDate};
+    let Some(today_date) = NaiveDate::parse_from_str(today, "%Y-%m-%d").ok() else {
+        return Ok(0);
+    };
+    let templates: Vec<(i64, String, i32, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT id, content, priority, repeat_mode FROM tasks WHERE repeat_mode != ''")
+            .map_err(|e| format!("查询固定事项失败: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .map_err(|e| format!("查询固定事项失败: {e}"))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    let mut made = 0usize;
+    for (id, content, priority, mode) in templates {
+        // 判断今天是否命中该重复规则（按模板创建日推定周期锚点）
+        let anchor: String = conn
+            .query_row(
+                "SELECT COALESCE(substr(datetime(created_ts, 'unixepoch', 'localtime'), 1, 10), ?2)
+                 FROM tasks WHERE id = ?1",
+                rusqlite::params![id, today],
+                |r| r.get(0),
+            )
+            .unwrap_or_else(|_| today.to_string());
+        let hit = match mode.as_str() {
+            "daily" => true,
+            "weekly" => {
+                // 同一星期几
+                NaiveDate::parse_from_str(&anchor, "%Y-%m-%d")
+                    .map(|a| a.weekday() == today_date.weekday())
+                    .unwrap_or(false)
+            }
+            "monthly" => NaiveDate::parse_from_str(&anchor, "%Y-%m-%d")
+                .map(|a| a.day() == today_date.day())
+                .unwrap_or(false),
+            "yearly" => NaiveDate::parse_from_str(&anchor, "%Y-%m-%d")
+                .map(|a| a.month() == today_date.month() && a.day() == today_date.day())
+                .unwrap_or(false),
+            _ => false,
+        };
+        if !hit || anchor == today {
+            continue; // 模板自己就是今天建的，不额外生成
+        }
+        // 今天已经有实例了吗
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE template_id = ?1
+                 AND substr(datetime(due_ts, 'unixepoch', 'localtime'), 1, 10) = ?2",
+                rusqlite::params![id, today],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if exists > 0 {
+            continue;
+        }
+        let due = NaiveDate::parse_from_str(today, "%Y-%m-%d")
+            .ok()
+            .and_then(|d| d.and_hms_opt(9, 0, 0))
+            .map(|d| d.and_utc().timestamp());
+        task_add_repeat(conn, &content, priority, due, "", Some(id))?;
+        made += 1;
+    }
+    Ok(made)
 }
 
 pub fn task_set_done(conn: &Connection, id: i64, done: bool) -> Result<(), String> {
@@ -2497,7 +2614,11 @@ pub fn export_json(conn: &Connection, dir: &std::path::Path, file_name: &str) ->
 
     let mut tasks = Vec::new();
     let mut stmt = conn
-        .prepare("SELECT id, content, priority, due_ts, done, done_ts, created_ts FROM tasks ORDER BY id")
+        .prepare(
+            "SELECT id, content, priority, due_ts, done, done_ts, created_ts,
+                    repeat_mode, template_id, start_ts, 0
+             FROM tasks ORDER BY id",
+        )
         .map_err(|e| format!("导出 tasks 失败: {e}"))?;
     let rows = stmt
         .query_map([], |r| {
@@ -2797,6 +2918,47 @@ mod tests {
             .query_row("SELECT display_name FROM apps WHERE name = 'chrome.exe'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(display, "谷歌浏览器", "别名应作为显示名");
+    }
+
+    #[test]
+    fn repeats_are_materialized_once_a_day() {
+        let path = std::env::temp_dir().join("tm-repeat.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        // 关键回归：老的/已迁移过的库再次打开必须能成功（ALTER 不能混进建表批处理）
+        drop(conn);
+        let conn = open(&path).unwrap();
+        let _ = conn.execute("DELETE FROM tasks", []);
+        let today = "2030-06-15";
+        // 模板：创建时间设为 10 天前（以免"今天建的模板"被跳过）
+        conn.execute(
+            "INSERT INTO tasks(content, priority, due_ts, created_ts, repeat_mode)
+             VALUES('每日喝水', 1, NULL, ?1, 'daily')",
+            [chrono::Local::now().timestamp() - 10 * 86400],
+        )
+        .unwrap();
+        // 每周模板：用一个肯定不匹配今天的星期（用今天 +1 天建的 → 不同星期几）
+        conn.execute(
+            "INSERT INTO tasks(content, priority, due_ts, created_ts, repeat_mode)
+             VALUES('每周复盘', 1, NULL, ?1, 'weekly')",
+            [chrono::Local::now().timestamp() - 86400],
+        )
+        .unwrap();
+
+        let made = materialize_repeats(&conn, today).unwrap();
+        assert!(made >= 1, "每日模板应生成今日实例");
+        // 幂等：再跑一次不重复生成
+        let again = materialize_repeats(&conn, today).unwrap();
+        assert_eq!(again, 0, "同一天不应重复生成实例");
+        // 实例带 template_id
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tasks WHERE template_id IS NOT NULL", [], |r| r.get(0))
+            .unwrap();
+        assert!(n >= 1);
+        // 非法重复方式被拒
+        assert!(task_add_repeat(&conn, "x", 1, None, "hourly", None).is_err());
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

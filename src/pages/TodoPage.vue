@@ -24,6 +24,15 @@ const msg = ref("");
 /** 月历选中的那天，传给日志面板 */
 const pickedDay = ref<number>(Date.now());
 
+const repeatOptions = [
+  { label: "不重复", value: "" },
+  { label: "每天", value: "daily" },
+  { label: "每周", value: "weekly" },
+  { label: "每月", value: "monthly" },
+  { label: "每年", value: "yearly" },
+];
+const newRepeat = ref("");
+
 const priorityOptions = [
   { label: "高", value: 2 },
   { label: "中", value: 1 },
@@ -222,6 +231,7 @@ async function addTask() {
     await invoke("task_add", {
       content: newContent.value,
       priority: newPriority.value,
+      repeatMode: newRepeat.value,
       dueTs,
     });
     newContent.value = "";
@@ -379,6 +389,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
               />
               <NSelect v-model:value="newPriority" size="small" :options="priorityOptions" style="width: 84px" />
               <input v-model="newDue" type="time" class="tp" />
+              <NSelect v-model:value="newRepeat" size="small" :options="repeatOptions" style="width: 92px" />
               <NButton size="small" type="primary" secondary @click="addTask">添加</NButton>
               <NButton size="tiny" quaternary @click="importMd">导入 MD</NButton>
               <NButton size="tiny" quaternary @click="exportMd">导出 MD</NButton>

@@ -160,6 +160,14 @@ export interface Task {
   done: boolean;
   doneTs: number | null;
   createdTs: number;
+  /** 固定事项重复方式："" | daily | weekly | monthly | yearly */
+  repeatMode: string;
+  /** 由哪个固定事项模板生成（模板自身为 null） */
+  templateId: number | null;
+  /** 开始做的时间（每日追踪） */
+  startTs: number | null;
+  /** 该条本身是固定事项模板 */
+  isTemplate: boolean;
 }
 
 export interface ReminderRule {

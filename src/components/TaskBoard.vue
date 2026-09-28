@@ -16,6 +16,24 @@ const closed = computed(() => props.tasks.filter((t) => t.done));
 const priorityLabel = (p: number) => (p === 2 ? "高" : p === 0 ? "低" : "中");
 const priorityClass = (p: number) => (p === 2 ? "high" : p === 0 ? "low" : "mid");
 
+/** 固定事项标签 */
+const repeatLabel = (mode: string): string =>
+  ({ daily: "每天", weekly: "每周", monthly: "每月", yearly: "每年" })[mode] ?? "";
+
+/** 完成用时：优先 开始→完成，其次 创建→完成 */
+const spent = (t: Task): string => {
+  if (!t.done || !t.doneTs) return "";
+  const from = t.startTs ?? t.createdTs;
+  const mins = Math.round((t.doneTs - from) / 60);
+  return mins < 1 ? "不到 1 分钟" : `${mins} 分钟`;
+};
+
+/** 开始/结束计时 */
+async function toggleStart(t: Task) {
+  await invoke("task_set_started", { id: t.id, ts: t.startTs ? null : Math.floor(Date.now() / 1000) });
+  emit("reload");
+}
+
 const dueLabel = (t: Task): string => {
   if (!t.dueTs) return "";
   const d = new Date(t.dueTs * 1000);
@@ -75,9 +93,16 @@ async function remove(t: Task) {
       <span v-else class="content" :title="t.content" @dblclick="startEdit(t)">
         {{ t.content }}
       </span>
+      <span v-if="spent(t)" class="spent">{{ spent(t) }}</span>
       <span v-if="t.dueTs" class="due" :class="{ overdue: !t.done && t.dueTs * 1000 < Date.now() }">
         {{ dueLabel(t) }}
       </span>
+      <span v-if="t.repeatMode" class="rep" :title="t.templateId ? '固定事项生成的今日实例' : '固定事项模板'">
+        {{ repeatLabel(t.repeatMode) }}{{ t.templateId ? "" : "·模板" }}
+      </span>
+      <button v-if="!t.done" class="startbtn" :class="{ on: !!t.startTs }" :title="t.startTs ? '结束计时' : '开始做'" @click="toggleStart(t)">
+        {{ t.startTs ? "计时中" : "开始" }}
+      </button>
       <NPopconfirm @positive-click="remove(t)">
         <template #trigger>
           <NButton quaternary size="tiny" type="error">删除</NButton>
@@ -167,6 +192,39 @@ async function remove(t: Task) {
   font-size: 13px;
   font-family: inherit;
   outline: none;
+}
+
+.spent {
+  font-size: 10px;
+  color: var(--text-faint);
+  flex: none;
+}
+
+.rep {
+  font-size: 10px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: var(--r-full);
+  padding: 1px 8px;
+  flex: none;
+}
+
+.startbtn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-faint);
+  border-radius: var(--r-full);
+  font-size: 10px;
+  font-family: inherit;
+  padding: 1px 8px;
+  cursor: pointer;
+  flex: none;
+}
+
+.startbtn.on {
+  color: var(--good);
+  border-color: var(--good);
+  background: var(--good-soft);
 }
 
 .due {
