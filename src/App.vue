@@ -86,17 +86,29 @@ const win = (() => {
 const maximized = ref(false);
 const winErr = ref("");
 
-async function startDrag(e: MouseEvent) {
-  if (e.buttons !== 1) return;
-  // 双击不拖窗（双击是最大化）；点在按钮上也不拖（否则会出现"点一下窗口就跟着鼠标走"的粘滞拖动）
-  if (e.detail > 1) return;
+/* 拖窗：必须"按住 + 移动 ≥5px"才触发，单击（含按钮上、文字旁）绝不会移动窗口 */
+let pressFrom: { x: number; y: number } | null = null;
+
+function onBrandMove(e: MouseEvent) {
+  if (!pressFrom) return;
+  if (Math.abs(e.clientX - pressFrom.x) < 5 && Math.abs(e.clientY - pressFrom.y) < 5) return;
+  pressFrom = null;
+  window.removeEventListener("mousemove", onBrandMove);
+  void win?.startDragging();
+}
+
+function onBrandUp() {
+  pressFrom = null;
+  window.removeEventListener("mousemove", onBrandMove);
+}
+
+function onBrandDown(e: MouseEvent) {
+  if (e.buttons !== 1 || e.detail > 1) return;
   const t = e.target as HTMLElement | null;
   if (t?.closest("button, input, a, .collapse-btn, .logo-btn")) return;
-  try {
-    await win?.startDragging();
-  } catch {
-    /* 忽略 */
-  }
+  pressFrom = { x: e.clientX, y: e.clientY };
+  window.addEventListener("mousemove", onBrandMove);
+  window.addEventListener("mouseup", onBrandUp, { once: true });
 }
 
 async function minimizeWin() {
@@ -190,6 +202,8 @@ onMounted(async () => {
 onUnmounted(() => {
   clearInterval(timer);
   unlistenState?.();
+  window.removeEventListener("mousemove", onBrandMove);
+  window.removeEventListener("mouseup", onBrandUp);
 });
 </script>
 
@@ -218,7 +232,7 @@ onUnmounted(() => {
       </div>
 
       <aside class="side" :class="{ collapsed }">
-        <div class="brand" @mousedown="startDrag" @dblclick="toggleMaxWin">
+        <div class="brand" @mousedown="onBrandDown" @dblclick="toggleMaxWin">
           <!-- 折叠时：应用图标就是"展开"入口 -->
           <button
             v-if="collapsed"

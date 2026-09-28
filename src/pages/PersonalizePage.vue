@@ -188,7 +188,7 @@ async function importTheme() {
             随机色更易区分；跟随强调色更整体；按图标取色＝从程序图标提取主色；显示应用图标＝直接显示 exe 图标
           </p>
         </div>
-        <div class="seg wrap">
+        <div class="seg grid2">
           <button
             class="seg-item"
             :class="{ active: appColorMode === 'random' }"
@@ -635,6 +635,17 @@ async function importTheme() {
   padding: 4px;
   background: var(--surface);
   flex-wrap: wrap;
+}
+
+/* 四个配色模式：上两个、下两个，等宽对齐（窗口模式下也不歪） */
+.seg.grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 6px;
+}
+
+.seg.grid2 .seg-item {
+  justify-content: center;
 }
 
 .seg-item {
