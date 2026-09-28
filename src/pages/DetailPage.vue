@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { NInput } from "naive-ui";
+import { NDatePicker, NInput } from "naive-ui";
 import type { AppUsage, RangeReport } from "../types";
 import { fmtDuration } from "../lib/format";
 import { colorFor } from "../lib/colors";
@@ -10,6 +10,7 @@ import { appColorMode, appNameEnglish } from "../lib/appearance";
 import { iconColor, iconUrl, requestIcons } from "../lib/appIcons";
 import { navIntent } from "../lib/uiState";
 import BallLoader from "../components/BallLoader.vue";
+import DayDetail from "../components/DayDetail.vue";
 import DayBars from "../components/DayBars.vue";
 import HourlyChart from "../components/HourlyChart.vue";
 
@@ -18,6 +19,11 @@ import HourlyChart from "../components/HourlyChart.vue";
  * 时间范围固定在"当前"的几种相对区间（今天/本周/本月/本年/全部），不提供任意日期选择
  */
 type RangeKey = "day" | "week" | "month" | "year" | "all";
+
+/** 页面内两个视角：时间（按应用看时长）/ 事项（某天的任务与记录对照） */
+const view = ref<"time" | "items">("time");
+const itemDate = ref<number>(Date.now());
+const itemDateStr = computed(() => ymd(new Date(itemDate.value)));
 
 const rangeKey = ref<RangeKey>("week");
 const loading = ref(false);
@@ -165,7 +171,27 @@ watch(navIntent, (n) => {
       <span class="sub">按应用查看 · 选中左侧应用可下钻</span>
     </header>
 
-    <div class="split">
+    <div class="viewseg">
+      <button class="vbtn" :class="{ active: view === 'time' }" @click="view = 'time'">时间</button>
+      <button class="vbtn" :class="{ active: view === 'items' }" @click="view = 'items'">事项</button>
+    </div>
+
+    <!-- 事项视角：直接复用某天对照详情 -->
+    <section v-if="view === 'items'" class="glass-card itemsview">
+      <div class="itemshead">
+        <h2>{{ itemDateStr }} · 事项与记录</h2>
+        <NDatePicker
+          v-model:value="itemDate"
+          type="date"
+          :actions="['confirm']"
+          :clearable="false"
+          style="width: 160px"
+        />
+      </div>
+      <DayDetail :date="itemDateStr" />
+    </section>
+
+    <div v-if="view === 'time'" class="split">
       <!-- 应用列表（主入口）：外层只负责撑高，内层绝对定位贴合 → 底部与右列对齐且不撑长页面 -->
       <div class="applist-wrap">
       <aside class="glass-card applist">
@@ -267,6 +293,50 @@ watch(navIntent, (n) => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.viewseg {
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 4px;
+  background: var(--surface);
+  width: fit-content;
+}
+
+.vbtn {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 6px 16px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.vbtn.active {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.itemsview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.itemshead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.itemshead h2 {
+  margin: 0;
 }
 
 .head {

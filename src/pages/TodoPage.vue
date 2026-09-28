@@ -3,14 +3,13 @@ import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NButton, NInput, NSelect } from "naive-ui";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { DayReport, ReminderRule, Task, TodoStats } from "../types";
-import { fmtDuration } from "../lib/format";
-import HourlyChart from "../components/HourlyChart.vue";
+import type { ReminderRule, Task, TodoStats } from "../types";
 import Icon from "../components/Icon.vue";
 import TaskBoard from "../components/TaskBoard.vue";
 import ReminderRules from "../components/ReminderRules.vue";
 import CalendarHeat from "../components/CalendarHeat.vue";
 import NotesPanel from "../components/NotesPanel.vue";
+import DayDetail from "../components/DayDetail.vue";
 
 const tasks = ref<Task[]>([]);
 const rules = ref<ReminderRule[]>([]);
@@ -121,6 +120,14 @@ async function exportAll() {
   }
 }
 
+/** 二级界面：只负责开关，内容由 DayDetail 组件自己取数 */
+const detailDate = ref("");
+const sheetBig = ref(false);
+
+function openDetail(date: string) {
+  detailDate.value = date;
+}
+
 /** 点日历：切到那天 + 打开二级界面 */
 function onPickDay(date: string) {
   pickedDay.value = new Date(`${date}T00:00:00`).getTime();
@@ -164,78 +171,6 @@ async function toggleTask(t: Task) {
   }
 }
 
-/* ---------- 二级视图：某天详情 ---------- */
-const detailDate = ref("");
-const dayReport = ref<DayReport | null>(null);
-const detailNote = ref("");
-const detailImages = ref<string[]>([]);
-const preview = ref("");
-const sheetBig = ref(false);
-/** 缩略图（原图只用于点开预览）——原图 base64 直接塞进 DOM 是卡顿主因 */
-const detailThumbs = ref<string[]>([]);
-const imgLoading = ref(false);
-
-async function openDetail(date: string) {
-  detailDate.value = date;
-  dayReport.value = null;
-  detailNote.value = "";
-  try {
-    dayReport.value = await invoke<DayReport>("day_report", { date });
-  } catch {
-    dayReport.value = null;
-  }
-  detailImages.value = [];
-  detailThumbs.value = [];
-  // 数据与日志并行取，弹层先出数据再补图
-  const [rep, note] = await Promise.all([
-    invoke<DayReport>("day_report", { date }).catch(() => null),
-    invoke<{ content: string; images: string[] } | null>("notes_get", { date }).catch(() => null),
-  ]);
-  dayReport.value = rep;
-  detailNote.value = (note?.content ?? "").split(String.fromCharCode(10)).slice(0, 3).join(" ");
-  const names = note?.images ?? [];
-  if (!names.length) return;
-  imgLoading.value = true;
-  try {
-    const list = await invoke<[string, string, string][]>("notes_images", { date, names });
-    const urls = list.map(([, mime, b64]) => `data:${mime};base64,${b64}`);
-    detailImages.value = urls;
-    detailThumbs.value = await Promise.all(urls.map(toThumb));
-  } catch {
-    /* 忽略 */
-  } finally {
-    imgLoading.value = false;
-  }
-}
-
-/** 前端缩放成 320px 缩略图：避免把几 MB 的原图丢进 DOM 造成卡顿 */
-function toThumb(dataUrl: string): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.decoding = "async";
-    img.onload = () => {
-      try {
-        const max = 320;
-        const k = Math.min(1, max / Math.max(img.width, img.height));
-        const cv = document.createElement("canvas");
-        cv.width = Math.max(1, Math.round(img.width * k));
-        cv.height = Math.max(1, Math.round(img.height * k));
-        const ctx = cv.getContext("2d");
-        if (!ctx) return resolve(dataUrl);
-        ctx.drawImage(img, 0, 0, cv.width, cv.height);
-        resolve(cv.toDataURL("image/jpeg", 0.82));
-      } catch {
-        resolve(dataUrl);
-      }
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
-}
-
-function pct(v: number): number {
-  return Math.round((v ?? 0) * 100);
-}
 
 async function load() {
   try {
@@ -407,56 +342,16 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
         <div class="modhead">
           <h2>{{ detailDate }} · 那天</h2>
           <div class="dacts">
-            <NButton size="tiny" quaternary @click="sheetBig = !sheetBig">
-              {{ sheetBig ? "还原" : "放大" }}
-            </NButton>
-            <NButton size="tiny" quaternary @click="detailDate = ''">关闭</NButton>
+            <button class="dbtn" :title="sheetBig ? '还原' : '放大'" @click="sheetBig = !sheetBig">
+              <Icon :name="sheetBig ? 'collapse' : 'expand'" :size="15" />
+            </button>
+            <button class="dbtn" title="关闭" @click="detailDate = ''">
+              <Icon name="close" :size="15" />
+            </button>
           </div>
         </div>
-        <div v-if="stats" class="dcards">
-          <div class="dstat"><p class="dl">今日完成</p><p class="dv">{{ stats.todayDone }} 件</p></div>
-          <div class="dstat"><p class="dl">本周完成率</p><p class="dv">{{ pct(stats.weekRate) }}%</p></div>
-          <div class="dstat"><p class="dl">按时完成率</p><p class="dv">{{ pct(stats.ontimeRate) }}%</p></div>
-          <div class="dstat"><p class="dl">平均完成用时</p><p class="dv">{{ stats.avgMinutes }} 分</p></div>
-        </div>
-        <div v-if="dayReport" class="dcards">
-          <div class="dstat"><p class="dl">使用时长</p><p class="dv">{{ fmtDuration(dayReport.totalSeconds) }}</p></div>
-          <div class="dstat"><p class="dl">应用数</p><p class="dv">{{ dayReport.appCount }} 个</p></div>
-          <div class="dstat"><p class="dl">键 / 击</p><p class="dv">{{ dayReport.keys }} / {{ dayReport.clicks }}</p></div>
-          <div class="dstat"><p class="dl">专注块</p><p class="dv">{{ dayReport.blockIndex }} 个</p></div>
-        </div>
-        <p v-else class="empty">这天没有记录</p>
-        <div class="dsec">
-          <p class="dl">那天的小时分布</p>
-          <HourlyChart :slices="dayReport?.hourly ?? []" :height="180" />
-        </div>
-        <div class="dsec">
-          <p class="dl">那天写了什么</p>
-          <p class="dtext">{{ detailNote || "（这天还没有日志，可在下面日志卡片里补写）" }}</p>
-        </div>
-        <div v-if="detailImages.length" class="dsec">
-          <p class="dl">那天的图片（{{ detailImages.length }} 张）</p>
-          <div class="dimgs">
-            <img
-              v-for="(src, i) in detailThumbs"
-              :key="i"
-              :src="src"
-              alt=""
-              loading="lazy"
-              decoding="async"
-              @click="preview = detailImages[i]"
-            />
-          </div>
-          <p v-if="imgLoading" class="dtext">图片加载中…</p>
-        </div>
-        <div class="dsec">
-          <p class="dl">状态 / 分析 / 完成率</p>
-          <p class="dtext">框架已就位，细化的状态判定、分析与完成率对比后续继续打磨。</p>
-        </div>
+        <DayDetail :date="detailDate" />
       </div>
-      </div>
-      <div v-if="preview" class="mask" @click.self="preview = ''">
-        <img class="big" :src="preview" alt="" />
       </div>
     </Teleport>
 
@@ -593,7 +488,10 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   inset: 16px;
   z-index: 40;
   /* 遮罩用主题底色而不是纯黑：浅色模式下不再"压黑" */
-  background: rgba(var(--bg-rgb), 0.45);
+  /* 背景更重的毛玻璃：遮罩本身也做模糊，突出二级界面 */
+  background: rgba(var(--bg-rgb), 0.42);
+  backdrop-filter: blur(26px) saturate(1.2);
+  -webkit-backdrop-filter: blur(26px) saturate(1.2);
   border-radius: 16px;
   display: flex;
   align-items: center;
@@ -604,7 +502,26 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 .dacts {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+}
+
+.dbtn {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur), color var(--dur);
+}
+
+.dbtn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 .sheet {
