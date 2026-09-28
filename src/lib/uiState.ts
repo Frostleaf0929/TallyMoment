@@ -17,3 +17,10 @@ export const navIntent = ref<{ view: "recent" | "app" | "items"; app?: string; d
 export function jumpTo(view: "recent" | "app" | "items", app?: string, date?: string) {
   navIntent.value = { view, app, date, at: Date.now() };
 }
+
+/** 单纯切到某个页面（不传数据），用于"返回待办"这类按钮 */
+export const tabIntent = ref<{ tab: string; at: number } | null>(null);
+
+export function goTab(tab: string) {
+  tabIntent.value = { tab, at: Date.now() };
+}

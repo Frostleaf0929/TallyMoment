@@ -510,7 +510,8 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  /* 四周留白：窗口模式下弹层不再顶住上下边框 */
+  padding: 40px 32px;
 }
 
 /* 细颗粒层：给磨砂玻璃一点"砂"的质感 */
@@ -549,7 +550,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 }
 
 .sheet {
-  width: min(720px, 100%);
+  width: min(700px, 100%);
   max-height: 100%;
   overflow-y: auto;
   display: flex;

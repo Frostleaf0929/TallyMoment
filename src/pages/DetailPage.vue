@@ -8,7 +8,7 @@ import { colorFor } from "../lib/colors";
 import { accentColor } from "../lib/chartColors";
 import { appColorMode, appNameEnglish } from "../lib/appearance";
 import { iconColor, iconUrl, requestIcons } from "../lib/appIcons";
-import { navIntent } from "../lib/uiState";
+import { goTab, navIntent } from "../lib/uiState";
 import BallLoader from "../components/BallLoader.vue";
 import DayDetail from "../components/DayDetail.vue";
 import RangeCard from "../components/RangeCard.vue";
@@ -23,6 +23,8 @@ type RangeKey = "day" | "week" | "month" | "year" | "all";
 
 /** 页面内两个视角：时间（按应用看时长）/ 事项（某天的任务与记录对照） */
 const view = ref<"time" | "items">("time");
+/** 是否是从待办页（某天弹层的"放大"）跳过来的 */
+const fromTodo = ref(false);
 const itemDate = ref<number>(Date.now());
 const itemDateStr = computed(() => ymd(new Date(itemDate.value)));
 const itemRange = ref<RangeKey>("day");
@@ -163,6 +165,7 @@ watch(navIntent, (n) => {
   if (!n) return;
   if (n.view === "items") {
     view.value = "items";
+    fromTodo.value = true;
     if (n.date) itemDate.value = new Date(`${n.date}T00:00:00`).getTime();
     return;
   }
@@ -178,6 +181,13 @@ watch(navIntent, (n) => {
     <header class="head">
       <h1>详细</h1>
       <span class="sub">按应用查看 · 选中左侧应用可下钻</span>
+      <!-- 从待办跳过来时的返回按钮：默认圆形图标，悬停展开成胶囊（与月历定位同款动效） -->
+      <button v-if="fromTodo" class="back" title="返回待办" @click="goTab('todo')">
+        <svg viewBox="0 0 24 24" class="bkicon" aria-hidden="true">
+          <path d="M14.5 5.5L8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <span class="bktxt">返回待办</span>
+      </button>
     </header>
 
     <div class="viewseg">
@@ -312,6 +322,54 @@ watch(navIntent, (n) => {
   padding: 4px;
   background: var(--surface);
   width: fit-content;
+}
+
+/* 返回待办：图标 -> 悬停展开成胶囊 */
+.back {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  overflow: hidden;
+  transition: width var(--dur) cubic-bezier(0.22, 0.61, 0.36, 1),
+    background var(--dur), color var(--dur), border-color var(--dur);
+}
+
+.bkicon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.bktxt {
+  max-width: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  transition: max-width var(--dur) ease, opacity var(--dur) ease, margin-left var(--dur) ease;
+}
+
+.back:hover {
+  width: 90px;
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.back:hover .bktxt {
+  max-width: 64px;
+  opacity: 1;
+  margin-left: 5px;
 }
 
 .vbtn {

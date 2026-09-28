@@ -14,7 +14,7 @@ import InsightsPage from "./pages/InsightsPage.vue";
 import TodoPage from "./pages/TodoPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 import PersonalizePage from "./pages/PersonalizePage.vue";
-import { appsTopN, isLight, navIntent } from "./lib/uiState";
+import { appsTopN, isLight, navIntent, tabIntent } from "./lib/uiState";
 import {
   applyAppearance,
   glass,
@@ -55,6 +55,12 @@ const tabs: { key: Tab; label: string; icon: string }[] = [
 const active = ref<Tab>("today");
 
 // 今日卡片 / 应用排行点击 → 跳到历史页对应视图
+// "返回待办"这类按钮：直接切页
+watchEffect(() => {
+  const t = tabIntent.value;
+  if (t) active.value = t.tab as Tab;
+});
+
 watchEffect(() => {
   const n = navIntent.value;
   if (!n) return;
