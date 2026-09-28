@@ -21,18 +21,21 @@ const num = (key: string, fallback: number) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
-export const themePref = ref<ThemePref>((localStorage.getItem("ui.theme") as ThemePref) || "dark");
-export const accent = ref(localStorage.getItem("ui.accent") || "indigo");
+/**
+ * 首启默认 = 「樱花粉」这一套（浅色 + 玫瑰强调 + liquid 材质 + 毛玻璃 32）
+ * 涉及图片的项不设默认图片：壁纸留空（wallKind 默认 gradient）、提醒背景图留空
+ */
+export const themePref = ref<ThemePref>((localStorage.getItem("ui.theme") as ThemePref) || "light");
+export const accent = ref(localStorage.getItem("ui.accent") || "rose");
 export const customAccent = ref(localStorage.getItem("ui.customAccent") || "#7b84ec");
 export const glass = ref(localStorage.getItem("ui.glass") !== "off");
 export const material = ref<Material>(
-  (localStorage.getItem("ui.material") as Material) || "frosted"
+  (localStorage.getItem("ui.material") as Material) || "liquid"
 );
-export const blur = ref(num("ui.blur", 26));
-/* 背景层默认完全不透明（用户选定：直角 + 不透明），滑杆仍可回调 */
-export const bgAlpha = ref(stale() ? 100 : num("ui.bgAlpha", 100));
-export const sideAlpha = ref(stale() ? 50 : num("ui.sideAlpha", 50));
-export const cardAlpha = ref(num("ui.cardAlpha", 100));
+export const blur = ref(num("ui.blur", 32));
+export const bgAlpha = ref(stale() ? 70 : num("ui.bgAlpha", 70));
+export const sideAlpha = ref(stale() ? 40 : num("ui.sideAlpha", 40));
+export const cardAlpha = ref(num("ui.cardAlpha", 90));
 /* 三块表面各自的模糊与阴影（个性化页分三组调） */
 export const bgBlur = ref(stale() ? 18 : num("ui.bgBlur", 18));
 export const sideBlur = ref(stale() ? 26 : num("ui.sideBlur", 26));
@@ -44,9 +47,9 @@ export const appNameEnglish = ref(localStorage.getItem("ui.appNameEn") === "1");
 /** 应用配色模式：random 随机色 / accent 跟随强调色 / iconColor 按图标取色 / icon 直接显示图标 */
 export type AppColorMode = "random" | "accent" | "iconColor" | "icon";
 export const appColorMode = ref<AppColorMode>(
-  (localStorage.getItem("ui.appColor") as AppColorMode) || "random"
+  (localStorage.getItem("ui.appColor") as AppColorMode) || "iconColor"
 );
-export const motion = ref(num("ui.motion", 1));
+export const motion = ref(num("ui.motion", 0.5));
 export const wallKind = ref<WallKind>(
   (localStorage.getItem("ui.wallKind") as WallKind) || "gradient"
 );

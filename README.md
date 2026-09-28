@@ -5,6 +5,25 @@
 
 ---
 
+## 界面预览
+
+<table>
+  <tr>
+    <td width="50%"><img src="%E5%9B%BE%E7%89%87/%E5%BE%85%E5%8A%9E%E9%A1%B5.png" alt="待办页"><br><sub><b>待办</b> · 日历热力图 + 今日待办 + 任务/提醒/日志三卡</sub></td>
+    <td width="50%"><img src="%E5%9B%BE%E7%89%87/%E5%BE%85%E5%8A%9E%20-%20%E4%BA%8C%E7%BA%A7%E7%95%8C%E9%9D%A2.png" alt="某天详情"><br><sub><b>待办 · 二级界面</b> · 点某天进入当天详情（统计卡 + 小时分布 + 当天日志与图片）</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="%E5%9B%BE%E7%89%87/%E5%8E%86%E5%8F%B2.png" alt="历史页"><br><sub><b>历史</b> · 近 14 天 / 按月 / 按年 / 总计 + 24 小时分布与趋势</sub></td>
+    <td width="50%"><img src="%E5%9B%BE%E7%89%87/%E6%B4%9E%E5%AF%9F.png" alt="洞察页"><br><sub><b>洞察</b> · 使用频率趋势 + 近 14 天作息分布</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="%E5%9B%BE%E7%89%87/%E4%B8%AA%E6%80%A7%E5%8C%96.png" alt="个性化页"><br><sub><b>个性化</b> · 皮肤预设 / 应用配色 / 排行条数</sub></td>
+    <td width="50%"><img src="%E5%9B%BE%E7%89%87/%E5%BE%85%E5%8A%9E%E6%8F%90%E9%86%92-%E5%85%A8%E5%B1%8F.png" alt="全屏提醒"><br><sub><b>全屏提醒</b> · 铺满屏幕的休息提示（支持自定义背景图）</sub></td>
+  </tr>
+</table>
+
+---
+
 ## 三个核心功能
 
 ### 1. 使用时长 —— 看清每一分钟花在哪个软件
@@ -74,6 +93,7 @@ pnpm tauri build   # 打包（NSIS 安装包 / MSI / 免安装 exe）
 
 **灵感**
 - [flow-insight](https://github.com/mewamew/flow-insight) —— 心流 / 专注状态的推断思路
+- [dsh-dream-skin](https://github.com/RevolutionLA/dsh-dream-skin) —— 个性化页的皮肤预设 / 壁纸 / 毛玻璃参数面板参考（MIT）
 
 **素材与设计来源**
 - 软件内图标：[svgrepo · Solar Line Duotone](https://www.svgrepo.com/collection/solar-line-duotone-icons/)（480 Design, CC BY 4.0）
