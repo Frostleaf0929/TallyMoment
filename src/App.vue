@@ -46,10 +46,10 @@ type Tab =
   | "settings";
 const tabs: { key: Tab; label: string; icon: string }[] = [
   { key: "today", label: "今日", icon: "clock" },
+  { key: "todo", label: "待办", icon: "checklist" },
   { key: "history", label: "历史", icon: "history" },
   { key: "detail", label: "详细", icon: "detail" },
   { key: "insights", label: "洞察", icon: "graph" },
-  { key: "todo", label: "待办", icon: "checklist" },
   { key: "personalize", label: "个性化", icon: "palette" },
 ];
 const active = ref<Tab>("today");

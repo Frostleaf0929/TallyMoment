@@ -10,6 +10,10 @@ import Icon from "../components/Icon.vue";
 import DayBars from "../components/DayBars.vue";
 
 const report = ref<InsightReport | null>(null);
+/** 待办的完成用时分布（从待办页迁来；后续洞察会把待办数据一起纳入分析） */
+const todoStats = ref<{ buckets: number[] } | null>(null);
+const bucketLabels = ["<15分", "15~60分", "1~4时", "4~24时", "≥1天"];
+const bucketMax = () => Math.max(1, ...(todoStats.value?.buckets ?? [1]));
 const loading = ref(true);
 const renderErr = ref("");
 
@@ -220,6 +224,9 @@ onMounted(() => {
     (e) => (renderErr.value = String(e.reason))
   );
   load();
+  void invoke<{ buckets: number[] }>("todo_stats")
+    .then((s) => (todoStats.value = s))
+    .catch(() => (todoStats.value = null));
   window.addEventListener("resize", onResize);
   if (chartEl.value) {
     ro = new ResizeObserver(() => syncSize());
@@ -290,6 +297,21 @@ watch(isLight, renderChart);
       <h2>作息分布 · 近 14 天按小时累计</h2>
       <DayBars :labels="hourBars.labels" :series="hourBars.series" />
       <p class="hint">一眼看出你最常在哪些时段用电脑，适合用来安排需要专注的时段。</p>
+    </section>
+
+    <!-- 完成用时分布（原在待办页） -->
+    <section class="glass-card wide">
+      <h2>待办 · 完成用时分布</h2>
+      <div class="buckets">
+        <div v-for="(b, i) in todoStats?.buckets ?? []" :key="i" class="bcol">
+          <div class="bbar-wrap">
+            <div class="bbar" :style="{ height: (b / bucketMax()) * 72 + 'px' }" :title="`${b} 件`"></div>
+          </div>
+          <span class="bl">{{ bucketLabels[i] }}</span>
+          <span class="bv">{{ b }}</span>
+        </div>
+      </div>
+      <p class="hint">从任务创建到完成为止所用的时间分布；后续洞察会把完成率等一起纳入分析。</p>
     </section>
 
     <!-- 分析与建议 -->
@@ -460,6 +482,53 @@ watch(isLight, renderChart);
 
 .tick:last-child {
   transform: translateX(-100%);
+}
+
+.buckets {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  padding: 6px 0 0;
+}
+
+.bcol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.bbar-wrap {
+  height: 72px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.bbar {
+  width: 26px;
+  border-radius: 4px 4px 0 0;
+  background: var(--accent);
+  opacity: 0.75;
+  min-height: 2px;
+  transition: height var(--dur) ease;
+}
+
+.bl {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.bv {
+  font-size: 12px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-faint);
 }
 
 .legend {

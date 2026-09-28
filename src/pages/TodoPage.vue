@@ -121,9 +121,15 @@ async function exportAll() {
   }
 }
 
+/** 点日历：切到那天 + 打开二级界面 */
 function onPickDay(date: string) {
   pickedDay.value = new Date(`${date}T00:00:00`).getTime();
   void openDetail(date);
+}
+
+/** 定位按钮：只回到本月今天，不弹二级界面 */
+function onLocate(date: string) {
+  pickedDay.value = new Date(`${date}T00:00:00`).getTime();
 }
 
 /* ---------- 今日待办：今天到期 + 未填时间的（默认按当天算） ---------- */
@@ -178,17 +184,19 @@ async function openDetail(date: string) {
   try {
     const n = await invoke<{ content: string; images: string[] } | null>("notes_get", { date });
     detailNote.value = (n?.content ?? "").split(String.fromCharCode(10)).slice(0, 3).join(" ");
-    for (const name of n?.images ?? []) {
-      try {
-        const [mime, b64] = await invoke<[string, string]>("notes_image_data", { date, name });
-        detailImages.value.push(`data:${mime};base64,${b64}`);
-      } catch {
-        /* 单张失败忽略 */
-      }
+    const names = n?.images ?? [];
+    if (names.length) {
+      // 一次 IPC 拿全天图片（逐张取会让弹层明显卡顿）
+      const list = await invoke<[string, string, string][]>("notes_images", { date, names });
+      detailImages.value = list.map(([, mime, b64]) => `data:${mime};base64,${b64}`);
     }
   } catch {
     /* 忽略 */
   }
+}
+
+function pct(v: number): number {
+  return Math.round((v ?? 0) * 100);
 }
 
 async function load() {
@@ -250,6 +258,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
           compact
           :selected="new Date(pickedDay).toISOString().slice(0, 10)"
           @pick="onPickDay"
+          @locate="onLocate"
         />
         <p class="hint">点某一天进入那天的详情；颜色越深表示那天用得越久</p>
       </div>
@@ -270,8 +279,8 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
       </div>
     </section>
 
-    <!-- 完成率统计 -->
-    <section class="cards">
+    <!-- 完成率统计（已移入"点日历某天"的二级界面） -->
+    <section v-if="false" class="cards">
       <div class="glass-card stat">
         <p class="label"><Icon name="checklist" :size="14" /> 今日完成</p>
         <p class="value accent">{{ stats?.todayDone ?? 0 }} <small>件</small></p>
@@ -286,7 +295,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
       </div>
       <div class="glass-card stat">
         <p class="label"><Icon name="clock" :size="14" /> 平均完成用时</p>
-        <p class="value small">{{ stats?.avgMinutes ? `${stats.avgMinutes} 分钟` : "—" }}</p>
+        <p class="value small">{{ stats?.avgMinutes ?? 0 }} 分钟</p>
       </div>
     </section>
 
@@ -323,8 +332,8 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
       </div>
     </section>
 
-    <!-- 完成区间分布 -->
-    <section class="glass-card">
+    <!-- 完成区间分布（已迁到洞察页，这里停用） -->
+    <section v-if="false" class="glass-card">
       <h2>完成用时分布（全部任务）</h2>
       <div class="buckets">
         <div v-for="(b, i) in stats?.buckets ?? []" :key="i" class="bcol">
@@ -355,11 +364,17 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     <!-- 某天详情（二级视图，先搭框架）。Teleport 到 body：卡片的 backdrop-filter 会创建包含块，
          不 Teleport 的话 position:fixed 会被困在卡片内部（表现成"同级卡片"） -->
     <Teleport to="body">
-      <div v-if="detailDate" class="mask" @click.self="detailDate = ''">
+      <div v-show="detailDate" class="mask" @click.self="detailDate = ''">
       <div class="sheet glass-card">
         <div class="modhead">
           <h2>{{ detailDate }} · 那天</h2>
           <NButton size="tiny" quaternary @click="detailDate = ''">关闭</NButton>
+        </div>
+        <div v-if="stats" class="dcards">
+          <div class="dstat"><p class="dl">今日完成</p><p class="dv">{{ stats.todayDone }} 件</p></div>
+          <div class="dstat"><p class="dl">本周完成率</p><p class="dv">{{ pct(stats.weekRate) }}%</p></div>
+          <div class="dstat"><p class="dl">按时完成率</p><p class="dv">{{ pct(stats.ontimeRate) }}%</p></div>
+          <div class="dstat"><p class="dl">平均完成用时</p><p class="dv">{{ stats.avgMinutes }} 分</p></div>
         </div>
         <div v-if="dayReport" class="dcards">
           <div class="dstat"><p class="dl">使用时长</p><p class="dv">{{ fmtDuration(dayReport.totalSeconds) }}</p></div>

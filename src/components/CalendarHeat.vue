@@ -11,7 +11,7 @@ import { fmtDuration } from "../lib/format";
 const props = withDefaults(defineProps<{ selected?: string; compact?: boolean }>(), {
   compact: false,
 });
-const emit = defineEmits<{ (e: "pick", date: string): void }>();
+const emit = defineEmits<{ (e: "pick", date: string): void; (e: "locate", date: string): void }>();
 
 const cursor = ref(new Date());
 const map = ref<Record<string, number>>({});
@@ -66,7 +66,7 @@ async function load() {
 function goToday() {
   cursor.value = new Date();
   void load();
-  emit("pick", ymd(new Date()));
+  emit("locate", ymd(new Date()));
 }
 
 /** 滚轮换月（60ms 防抖，避免一次滚动跳好几个月） */
@@ -203,12 +203,14 @@ onMounted(load);
 }
 
 .ltxt {
-  max-width: 0;
-  overflow: hidden;
+  width: 24px;
+  flex: none;
   font-size: 11px;
   line-height: 1;
+  white-space: nowrap;
   opacity: 0;
-  transition: max-width var(--dur), opacity var(--dur), margin-left var(--dur);
+  transform: translateX(-4px);
+  transition: opacity var(--dur) ease, transform var(--dur) ease;
 }
 
 .locate:hover {
@@ -219,9 +221,8 @@ onMounted(load);
 }
 
 .locate:hover .ltxt {
-  max-width: 32px;
   opacity: 1;
-  margin-left: 4px;
+  transform: translateX(0);
 }
 
 .week {

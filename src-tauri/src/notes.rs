@@ -144,6 +144,17 @@ pub fn image_data(date: &str, name: &str) -> Result<(String, String), String> {
     Ok((mime.into(), crate::pet_settings::base64_encode(&data)))
 }
 
+/// 一次读出某天的全部附件（mime, base64, 文件名）——避免前端逐张 IPC 造成卡顿
+pub fn images_of(date: &str, names: &[String]) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for name in names {
+        if let Ok((mime, b64)) = image_data(date, name) {
+            out.push((name.clone(), mime, b64));
+        }
+    }
+    out
+}
+
 /// 导出全部日志为 Markdown：每篇一个 `<日期>.md`，图片复制到同目录 `images/`
 pub fn export_md(conn: &Connection, dir: &Path) -> Result<usize, String> {
     let notes = recent(conn, 100_000)?;

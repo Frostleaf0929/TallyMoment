@@ -330,6 +330,12 @@ fn notes_image_data(date: String, name: String) -> Result<(String, String), Stri
     notes::image_data(&date, &name)
 }
 
+/// 一次读取某天的全部附件（base64）
+#[tauri::command]
+fn notes_images(date: String, names: Vec<String>) -> Vec<(String, String, String)> {
+    notes::images_of(&date, &names)
+}
+
 /// 导出全部日志为 Markdown
 #[tauri::command]
 fn notes_export_md(app: tauri::AppHandle, dir: String) -> Result<usize, String> {
@@ -1072,6 +1078,7 @@ pub fn run() {
             notes_recent,
             notes_add_image,
             notes_image_data,
+            notes_images,
             notes_export_md,
             notes_import_md,
             rules_export_json,
