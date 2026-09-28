@@ -136,6 +136,25 @@ function openInDetail() {
 }
 
 /** 点日历：切到那天 + 打开二级界面 */
+/* ---------- 三卡并列的二级框 ---------- */
+const openModule = ref<"" | "tasks" | "rules" | "notes">("");
+const noteCount = ref(0);
+const lastNoteDate = ref("");
+
+const moduleTitle = computed(
+  () => ({ tasks: "任务", rules: "待办提醒", notes: "日志" })[openModule.value as "tasks"] ?? ""
+);
+
+async function loadNoteSummary() {
+  try {
+    const list = await invoke<{ date: string }[]>("notes_recent", { limit: 200 });
+    noteCount.value = list.length;
+    lastNoteDate.value = list[0]?.date ?? "";
+  } catch {
+    /* 忽略 */
+  }
+}
+
 function onPickDay(date: string) {
   pickedDay.value = new Date(`${date}T00:00:00`).getTime();
   void openDetail(date);
@@ -213,7 +232,10 @@ async function addTask() {
   }
 }
 
-onMounted(load);
+onMounted(async () => {
+  await load();
+  void loadNoteSummary();
+});
 const rateLabel = (v: number) => (v < 0 ? "—" : `${v}%`);
 const bucketLabels = ["<15分", "15~60分", "1~4时", "4~24时", "≥1天"];
 const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
@@ -280,37 +302,36 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     </section>
 
     <!-- 任务看板 -->
-    <section class="glass-card">
-      <div class="modhead">
-        <h2>任务</h2>
-        <div class="modacts">
-          <NButton size="tiny" quaternary @click="importMd">导入 MD</NButton>
-          <NButton size="tiny" quaternary @click="exportMd">导出 MD</NButton>
+    <!-- 三卡并列：任务 / 待办提醒 / 日志（点卡片在二级框里编辑） -->
+    <section class="modrow">
+      <button class="glass-card mcard" @click="openModule = 'tasks'">
+        <div class="mhead">
+          <h2>任务</h2>
+          <Icon name="checklist" :size="16" />
         </div>
-      </div>
-      <div class="add">
-        <NInput
-          v-model:value="newContent"
-          size="small"
-          placeholder="添加任务，双击已有任务可改内容"
-          maxlength="200"
-          @keyup.enter="addTask"
-        />
-        <NSelect
-          v-model:value="newPriority"
-          size="small"
-          :options="priorityOptions"
-          :show-arrow="false"
-          style="width: 76px"
-        />
-        <input v-model="newDue" type="time" class="tp" />
-        <NButton size="small" type="primary" secondary @click="addTask">添加</NButton>
-      </div>
-      <p v-if="err" class="err">{{ err }}</p>
-      <div class="board">
-        <TaskBoard :tasks="tasks" @reload="load" />
-      </div>
+        <p class="mnum">{{ tasks.filter((t) => !t.done).length }} <small>项未完成</small></p>
+        <p class="msub">今日待办 {{ todayTasks.length }} 项 · 点开编辑清单</p>
+      </button>
+
+      <button class="glass-card mcard" @click="openModule = 'rules'">
+        <div class="mhead">
+          <h2>待办提醒</h2>
+          <Icon name="bell" :size="16" />
+        </div>
+        <p class="mnum">{{ rules.filter((r) => r.enabled).length }} <small>条启用中</small></p>
+        <p class="msub">共 {{ rules.length }} 条规则 · 点开管理</p>
+      </button>
+
+      <button class="glass-card mcard" @click="openModule = 'notes'">
+        <div class="mhead">
+          <h2>日志</h2>
+          <Icon name="doc" :size="16" />
+        </div>
+        <p class="mnum">{{ noteCount }} <small>篇</small></p>
+        <p class="msub">{{ lastNoteDate || "还没有日志" }} · 点开写今天的</p>
+      </button>
     </section>
+
 
     <!-- 完成区间分布（已迁到洞察页，这里停用） -->
     <section v-if="false" class="glass-card">
@@ -331,18 +352,52 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     </section>
 
     <!-- 提醒规则 -->
-    <section class="glass-card">
-      <div class="modhead">
-        <h2>提醒规则（到点弹卡 / 全屏）</h2>
-        <div class="modacts">
-          <NButton size="tiny" quaternary @click="importRules">导入 JSON</NButton>
-          <NButton size="tiny" quaternary @click="exportRules">导出 JSON</NButton>
-        </div>
-      </div>
-      <ReminderRules :rules="rules" @reload="load" />
-    </section>
     <!-- 某天详情（二级视图，先搭框架）。Teleport 到 body：卡片的 backdrop-filter 会创建包含块，
          不 Teleport 的话 position:fixed 会被困在卡片内部（表现成"同级卡片"） -->
+    <!-- 模块二级框：任务 / 待办提醒 / 日志 -->
+    <Teleport to="body">
+      <div v-show="openModule" class="mask" @click.self="openModule = ''">
+        <span class="grain" aria-hidden="true"></span>
+        <div class="sheet glass-card">
+          <div class="modhead">
+            <h2>{{ moduleTitle }}</h2>
+            <div class="dacts">
+              <button class="wbtn" title="关闭" @click="openModule = ''">
+                <svg width="12" height="12" viewBox="0 0 12 12">
+                  <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.2" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <template v-if="openModule === 'tasks'">
+            <div class="addrow">
+              <NInput
+                v-model:value="newContent"
+                size="small"
+                placeholder="添加任务…（时间留空 = 今天）"
+                @keyup.enter="addTask"
+              />
+              <NSelect v-model:value="newPriority" size="small" :options="priorityOptions" style="width: 84px" />
+              <input v-model="newDue" type="time" class="tp" />
+              <NButton size="small" type="primary" secondary @click="addTask">添加</NButton>
+              <NButton size="tiny" quaternary @click="importMd">导入 MD</NButton>
+              <NButton size="tiny" quaternary @click="exportMd">导出 MD</NButton>
+            </div>
+            <TaskBoard :tasks="tasks" @reload="load" />
+          </template>
+          <template v-else-if="openModule === 'rules'">
+            <div class="addrow">
+              <NButton size="tiny" quaternary @click="importRules">导入 JSON</NButton>
+              <NButton size="tiny" quaternary @click="exportRules">导出 JSON</NButton>
+              <span class="msub">规则支持卡片 / 全屏两种提醒方式</span>
+            </div>
+            <ReminderRules :rules="rules" @reload="load" />
+          </template>
+          <NotesPanel v-else-if="openModule === 'notes'" :day-ts="pickedDay" />
+        </div>
+      </div>
+    </Teleport>
+
     <Teleport to="body">
       <div v-show="detailDate" class="mask" @click.self="detailDate = ''">
         <span class="grain" aria-hidden="true"></span>
@@ -369,10 +424,6 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     </Teleport>
 
     <!-- 每日日志 -->
-    <section class="glass-card">
-      <h2>日志（Markdown + 图片）</h2>
-      <NotesPanel :day-ts="pickedDay" />
-    </section>
   </div>
 </template>
 
@@ -381,6 +432,85 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* 弹层里的操作行（新建任务 / 导入导出） */
+.addrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.tp {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 8px;
+}
+
+/* 三卡并列：等宽、等高、可点 */
+.modrow {
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.mcard {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--card-border);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.mhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-muted);
+}
+
+.mhead h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.mnum {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.mnum small {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.msub {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+@media (max-width: 900px) {
+  .modrow {
+    flex-direction: column;
+  }
 }
 
 .hint {
