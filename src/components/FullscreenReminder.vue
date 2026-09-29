@@ -42,6 +42,8 @@ onMounted(async () => {
   } catch {
     /* 忽略 */
   }
+  // 前端就绪：请 Rust 侧显示窗口（创建时隐藏，防睡眠唤醒后首帧未渲染就露黑屏）
+  void invoke("reminder_show_full_window").catch(() => {});
 });
 
 onUnmounted(() => {

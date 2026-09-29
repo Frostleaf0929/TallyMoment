@@ -98,13 +98,16 @@ pub fn show(app: &AppHandle, payload: Payload) {
         .inner_size(REMINDER_W, REMINDER_MIN_H)
         .position(x, y)
         .decorations(false)
-        .transparent(true)
-        .background_color(tauri::window::Color(0, 0, 0, 0))
+        // 卡片铺满窗口、窗口不透明：透明合成在部分机器（Win11 24H2）上不可靠，
+        // 留白处会露出 WebView 画布底色（浅色=灰框、深色=黑框）。底色直接给卡片色，
+        // 即使 WebView 尚未渲染也只是"一块深色卡片"，不会再出现黑/灰框。
+        .transparent(false)
+        .background_color(tauri::window::Color(22, 26, 34, 255))
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
         .focused(false)
-        .shadow(false)
+        .shadow(true)
         .visible(false);
 
     match build.build() {
@@ -114,7 +117,7 @@ pub fn show(app: &AppHandle, payload: Payload) {
 }
 
 /// 前端按卡片数量上报内容高度，窗口随之缩放并保持右下角锚定
-/// 去掉 Windows 给窗口画的 1px DWM 边框（透明窗口上就是用户说的"灰框"）
+/// 去掉 Windows 给窗口画的 1px DWM 边框；圆角交给系统（窗口 = 卡片本身）
 #[cfg(windows)]
 fn kill_border(win: &tauri::WebviewWindow) {
     use windows::Win32::Foundation::HWND;
@@ -122,9 +125,9 @@ fn kill_border(win: &tauri::WebviewWindow) {
         DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
     };
     if let Ok(hwnd) = win.hwnd() {
-        // DWMWA_COLOR_NONE = 0xFFFFFFFE；圆角偏好 DWMWCP_DONOTROUND = 1
+        // DWMWA_COLOR_NONE = 0xFFFFFFFE；圆角偏好 DWMWCP_ROUND = 2
         let none: u32 = 0xFFFF_FFFE;
-        let no_round: u32 = 1;
+        let round: u32 = 2;
         unsafe {
             let _ = DwmSetWindowAttribute(
                 HWND(hwnd.0),
@@ -135,7 +138,7 @@ fn kill_border(win: &tauri::WebviewWindow) {
             let _ = DwmSetWindowAttribute(
                 HWND(hwnd.0),
                 DWMWA_WINDOW_CORNER_PREFERENCE,
-                &no_round as *const _ as *const std::ffi::c_void,
+                &round as *const _ as *const std::ffi::c_void,
                 4,
             );
         }
@@ -146,8 +149,11 @@ fn kill_border(win: &tauri::WebviewWindow) {
 fn kill_border(_win: &tauri::WebviewWindow) {}
 
 /// 全屏提醒：铺满主屏的置顶无边框窗口（"该休息了"那一类）
+/// 窗口先隐藏、等前端就绪再显示：睡眠唤醒后 WebView 首帧可能迟迟不渲染，
+/// 立即显示会露出默认底色（半夜"全黑一片+滚动条"的来源）
 fn show_fullscreen(app: &AppHandle, payload: Payload) {
     if let Some(win) = app.get_webview_window("reminder_full") {
+        FULL_SHOWN.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = win.show();
         let _ = win.set_focus();
         let _ = app.emit_to("reminder_full", "reminder-show", payload);
@@ -163,22 +169,49 @@ fn show_fullscreen(app: &AppHandle, payload: Payload) {
             (m.size().width as f64 / sc, m.size().height as f64 / sc)
         })
         .unwrap_or((1280.0, 800.0));
+    FULL_SHOWN.store(false, std::sync::atomic::Ordering::Relaxed);
     let build = WebviewWindowBuilder::new(app, "reminder_full", WebviewUrl::App("index.html".into()))
         .title("拾刻 · 休息提醒")
         .inner_size(w, h)
         .position(0.0, 0.0)
         .decorations(false)
         .transparent(false)
+        // 与全屏页底色一致：即使首帧未渲染也不会黑屏闪变
+        .background_color(tauri::window::Color(13, 16, 22, 255))
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .visible(true)
+        .visible(false)
         .build();
     match build {
-        Ok(win) => kill_border(&win),
+        Ok(win) => {
+            kill_border(&win);
+            let handle = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                if FULL_SHOWN.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                if let Some(w) = handle.get_webview_window("reminder_full") {
+                    eprintln!("[reminder] 全屏提醒窗 60s 未就绪，销毁等待下次重建");
+                    let _ = w.close();
+                }
+            });
+        }
         Err(e) => eprintln!("[reminder] 全屏提醒窗创建失败: {e}"),
     }
 }
+
+/// 全屏提醒窗前端就绪后由 Rust 侧显示
+pub fn show_full_ready(app: &AppHandle) {
+    FULL_SHOWN.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(win) = app.get_webview_window("reminder_full") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
+static FULL_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 关闭全屏提醒窗
 pub fn close_full(app: &AppHandle) {
@@ -189,7 +222,8 @@ pub fn close_full(app: &AppHandle) {
 
 pub fn resize(app: &AppHandle, content_height: f64) {
     if let Some(win) = app.get_webview_window("reminder") {
-        let h = (content_height + 24.0).max(REMINDER_MIN_H);
+        // 卡片铺满窗口：窗口高度 = 内容高度（不再留 24px 余量，那正是灰框的温床）
+        let h = content_height.max(REMINDER_MIN_H);
         let _ = win.set_size(tauri::LogicalSize::new(REMINDER_W, h));
         if let Ok(Some(m)) = app.primary_monitor() {
             let scale = m.scale_factor();

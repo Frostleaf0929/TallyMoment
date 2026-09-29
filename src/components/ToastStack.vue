@@ -57,7 +57,9 @@ async function act(t: Toast, actionId: string) {
 }
 
 async function reportSize() {
-  const h = toasts.value.length * 104 + (toasts.value.length ? 12 : 0);
+  // 窗口 = 卡片本身（铺满），高度用 DOM 实测，不再留余量
+  const el = document.querySelector(".stack") as HTMLElement | null;
+  const h = el ? el.offsetHeight : toasts.value.length * 104 + 12;
   try {
     await invoke("reminder_resize", { height: Math.max(120, h) });
   } catch {
@@ -150,10 +152,9 @@ onUnmounted(() => {
 </template>
 
 <style>
-.toast-root,
-.toast-root body {
+/* 提醒窗 = 卡片本身（窗口不透明、卡片铺满），圆角与阴影由系统窗口提供 */
+html[data-mode="reminder"] body {
   margin: 0;
-  background: transparent !important;
   overflow: hidden;
 }
 </style>
@@ -162,18 +163,16 @@ onUnmounted(() => {
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 8px 8px 0 8px;
+  gap: 1px;
 }
 
 .toast {
   display: flex;
-  border-radius: 12px;
+  /* 无圆角无阴影：窗口就是卡片，DWM 负责圆角与投影 */
+  border-radius: 0;
   overflow: hidden;
-  background: rgba(22, 26, 34, 0.95);
-  /* 去掉描边：桌面上会显出一圈灰框，改用外阴影托底 */
+  background: #161a22;
   border: 0;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.46);
   user-select: none;
 }
 

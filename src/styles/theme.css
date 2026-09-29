@@ -50,6 +50,9 @@
   --info-soft: rgba(125, 146, 207, 0.14);
   --danger: #c9797b;
   --danger-soft: rgba(201, 121, 123, 0.14);
+  /* 洞察"碎片"专用青：比 teal 预设强调色（#58b3c4）更饱和偏蓝，避免与心流色重叠 */
+  --fragment: #2fb5ce;
+  --fragment-soft: rgba(47, 181, 206, 0.14);
 
   /* 形状 */
   --r-sm: 8px;
@@ -128,6 +131,9 @@
   --info-soft: rgba(106, 131, 196, 0.12);
   --danger: #bd6266;
   --danger-soft: rgba(189, 98, 102, 0.12);
+  /* 浅色下加深保证可读，仍与 teal 预设（#58b3c4）区分 */
+  --fragment: #1e93ac;
+  --fragment-soft: rgba(30, 147, 172, 0.12);
   --shadow-card: 0 10px 30px rgba(30, 40, 70, 0.1);
   --shadow-soft: 0 4px 14px rgba(30, 40, 70, 0.07);
   --wall-a: rgba(106, 116, 224, 0.16);

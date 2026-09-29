@@ -17,6 +17,21 @@ const bucketMax = () => Math.max(1, ...(todoStats.value?.buckets ?? [1]));
 const loading = ref(true);
 const renderErr = ref("");
 
+/** 统计范围：1 = 今天 / 7 = 近 7 天 / 30 = 近 30 天（长期分析） */
+const range = ref(1);
+const rangeOpts = [
+  { d: 1, label: "今天" },
+  { d: 7, label: "近 7 天" },
+  { d: 30, label: "近 30 天" },
+];
+const rangeLabel = computed(() => (range.value > 1 ? `近 ${range.value} 天` : "今天"));
+
+function setRange(d: number) {
+  if (range.value === d) return;
+  range.value = d;
+  load();
+}
+
 const chartEl = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
 let ro: ResizeObserver | null = null;
@@ -71,7 +86,7 @@ async function load() {
     if (localStorage.getItem("dev.fakeInsights") === "1") {
       report.value = fakeReport();
     } else {
-      report.value = await invoke<InsightReport>("insights_report");
+      report.value = await invoke<InsightReport>("insights_report", { days: range.value });
     }
     renderChart();
   } catch {
@@ -89,7 +104,7 @@ const stateColors = computed(() => {
   return {
     flow: g("--accent", "#7b84ec"),
     focused: g("--info", "#7d92cf"),
-    fragmented: g("--warn", "#d3a95e"),
+    fragmented: g("--fragment", "#2fb5ce"),
     keys: g("--accent", "#7b84ec"),
     clicks: g("--good", "#6fb59a"),
   };
@@ -218,11 +233,17 @@ function onResize() {
 }
 
 onMounted(() => {
-  window.addEventListener("error", (e) => (renderErr.value = e.message));
-  window.addEventListener(
-    "unhandledrejection",
-    (e) => (renderErr.value = String(e.reason))
-  );
+  window.addEventListener("error", (e) => {
+    // ResizeObserver loop 是浏览器的无害告警（同一帧内布局多次变化就会触发，
+    // ECharts 自适应时常见），不是渲染错误，不该整页报警
+    if (/ResizeObserver loop/i.test(e.message ?? "")) return;
+    renderErr.value = e.message;
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const msg = String(e.reason);
+    if (/ResizeObserver loop/i.test(msg)) return;
+    renderErr.value = msg;
+  });
   load();
   void invoke<{ buckets: number[] }>("todo_stats")
     .then((s) => (todoStats.value = s))
@@ -256,6 +277,21 @@ watch(isLight, renderChart);
 
     <p v-if="renderErr" class="err">渲染错误: {{ renderErr }}</p>
 
+    <!-- 时间范围：长期分析入口，全部卡片与图表按所选区间重新统计 -->
+    <section class="glass-card wide rangebar">
+      <div class="seg">
+        <button
+          v-for="opt in rangeOpts"
+          :key="opt.d"
+          :class="{ on: range === opt.d }"
+          @click="setRange(opt.d)"
+        >
+          {{ opt.label }}
+        </button>
+      </div>
+      <span class="rangenote">切换后所有统计与图表都会按所选时间范围重新计算。</span>
+    </section>
+
     <!-- 状态摘要 -->
     <section class="cards">
       <div class="glass-card stat">
@@ -272,9 +308,9 @@ watch(isLight, renderChart);
       </div>
     </section>
 
-    <!-- 今日状态分布（按小时） -->
+    <!-- 状态分布（按小时） -->
     <section class="glass-card wide">
-      <h2>今日各小时状态（按推断状态堆叠）</h2>
+      <h2>{{ rangeLabel }}各小时状态（按推断状态堆叠）</h2>
       <DayBars :labels="stateBars.labels" :series="stateBars.series" />
       <p class="hint">
         块 = 间隔不足 5 分钟的使用归并；心流/专注/碎片为本地规则推断，不是精确值。
@@ -283,7 +319,7 @@ watch(isLight, renderChart);
 
     <!-- 使用频率 -->
     <section class="glass-card wide">
-      <h2>使用频率 · 近 14 天键入与点击</h2>
+      <h2>使用频率 · {{ rangeLabel }}键入与点击</h2>
       <div class="chart-legend">
         <span v-for="l in inputLegend" :key="l.name" class="lg">
           <i :style="{ background: l.color }"></i>{{ l.name }}
@@ -294,7 +330,7 @@ watch(isLight, renderChart);
 
     <!-- 作息分布 -->
     <section class="glass-card wide">
-      <h2>作息分布 · 近 14 天按小时累计</h2>
+      <h2>作息分布 · {{ rangeLabel }}按小时累计</h2>
       <DayBars :labels="hourBars.labels" :series="hourBars.series" />
       <p class="hint">一眼看出你最常在哪些时段用电脑，适合用来安排需要专注的时段。</p>
     </section>
@@ -367,6 +403,45 @@ watch(isLight, renderChart);
 
 .refresh:hover {
   color: var(--text);
+}
+
+.rangebar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.seg {
+  display: flex;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  padding: 3px;
+}
+
+.seg button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 5px 14px;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  transition: background var(--dur), color var(--dur);
+}
+
+.seg button.on {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.rangenote {
+  font-size: 11px;
+  color: var(--text-faint);
 }
 
 .cards {

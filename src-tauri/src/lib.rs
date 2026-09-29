@@ -200,12 +200,12 @@ fn recent_daily(app: tauri::AppHandle, days: i32) -> Result<Vec<DailyTotal>, Str
     })
 }
 
-/// 洞察报表（专注块/心流推断/频率区间）
+/// 洞察报表（专注块/心流推断/频率区间；days=统计范围，1=今天）
 #[tauri::command]
-fn insights_report(app: tauri::AppHandle) -> Result<insights::InsightReport, String> {
+fn insights_report(app: tauri::AppHandle, days: Option<i64>) -> Result<insights::InsightReport, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    insights::report(&conn)
+    insights::report(&conn, days.unwrap_or(1))
 }
 
 /// 任意周期汇总（历史页：按月 / 按年 / 总计）
@@ -718,13 +718,12 @@ fn reminder_resize(app: tauri::AppHandle, height: f64) {
     reminder::resize(&app, height);
 }
 
-/// 提醒窗前端就绪后拉取积压的提醒，并由 Rust 侧显示窗口（绕开前端权限）
+/// 提醒窗前端就绪后拉取积压的提醒（显示由前端确认内容后调 reminder_show_window）
 #[tauri::command]
 fn reminder_pending(app: tauri::AppHandle) -> Vec<reminder::Payload> {
     eprintln!("[reminder] frontend fetched pending queue");
-    if let Some(w) = app.get_webview_window("reminder") {
-        let _ = w.show();
-    }
+    // 注意：这里不能顺手 show —— 全屏提醒窗的前端也会拉队列，
+    // 那会把藏着的卡片窗一起弹出来
     reminder::take_pending()
 }
 
@@ -734,6 +733,12 @@ fn reminder_show_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("reminder") {
         let _ = w.show();
     }
+}
+
+/// 全屏提醒窗前端就绪后由 Rust 侧显示（窗口创建时是隐藏的，防黑屏）
+#[tauri::command]
+fn reminder_show_full_window(app: tauri::AppHandle) {
+    reminder::show_full_ready(&app);
 }
 
 /// Tai 对齐导出：data.db + 每日/时段 CSV（path 为用户选择的 .db 位置）
@@ -1102,6 +1107,7 @@ pub fn run() {
             reminder_resize,
             reminder_pending,
             reminder_show_window,
+            reminder_show_full_window,
             export_tai,
             delete_data,
             pet_settings_get,

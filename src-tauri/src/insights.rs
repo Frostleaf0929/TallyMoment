@@ -124,28 +124,31 @@ fn hhmm(ts: i64) -> String {
         .unwrap_or_default()
 }
 
-pub fn report(conn: &Connection) -> Result<InsightReport, String> {
+/// 洞察报表：days = 统计范围（1 = 今天，7 = 近 7 天，90 封顶）
+pub fn report(conn: &Connection, days: i64) -> Result<InsightReport, String> {
+    let days = days.clamp(1, 90);
     let date = storage::today_date();
     let day_start = storage::today_start_ts();
     let day_end = day_start + 86_400;
-    let week_ago = day_start - 13 * 86_400;
+    let range_start = day_start - (days - 1) * 86_400;
+    let n = days as i32;
 
-    let today_segments = storage::today_segments(conn, day_start, day_end)?;
-    let raw: Vec<(i64, i64, String)> = today_segments
+    // 区间内全部前台区间：既归并专注块，也生成每日首末活动
+    let segments = storage::today_segments(conn, range_start, day_end)?;
+    let raw: Vec<(i64, i64, String)> = segments
         .iter()
         .map(|s| (s.start_ts, s.end_ts, s.app_name.clone()))
         .collect();
     let mut blocks = compute_blocks(&raw);
     blocks.retain(|b| b.span >= 60); // 过滤 <1 分钟的碎屑块
 
-    let daily = storage::recent_daily(conn, 14)?;
-    let input_daily = storage::input_daily(conn, 14)?;
-    let hourly14 = storage::recent_hourly(conn, 14)?;
+    let daily = storage::recent_daily(conn, n)?;
+    let input_daily = storage::input_daily(conn, n)?;
+    let hourly14 = storage::recent_hourly(conn, n)?;
 
-    // 近 14 天活跃区间（首末活动时刻）
-    let all_segments = storage::today_segments(conn, week_ago, day_end)?;
+    // 区间内每天的活跃区间（首末活动时刻）
     let mut spans: Vec<SpanDay> = Vec::new();
-    for s in &all_segments {
+    for s in &segments {
         let d = chrono::Local
             .timestamp_opt(s.start_ts, 0)
             .single()
@@ -179,7 +182,7 @@ pub fn report(conn: &Connection) -> Result<InsightReport, String> {
         .map(|b| b.seconds)
         .sum();
 
-    let insights = build_insights(&blocks, &daily, &input_daily, &spans, &date);
+    let insights = build_insights(&blocks, &daily, &input_daily, &spans, &date, days);
     Ok(InsightReport {
         blocks,
         daily,
@@ -199,8 +202,14 @@ fn build_insights(
     input_daily: &[storage::InputDay],
     spans: &[SpanDay],
     today: &str,
+    days: i64,
 ) -> Vec<Insight> {
     let mut out = Vec::new();
+    let range_label = if days > 1 {
+        format!("近 {days} 天")
+    } else {
+        "今天".to_string()
+    };
     let today_total: i64 = daily
         .iter()
         .find(|(d, _)| d == today)
@@ -218,7 +227,7 @@ fn build_insights(
             .map(|a| a.trim_end_matches(".exe").to_string())
             .unwrap_or_default();
         out.push(Insight {
-            title: format!("今天有 {} 段心流，共 {}", flow_blocks.len(), fmt_hm(total)),
+            title: format!("{range_label}有 {} 段心流，共 {}", flow_blocks.len(), fmt_hm(total)),
             analysis: format!(
                 "最深的一段 {} 在 {}–{}，持续 {}，主要在 {}。",
                 fmt_hm(best.seconds),
@@ -232,7 +241,7 @@ fn build_insights(
         });
     } else if today_total > 900 {
         out.push(Insight {
-            title: "今天还没有成块的心流".into(),
+            title: format!("{range_label}还没有成块的心流"),
             analysis: "记录里有使用，但没有持续 25 分钟以上、少切换的整块时间。".into(),
             suggestion: "挑一件事，给自己一个不被打断的 25 分钟试试。".into(),
             tone: "info".into(),
@@ -245,14 +254,14 @@ fn build_insights(
         let frag_pct = (fragmented_share(blocks) * 100.0).round() as i64;
         if frag_pct >= 35 {
             out.push(Insight {
-                title: format!("碎片化占今日使用的 {}%", frag_pct),
+                title: format!("碎片化占{range_label}使用的 {}%", frag_pct),
                 analysis: "碎片块 = 频繁切换、单块不到 10 分钟的使用。零散消息与来回跳转是主因。".into(),
                 suggestion: "试试把同类小事攒到固定时段批量处理，给大任务留整块时间。".into(),
                 tone: "warn".into(),
             });
         } else {
             out.push(Insight {
-                title: "今天的节奏比较整".into(),
+                title: format!("{range_label}的节奏比较整"),
                 analysis: format!("碎片化仅占 {}%，多数时间处在成块的使用中。", frag_pct),
                 suggestion: "保持这个节奏；在块与块之间安排真正的休息。".into(),
                 tone: "good".into(),
@@ -302,11 +311,13 @@ fn build_insights(
         let avg = prev.iter().sum::<i64>() / prev.len().max(1) as i64;
         if avg > 500 {
             let diff = ((today_keys - avg) as f64 / avg as f64 * 100.0).round() as i64;
+            let day_label = if days > 1 { "最近一天" } else { "今天" };
+            let avg_label = if days > 1 { "此前日均" } else { "近三天日均" };
             out.push(Insight {
                 title: format!("键入频率{}近期水平", if diff >= 15 { "高于" } else if diff <= -15 { "低于" } else { "接近" }),
                 analysis: format!(
-                    "今天 {} 次，近三天日均 {} 次（{}%）。只计次数，不记录内容。",
-                    today_keys, avg, diff.abs()
+                    "{} {} 次，{} {} 次（{}%）。只计次数，不记录内容。",
+                    day_label, today_keys, avg_label, avg, diff.abs()
                 ),
                 suggestion: "键入密度反映动手强度，配合时间线看它在什么时段发生。".into(),
                 tone: "info".into(),
@@ -368,6 +379,35 @@ fn fragmented_share(blocks: &[BlockView]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::compute_blocks;
+
+    #[test]
+    fn report_respects_days_range() {
+        let dir = std::env::temp_dir().join(format!("tallymoment-insights-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("insights-range.db");
+        let _ = std::fs::remove_file(&p);
+        let conn = crate::storage::open(&p).unwrap();
+        let day = crate::storage::today_start_ts();
+        conn.execute("INSERT INTO apps(name) VALUES('a.exe')", [])
+            .unwrap();
+        let app_id = conn.last_insert_rowid();
+        // 昨天 1 小时一段 + 今天 30 分钟一段
+        for (s, e) in [(day - 86_400 + 3_600, day - 86_400 + 7_200), (day + 3_600, day + 5_400)] {
+            conn.execute(
+                "INSERT INTO segments(app_id, start_ts, end_ts, title) VALUES(?1, ?2, ?3, ?4)",
+                rusqlite::params![app_id, s, e, "t"],
+            )
+            .unwrap();
+        }
+        // 今天：只含今天那段
+        let r1 = super::report(&conn, 1).unwrap();
+        assert_eq!(r1.blocks.len(), 1);
+        assert!(r1.blocks[0].start_ts >= day);
+        // 近 7 天：两段都在
+        let r7 = super::report(&conn, 7).unwrap();
+        assert_eq!(r7.blocks.len(), 2);
+        let _ = std::fs::remove_file(&p);
+    }
 
     #[test]
     fn blocks_merge_within_gap_and_infer_states() {

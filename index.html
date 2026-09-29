@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>拾刻 · TallyMoment</title>
+    <style>
+      /* 兜底：Vue 挂载前后都不出现默认边距与滚动条（各窗口滚动都在内部容器） */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+    </style>
   </head>
 
   <body>
