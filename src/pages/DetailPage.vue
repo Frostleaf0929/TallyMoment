@@ -433,8 +433,9 @@ watch(navIntent, (n) => {
                 <i :style="{ width: (a.seconds / maxSeconds) * 100 + '%', background: appColor(a) }"></i>
               </span>
             </button>
-            <!-- 行内小信息卡：紧跟选中应用（进程名 / 路径 / 忽略），底部另有完整卡 -->
+            <!-- 行内信息卡：紧跟选中应用，内容与底部完整卡一致（正式名/进程名/路径/忽略） -->
             <div v-if="selectedApp === a.name && info" class="appinfo inline">
+              <p class="ai-name">{{ info.displayName }}</p>
               <p class="ai-line">{{ info.name }}</p>
               <p class="ai-line path" :title="info.exePath ?? ''">{{ info.exePath || "（无路径记录）" }}</p>
               <button class="ai-btn" :disabled="infoBusy" @click.stop="toggleIgnore">
@@ -963,14 +964,18 @@ watch(navIntent, (n) => {
   color: var(--text-faint);
 }
 
-/* 行内小信息卡（选中应用行正下方） */
+/* 行内信息卡（选中应用行正下方）：内容与排版同底部完整卡，中性样式 */
 .appinfo.inline {
-  border: 1px solid var(--accent-border);
-  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  background: var(--surface);
   border-radius: var(--r-md);
-  margin: 2px 0 6px;
-  padding: 8px 10px;
+  margin: 2px 0 8px;
+  padding: 12px 14px;
   animation: infoin var(--dur) ease;
+}
+
+.appinfo.inline .ai-name {
+  font-size: 15px;
 }
 
 @keyframes infoin {
