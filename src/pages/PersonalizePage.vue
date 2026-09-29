@@ -6,6 +6,7 @@ import { NSwitch } from "naive-ui";
 import Icon from "../components/Icon.vue";
 import SettingSlider from "../components/SettingSlider.vue";
 import { appsTopN } from "../lib/uiState";
+import { onMounted } from "vue";
 import {
   accent,
   accentIsPreset,
@@ -205,6 +206,33 @@ void invoke<{ mime: string; data: string } | null>("reminder_bg_get")
   .then((w) => (reminderBgSet.value = !!w))
   .catch(() => (reminderBgSet.value = false));
 
+
+/* ---------- 原子岛 ---------- */
+const islandOn = ref(false);
+async function setIsland(v: boolean) {
+  try {
+    await invoke("island_set_enabled", { enabled: v });
+    msg.value = v ? "原子岛已开启" : "原子岛已关闭";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+async function resetIslandPos() {
+  try {
+    await invoke("island_reset_pos");
+    msg.value = "原子岛位置已重置";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+onMounted(async () => {
+  try {
+    const enabled = await invoke<boolean>("island_get_enabled");
+    islandOn.value = enabled;
+  } catch {
+    islandOn.value = false;
+  }
+});
 </script>
 
 <template>
@@ -263,6 +291,23 @@ void invoke<{ mime: string; data: string } | null>("reminder_bg_get")
         :max="20"
         suffix=" 条"
       />
+    </div>
+
+    <!-- 原子岛（常驻胶囊） -->
+    <div class="glass-card card">
+      <h2>原子岛</h2>
+      <div class="row">
+        <span>启用常驻胶囊</span>
+        <NSwitch v-model:value="islandOn" size="small" @update:value="setIsland" />
+      </div>
+      <p class="rd more">
+        屏幕常驻小条：当前专注 / 下个任务倒计时 / 今日完成数，点击展开待办并可直接勾掉；
+        拖动胶囊可挪位置，位置会记住。常驻约多占 40~80MB 内存（一个 WebView 窗口）。
+      </p>
+      <div class="acts" style="display: flex; gap: 8px">
+        <button class="btn" @click="resetIslandPos">位置重置（回屏幕顶部居中）</button>
+      </div>
+      <p v-if="msg" class="okline">{{ msg }}</p>
     </div>
 
     <!-- 皮肤预设 -->

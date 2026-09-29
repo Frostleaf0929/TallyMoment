@@ -8,6 +8,7 @@ import Icon from "./components/Icon.vue";
 import PetView from "./components/PetView.vue";
 import ToastStack from "./components/ToastStack.vue";
 import FullscreenReminder from "./components/FullscreenReminder.vue";
+import IslandView from "./components/IslandView.vue";
 import TodayPage from "./pages/TodayPage.vue";
 import HistoryPage from "./pages/HistoryPage.vue";
 import DetailPage from "./pages/DetailPage.vue";
@@ -33,6 +34,7 @@ try {
   if (label === "reminder") mode = "reminder";
   else if (label === "reminder_full") mode = "reminder_full";
   else if (label === "pet") mode = "pet";
+  else if (label === "island") mode = "island";
 } catch {
   /* 浏览器直开时按主面板处理 */
 }
@@ -224,6 +226,7 @@ onUnmounted(() => {
     <FullscreenReminder v-if="mode === 'reminder_full'" />
     <ToastStack v-else-if="mode === 'reminder'" />
     <PetView v-else-if="mode === 'pet'" />
+    <IslandView v-else-if="mode === 'island'" />
     <div v-else class="shell shell-frame" :class="{ 'glass-off': !glass }">
       <div class="wall" aria-hidden="true"></div>
 

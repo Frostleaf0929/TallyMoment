@@ -1,4 +1,5 @@
 mod app_icon;
+mod island;
 mod notes;
 mod input_hook;
 mod insights;
@@ -757,6 +758,141 @@ fn reminder_show_full_window(app: tauri::AppHandle) {
     reminder::show_full_ready(&app);
 }
 
+/// 原子岛数据：当前专注 / 今日完成 / 下个任务与待办列表
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct IslandNextTask {
+    id: i64,
+    content: String,
+    due_ts: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IslandData {
+    focus_name: Option<String>,
+    focus_sec: i64,
+    done_today: i64,
+    paused: bool,
+    next_task: Option<IslandNextTask>,
+    tasks: Vec<IslandNextTask>,
+}
+
+#[tauri::command]
+fn island_data(app: tauri::AppHandle) -> IslandData {
+    let now = chrono::Local::now().timestamp();
+    let empty = IslandData {
+        focus_name: None,
+        focus_sec: 0,
+        done_today: 0,
+        paused: false,
+        next_task: None,
+        tasks: Vec::new(),
+    };
+    let shared = app.state::<TrackerShared>();
+    let paused = shared.paused.load(Ordering::Relaxed);
+    // 先读会话（不与 Db 锁交叉）
+    let sess = shared
+        .session
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|s| (s.app_id, s.seg_start, s.app_key.clone())));
+    let (focus_name, focus_sec) = match (sess, paused) {
+        (Some((app_id, seg_start, key)), false) => {
+            let db = app.state::<Db>();
+            let name = db.0.lock().ok().and_then(|conn| {
+                conn.query_row(
+                    "SELECT COALESCE(display_name, name) FROM apps WHERE id = ?1",
+                    [app_id],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok()
+            });
+            (Some(name.unwrap_or(key)), (now - seg_start).max(0))
+        }
+        _ => (None, 0),
+    };
+
+    let db = app.state::<Db>();
+    let conn = db.0.lock().ok();
+    let Some(conn) = conn else { return empty; };
+    let today0 = storage::today_start_ts();
+    let done_today: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE done = 1 AND done_ts >= ?1",
+            [today0],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let mut tasks: Vec<IslandNextTask> = Vec::new();
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT id, content, due_ts FROM tasks WHERE done = 0 AND due_ts IS NOT NULL AND due_ts >= ?1 ORDER BY due_ts LIMIT 6")
+    {
+        if let Ok(rows) = stmt.query_map([now], |r| {
+            Ok(IslandNextTask {
+                id: r.get(0)?,
+                content: r.get(1)?,
+                due_ts: r.get(2)?,
+            })
+        }) {
+            for r in rows.filter_map(|x| x.ok()) {
+                tasks.push(r);
+            }
+        }
+    }
+    let next_task = tasks.first().cloned();
+    IslandData {
+        focus_name,
+        focus_sec,
+        done_today,
+        paused,
+        next_task,
+        tasks,
+    }
+}
+
+/// 原子岛开关（个性化）：写设置并显示/隐藏窗口
+#[tauri::command]
+fn island_set_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+        let _ = storage::set_setting(&conn, "island.enabled", if enabled { "1" } else { "0" });
+    }
+    if enabled {
+        island::show(&app);
+    } else {
+        island::hide(&app);
+    }
+    Ok(())
+}
+
+/// 原子岛是否开启（个性化页开关回显）
+#[tauri::command]
+fn island_get_enabled(app: tauri::AppHandle) -> bool {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| ()).ok();
+    conn.map(|c| island::enabled(&c)).unwrap_or(false)
+}
+
+/// 原子岛展开/收起（保持顶边），状态持久化
+#[tauri::command]
+fn island_set_expanded(app: tauri::AppHandle, expanded: bool) {
+    island::set_expanded(&app, expanded);
+}
+
+/// 原子岛前端就绪：由 Rust 侧显示窗口（防首帧黑底）
+#[tauri::command]
+fn island_ready(app: tauri::AppHandle) {
+    island::on_ready(&app);
+}
+
+/// 原子岛位置重置：回屏幕顶部居中
+#[tauri::command]
+fn island_reset_pos(app: tauri::AppHandle) {
+    island::reset_pos(&app);
+}
+
 /// 单个应用信息（详细页应用卡：友好名/进程名/路径/忽略状态）
 #[tauri::command]
 fn app_info(app: tauri::AppHandle, name: String) -> Result<storage::AppInfo, String> {
@@ -1157,6 +1293,12 @@ pub fn run() {
             habit_toggle,
             app_info,
             app_set_ignored,
+            island_data,
+            island_set_enabled,
+            island_set_expanded,
+            island_ready,
+            island_reset_pos,
+            island_get_enabled,
             rule_list,
             rule_add,
             rule_update,
@@ -1316,12 +1458,41 @@ pub fn run() {
 
             tracker::spawn(app.handle().clone());
             input_hook::spawn(app.handle().clone());
+
+            // 原子岛：上一次开着就随启动恢复
+            {
+                let db = app.state::<Db>().inner().clone();
+                if let Ok(conn) = db.0.lock() {
+                    if island::enabled(&conn) {
+                        island::show(app.handle());
+                    }
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+            }
+            // 原子岛拖动：位置变化落盘（500ms 节流，拖完的最终位置由 hide/退出兜底）
+            if window.label() == "island" {
+                if let WindowEvent::Moved(_) = event {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    use std::sync::atomic::AtomicI64;
+                    static LAST_POS_SAVE: AtomicI64 = AtomicI64::new(0);
+                    let last = LAST_POS_SAVE.load(Ordering::Relaxed);
+                    if now - last > 500 {
+                        LAST_POS_SAVE.store(now, Ordering::Relaxed);
+                        island::save_pos(window.app_handle());
+                    }
+                }
+                if let WindowEvent::CloseRequested { .. } = event {
+                    island::save_pos(window.app_handle());
+                }
             }
         })
         .build(tauri::generate_context!())
