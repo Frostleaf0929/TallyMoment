@@ -121,20 +121,38 @@ fn ensure_dir_writable(dir: &std::path::Path) -> bool {
     }
 }
 
-/// 应用显示名：把 floral-notepaper.exe 这类进程名改成"花笺"这样的真实软件名
-/// （存 apps.display_name；传空串 = 清除，恢复默认）
-pub fn app_set_display(conn: &Connection, name: &str, display_name: &str) -> Result<(), String> {
-    let v: Option<&str> = if display_name.trim().is_empty() {
-        None
-    } else {
-        Some(display_name.trim())
+/// 用 exe 版本资源的 FileDescription 回填显示名（Tai 式友好名：花笺、哔哩哔哩……）
+/// 只处理 显示名为空 / 等于进程名 / 等于去 .exe 进程名 的行；返回回填条数
+pub fn backfill_friendly_names(conn: &Connection) -> Result<usize, String> {
+    let rows: Vec<(i64, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, COALESCE(exe_path, '') FROM apps
+                 WHERE display_name IS NULL OR display_name = ''
+                    OR display_name = name OR display_name = replace(name, '.exe', '')",
+            )
+            .map_err(|e| format!("查询待回填应用失败: {e}"))?;
+        let rs = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| format!("查询待回填应用失败: {e}"))?;
+        rs.filter_map(|x| x.ok()).collect()
     };
-    conn.execute(
-        "UPDATE apps SET display_name = ?2 WHERE name = ?1",
-        rusqlite::params![name, v],
-    )
-    .map_err(|e| format!("更新显示名失败: {e}"))?;
-    Ok(())
+    let mut n = 0usize;
+    for (id, exe) in rows {
+        if exe.is_empty() || !std::path::Path::new(&exe).exists() {
+            continue;
+        }
+        let Some(fd) = crate::app_icon::file_description(&exe) else {
+            continue;
+        };
+        conn.execute(
+            "UPDATE apps SET display_name = ?2 WHERE id = ?1",
+            rusqlite::params![id, fd],
+        )
+        .map_err(|e| format!("回填显示名失败: {e}"))?;
+        n += 1;
+    }
+    Ok(n)
 }
 
 /// 打开连接并建表（WAL + 忙等待，两张汇总表都有唯一约束防重复——吸收 Tai 的坑）
@@ -2807,6 +2825,16 @@ pub fn import_tai_data(src_path: &str, conn: &Connection, mode: &str) -> Result<
             alias_raw
         };
         let app_id = app_id_for(conn, &key, &display, &file)?;
+        // 本地已有该应用但没显示名（此前拾刻自己记录的）→ 用 Tai 的 Alias/Name 回填，
+        // 否则导入后排行里还是 floral-notepaper.exe 这类进程名（Tai 里明明叫"花笺"）
+        if !display.is_empty() {
+            let _ = conn.execute(
+                "UPDATE apps SET display_name = ?2
+                 WHERE id = ?1 AND (display_name IS NULL OR display_name = ''
+                    OR display_name = name OR display_name = replace(name, '.exe', ''))",
+                rusqlite::params![app_id, display],
+            );
+        }
         app_map.insert(tid, app_id);
         summary.apps += 1;
     }
@@ -3502,6 +3530,9 @@ mod tests {
             "导入完成：应用 {} 个，日汇总 {} 行，时段 {} 行，跳过已有 {} 条",
             s.apps, s.daily_rows, s.hourly_rows, s.skipped
         );
+        // 回填 Tai 式友好名（exe 版本资源的 FileDescription）
+        let n = backfill_friendly_names(&conn).unwrap();
+        eprintln!("回填友好名 {n} 个");
     }
 
     #[test]

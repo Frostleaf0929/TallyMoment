@@ -757,14 +757,6 @@ fn reminder_show_full_window(app: tauri::AppHandle) {
     reminder::show_full_ready(&app);
 }
 
-/// 应用显示名：把 floral-notepaper.exe 这类进程名改成"花笺"这样的真实软件名（空串=恢复默认）
-#[tauri::command]
-fn app_rename(app: tauri::AppHandle, name: String, display_name: String) -> Result<(), String> {
-    let db = app.state::<Db>();
-    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    storage::app_set_display(&conn, &name, &display_name)
-}
-
 /// Tai 对齐导出：data.db + 每日/时段 CSV（path 为用户选择的 .db 位置）
 #[tauri::command]
 fn export_tai(app: tauri::AppHandle, path: String) -> Result<Vec<String>, String> {
@@ -990,16 +982,20 @@ fn import_tai(
         return Ok(summary);
     }
     // fill / replace：用户明确选择的策略，允许对同一文件重复执行
-    if mode == "replace" {
+    let summary = if mode == "replace" {
         // 替代全部是破坏性操作：清空前先自动备份整库到 数据目录/backups/
         let backup = storage::backup_database(&conn)?;
-        let summary = storage::import_tai_data(&path, &conn, mode)?;
-        return Ok(storage::ImportSummary {
+        let s = storage::import_tai_data(&path, &conn, mode)?;
+        Ok(storage::ImportSummary {
             backup_path: Some(backup),
-            ..summary
-        });
-    }
-    storage::import_tai_data(&path, &conn, mode)
+            ..s
+        })
+    } else {
+        storage::import_tai_data(&path, &conn, mode)
+    }?;
+    // 导入后用 exe 版本资源回填一次友好名（Tai 式显示名）
+    let _ = storage::backfill_friendly_names(&conn);
+    Ok(summary)
 }
 
 /// 全量导出 JSON：带 path 写到指定位置，否则写数据目录；返回文件路径
@@ -1143,7 +1139,6 @@ pub fn run() {
             todo_stats,
             habit_grid,
             habit_toggle,
-            app_rename,
             rule_list,
             rule_add,
             rule_update,
@@ -1290,6 +1285,13 @@ pub fn run() {
                         Ok(n) if n > 0 => eprintln!("[todo] 固定事项生成了 {n} 条今日实例"),
                         Ok(_) => {}
                         Err(e) => eprintln!("[todo] 固定事项生成失败: {e}"),
+                    }
+                    // 应用友好名：启动时用 exe 版本资源的 FileDescription 回填一次
+                    // （Tai 式：花笺、哔哩哔哩……新装的应用在下次启动时补上）
+                    match storage::backfill_friendly_names(&conn) {
+                        Ok(n) if n > 0 => eprintln!("[apps] 回填了 {n} 个应用的友好名"),
+                        Ok(_) => {}
+                        Err(e) => eprintln!("[apps] 友好名回填失败: {e}"),
                     }
                 }
             }

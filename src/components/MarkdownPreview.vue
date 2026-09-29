@@ -15,9 +15,31 @@ const emit = defineEmits<{ (e: "update:content", v: string): void }>();
 const blocks = computed(() =>
   parseBlocks(props.content).map((b) => ({
     kind: b.kind,
-    html: b.lines.map((ln) => renderLine(ln, props.images)).join("<br />"),
+    // 渲染前剥掉 Markdown 前缀（此前 # > - 全部原样留在正文里），待办/列表换成符号
+    html: b.lines
+      .map((ln) => stripPrefix(b.kind, ln))
+      .map((ln) => renderLine(ln, props.images))
+      .join("<br />"),
   }))
 );
+
+/** 按块类型剥掉行首标记：# 标题 / > 引用 / - [ ] 待办 / - 列表 */
+function stripPrefix(kind: string, ln: string): string {
+  switch (kind) {
+    case "heading":
+      return ln.replace(/^\s*#{1,6}\s+/, "");
+    case "quote":
+      return ln.replace(/^\s*>\s?/, "");
+    case "todo":
+      return ln.replace(/^\s*-\s*\[([ xX])\]\s*/, (_m, c: string) =>
+        c.trim().length ? "☑ " : "☐ "
+      );
+    case "list":
+      return ln.replace(/^\s*[-*]\s+/, "• ");
+    default:
+      return ln;
+  }
+}
 
 function up(i: number) {
   emit("update:content", moveBlock(props.content, i, -1));

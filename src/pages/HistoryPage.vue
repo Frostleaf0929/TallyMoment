@@ -76,19 +76,6 @@ async function loadPeriod(kind: "month" | "year" | "all", key: string) {
   }
 }
 
-/** 应用改名后按当前模式刷新显示名 */
-async function refreshAll() {
-  if (mode.value === "recent") {
-    const date = selected.value || days.value[0]?.date || "";
-    if (date) await pick(date);
-    return;
-  }
-  const kind = mode.value as "month" | "year" | "all";
-  const key =
-    kind === "month" ? selectedMonth.value : kind === "year" ? selectedYear.value : "all";
-  if (key) await loadPeriod(kind, key);
-}
-
 /** 日历选择器（与详细页统一风格） */
 function onMonthPick(ts: number | null) {
   if (!ts) return;
@@ -201,16 +188,18 @@ onMounted(async () => {
     <!-- 周期选择：所有视图的选择器都在同一行 -->
     <div class="picker">
       <template v-if="mode === 'recent'">
-        <button
-          v-for="d in days"
-          :key="d.date"
-          class="day"
-          :class="{ active: d.date === selected }"
-          @click="pick(d.date)"
-        >
-          <span class="dl">{{ dayLabel(d.date) }}</span>
-          <span class="dv">{{ fmtDuration(d.seconds) }}</span>
-        </button>
+        <div class="daygrid">
+          <button
+            v-for="d in days"
+            :key="d.date"
+            class="day"
+            :class="{ active: d.date === selected }"
+            @click="pick(d.date)"
+          >
+            <span class="dl">{{ dayLabel(d.date) }}</span>
+            <span class="dv">{{ fmtDuration(d.seconds) }}</span>
+          </button>
+        </div>
         <p v-if="!days.length" class="empty">还没有历史数据，明天再看这里</p>
       </template>
       <template v-else-if="mode === 'month'">
@@ -275,7 +264,7 @@ onMounted(async () => {
 
         <section class="glass-card">
           <h2>应用排行</h2>
-          <AppRanking :apps="report.apps" @pick="(n: string) => jumpTo('app', n)" @renamed="refreshAll" />
+          <AppRanking :apps="report.apps" @pick="(n: string) => jumpTo('app', n)" />
         </section>
       </template>
       <BallLoader v-else-if="loading" label="加载中…" />
@@ -319,7 +308,7 @@ onMounted(async () => {
 
         <section class="glass-card">
           <h2>应用排行</h2>
-          <AppRanking :apps="period.apps" @pick="(n: string) => jumpTo('app', n)" @renamed="refreshAll" />
+          <AppRanking :apps="period.apps" @pick="(n: string) => jumpTo('app', n)" />
         </section>
       </template>
       <BallLoader v-else-if="loading" label="加载中…" />
@@ -348,6 +337,8 @@ onMounted(async () => {
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-border); }
 .picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 近 14 天：7 列网格，上下两行各自对齐（此前 flex 换行是 8+6） */
+.daygrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; width: 100%; }
 .hint { font-size: 12px; color: var(--text-faint); }
 .day {
   border: 1px solid var(--border);

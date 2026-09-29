@@ -92,6 +92,16 @@ function editNote() {
   notesIntent.value = { date: props.date, at: Date.now() };
   goTab("todo");
 }
+
+/** 点正文里的图片放大（事件委托：渲染出来的 img 没有 own 事件） */
+function onBodyClick(e: MouseEvent) {
+  const t = e.target as HTMLElement;
+  if (t.tagName === "IMG" && t.classList.contains("mdimg")) {
+    // dataURL 存在 noteImages 的值里；找不到就退回 src（缩略图也够看）
+    const hit = Object.values(noteImages.value).find((v) => v === (t as HTMLImageElement).src);
+    preview.value = hit ?? (t as HTMLImageElement).src;
+  }
+}
 </script>
 
 <template>
@@ -117,7 +127,7 @@ function editNote() {
 
     <div class="dsec notecard">
       <div class="notehead">
-        <p class="dl">那天写了什么{{ thumbs.length ? ` · ${thumbs.length} 张图片` : "" }}</p>
+        <p class="dl">那天写了什么{{ Object.keys(noteImages).length ? ` · ${Object.keys(noteImages).length} 张图片` : "" }}</p>
         <button class="editnote" title="到〈待办 · 日志〉编辑这天" @click="editNote">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
@@ -126,20 +136,10 @@ function editNote() {
         </button>
       </div>
       <div class="notebody">
-        <div class="mdhost">
+        <!-- 正文块式渲染（图片就在正文里），不再另设图片列——此前同一张图显示两遍 -->
+        <div class="mdhost" @click="onBodyClick">
           <MarkdownPreview v-if="note" :content="note" :images="noteImages" readonly />
           <p v-else class="dtext">（这天还没有日志，点右上角「编辑」去写）</p>
-        </div>
-        <div v-if="thumbs.length" class="dimgs">
-          <img
-            v-for="(src, i) in thumbs"
-            :key="i"
-            :src="src"
-            alt=""
-            loading="lazy"
-            decoding="async"
-            @click="preview = images[i]"
-          />
         </div>
       </div>
       <p v-if="imgLoading" class="dtext">图片加载中…</p>
@@ -210,33 +210,15 @@ function editNote() {
   margin-bottom: 14px;
 }
 
-/* 日志渲染区：限高滚动，文字在左占大头 */
+/* 日志渲染区：限高滚动，点击正文里的图片可放大 */
 .mdhost {
-  flex: 1;
-  min-width: 0;
-  max-height: 360px;
+  max-height: 420px;
   overflow-y: auto;
   padding-right: 4px;
 }
 
-.notebody {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-}
-
-.notebody .dimgs {
-  flex: none;
-  width: 260px;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.notebody .dimgs img {
-  width: 100%;
-  height: auto;
-  max-height: 210px;
-  object-fit: cover;
+.mdhost :deep(.mdimg) {
+  cursor: zoom-in;
 }
 
 /* 编辑胶囊：与「返回待办」同款（圆形图标，悬停展开） */

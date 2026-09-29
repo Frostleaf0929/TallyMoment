@@ -43,6 +43,66 @@ fn wide(s: &str) -> Vec<u16> {
     std::ffi::OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
 
+/// 读 exe 版本资源的 FileDescription（任务栏悬停名，Tai 式"花笺"友好名的来源）。
+/// 读不到 / 没有该资源返回 None。
+#[cfg(windows)]
+pub fn file_description(path: &str) -> Option<String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+    };
+    let w = wide(path);
+    unsafe {
+        let size = GetFileVersionInfoSizeW(PCWSTR(w.as_ptr()), None);
+        if size == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; size as usize];
+        GetFileVersionInfoW(PCWSTR(w.as_ptr()), Some(0), size, buf.as_mut_ptr() as *mut _).ok()?;
+        let mut ptr: *mut u16 = std::ptr::null_mut();
+        let mut len = 0u32;
+        // 翻译表给出 语言/代码页，再按它拼出 FileDescription 的查询路径
+        if !VerQueryValueW(
+            buf.as_ptr() as *const _,
+            PCWSTR(wide("\\VarFileInfo\\Translation").as_ptr()),
+            &mut ptr as *mut *mut u16 as *mut *mut core::ffi::c_void,
+            &mut len,
+        )
+        .as_bool()
+            || ptr.is_null()
+            || len < 2
+        {
+            return None;
+        }
+        let (lang, codepage) = (*ptr, *ptr.add(1));
+        let q = format!("\\StringFileInfo\\{lang:04x}{codepage:04x}\\FileDescription");
+        if !VerQueryValueW(
+            buf.as_ptr() as *const _,
+            PCWSTR(wide(&q).as_ptr()),
+            &mut ptr as *mut *mut u16 as *mut *mut core::ffi::c_void,
+            &mut len,
+        )
+        .as_bool()
+            || ptr.is_null()
+            || len == 0
+        {
+            return None;
+        }
+        let s = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len as usize));
+        let t = s.trim_end_matches('\0').trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn file_description(_path: &str) -> Option<String> {
+    None
+}
+
 #[cfg(windows)]
 pub fn extract(path: &str) -> Result<IconData, String> {
     let w = wide(path);

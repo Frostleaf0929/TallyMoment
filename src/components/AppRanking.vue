@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watchEffect } from "vue";
+import { computed, watchEffect } from "vue";
 import { NProgress } from "naive-ui";
-import { invoke } from "@tauri-apps/api/core";
 import type { AppUsage } from "../types";
 import { colorFor } from "../lib/colors";
 import { fmtDuration } from "../lib/format";
@@ -10,28 +9,7 @@ import { appsTopN, isLight } from "../lib/uiState";
 import { appColorMode, appNameEnglish } from "../lib/appearance";
 import { iconColor, iconUrl, requestIcons } from "../lib/appIcons";
 
-const emit = defineEmits<{ (e: "pick", name: string): void; (e: "renamed"): void }>();
-
-/* ---------- 应用改名：把 floral-notepaper.exe 这类进程名改成"花笺"这样的真实软件名 ---------- */
-const editing = ref("");
-const editDraft = ref("");
-
-function startRename(key: string, label: string) {
-  editing.value = key;
-  // 显示名去掉 .exe 后与进程名相同时视为"没改过"，清空输入（placeholder 显示进程名）
-  editDraft.value = label === key.replace(/\.exe$/i, "") ? "" : label;
-}
-
-async function saveRename(key: string) {
-  const draft = editDraft.value.trim();
-  editing.value = "";
-  try {
-    await invoke("app_rename", { name: key, displayName: draft });
-    emit("renamed");
-  } catch {
-    /* 忽略 */
-  }
-}
+const emit = defineEmits<{ (e: "pick", name: string): void }>();
 
 const props = withDefaults(defineProps<{ apps: AppUsage[]; limit?: number }>(), { limit: 0 });
 
@@ -78,25 +56,8 @@ watchEffect(() => {
       <span class="rank">{{ a.rank }}</span>
       <img v-if="a.icon" class="iapp" :src="a.icon" alt="" draggable="false" />
       <span v-else class="dot" :style="{ background: a.color }"></span>
-      <span class="name" :title="a.name">
-        <input
-          v-if="editing === a.key"
-          v-model="editDraft"
-          class="rn"
-          :placeholder="a.name.replace(/\.exe$/i, '')"
-          @keyup.enter="saveRename(a.key)"
-          @blur="saveRename(a.key)"
-          @click.stop
-          @keydown.esc="editing = ''"
-        />
-        <template v-else>{{ a.label }}</template>
-      </span>
+      <span class="name" :title="a.name">{{ a.label }}</span>
       <span class="time">{{ fmtDuration(a.seconds) }}</span>
-      <span class="rnbtn" title="改成实际软件名（清空 = 恢复进程名）" @click.stop="startRename(a.key, a.label)">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </span>
       <div class="bar">
         <NProgress
           type="line"
@@ -129,8 +90,8 @@ watchEffect(() => {
   text-align: left;
   cursor: pointer;
   display: grid;
-  /* 序号 / 图标 / 名称 / 时长 / 改名 —— 图标列要够宽，否则会压到名称上 */
-  grid-template-columns: 18px 26px 1fr auto 18px;
+  /* 序号 / 图标 / 名称 / 时长 —— 图标列要够宽，否则会压到名称上 */
+  grid-template-columns: 18px 26px 1fr auto;
   grid-template-rows: auto auto;
   column-gap: 12px;
   align-items: center;
@@ -184,49 +145,8 @@ watchEffect(() => {
 }
 
 .bar {
-  grid-column: 3 / 6;
+  grid-column: 3 / 5;
   margin-top: 4px;
-}
-
-.rnbtn {
-  grid-row: 1;
-  grid-column: 5;
-  justify-self: end;
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 5px;
-  color: var(--text-faint);
-  opacity: 0;
-  transition: opacity var(--dur), color var(--dur), background var(--dur);
-}
-
-.row:hover .rnbtn {
-  opacity: 1;
-}
-
-.rnbtn:hover {
-  color: var(--accent-text);
-  background: var(--surface-hover);
-}
-
-.rnbtn svg {
-  width: 12px;
-  height: 12px;
-}
-
-.rn {
-  width: 100%;
-  border: 1px solid var(--accent-border);
-  background: var(--surface);
-  color: var(--text);
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 12.5px;
-  font-family: inherit;
-  outline: none;
 }
 
 .empty {
