@@ -778,6 +778,10 @@ struct IslandData {
     tasks: Vec<IslandNextTask>,
     /// 无悬停时是否缩小（WinIsland 式 idle 态开关）
     idle_enabled: bool,
+    /// 材质：solid / acrylic / mica
+    material: String,
+    /// 强调色模式：endfield / accent
+    accent_mode: String,
 }
 
 #[tauri::command]
@@ -791,6 +795,8 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
         next_task: None,
         tasks: Vec::new(),
         idle_enabled: true,
+        material: "solid".into(),
+        accent_mode: "endfield".into(),
     };
     let shared = app.state::<TrackerShared>();
     let paused = shared.paused.load(Ordering::Relaxed);
@@ -845,6 +851,8 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
     }
     let next_task = tasks.first().cloned();
     let idle_enabled = island::idle_enabled(&conn);
+    let material = island::material(&conn);
+    let accent_mode = island::accent_mode(&conn);
     IslandData {
         focus_name,
         focus_sec,
@@ -853,6 +861,8 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
         next_task,
         tasks,
         idle_enabled,
+        material,
+        accent_mode,
     }
 }
 
@@ -977,6 +987,33 @@ fn island_set_idle_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), S
     if !enabled {
         island::set_state(&app, "normal");
     }
+    Ok(())
+}
+
+/// 材质（solid/acrylic/mica）：存设置并重建窗口生效
+#[tauri::command]
+fn island_set_material(app: tauri::AppHandle, mat: String) -> Result<(), String> {
+    if !matches!(mat.as_str(), "solid" | "acrylic" | "mica") {
+        return Err("bad material".into());
+    }
+    {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+        island::set_material(&conn, &mat);
+    }
+    island::rebuild(&app);
+    Ok(())
+}
+
+/// 强调色模式（endfield/accent）
+#[tauri::command]
+fn island_set_accent_mode(app: tauri::AppHandle, mode: String) -> Result<(), String> {
+    if !matches!(mode.as_str(), "endfield" | "accent") {
+        return Err("bad mode".into());
+    }
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    island::set_accent_mode(&conn, &mode);
     Ok(())
 }
 
@@ -1413,6 +1450,8 @@ pub fn run() {
             island_set_idle_enabled,
             island_get_idle_enabled,
             island_start_drag,
+            island_set_material,
+            island_set_accent_mode,
             rule_list,
             rule_add,
             rule_update,

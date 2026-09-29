@@ -11,6 +11,9 @@ pub const ISLAND_H_EXPANDED: f64 = 316.0;
 pub const ISLAND_W_IDLE: f64 = 240.0;
 pub const ISLAND_H_IDLE: f64 = 40.0;
 
+/// 动画代数：新动画开始时 +1，旧动画线程发现代数不一致即自行退出（防鼠标快速进出堆叠）
+static ANIM_GEN: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
 pub fn logical_screen(app: &AppHandle) -> (f64, f64) {
     app.primary_monitor()
         .ok()
@@ -50,13 +53,13 @@ pub fn show(app: &AppHandle) {
     };
     // 初始一律 normal 高度；idle/expanded 由前端状态机切换
     let h = ISLAND_H_COLLAPSED;
+    let mat = with_setting(app, |conn| material(conn)).unwrap_or_else(|| "solid".into());
 
-    let build = WebviewWindowBuilder::new(app, "island", WebviewUrl::App("island.html".into()))
+    let mut build = WebviewWindowBuilder::new(app, "island", WebviewUrl::App("island.html".into()))
         .title("拾刻 · 原子岛")
         .inner_size(ISLAND_W, h)
         .position(x.max(0.0), y.max(0.0))
         .decorations(false)
-        .transparent(false)
         .background_color(tauri::window::Color(16, 17, 21, 255))
         .always_on_top(true)
         .skip_taskbar(true)
@@ -64,6 +67,10 @@ pub fn show(app: &AppHandle) {
         .focused(false)
         .shadow(false)
         .visible(false);
+    build = match effects_for(&mat) {
+        Some(cfg) => build.transparent(true).effects(cfg),
+        None => build.transparent(false),
+    };
 
     match build.build() {
         Ok(win) => {
@@ -93,6 +100,20 @@ pub fn hide(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("island") {
         let _ = win.hide();
     }
+}
+
+/// 材质切换需重建窗口（系统效果不能热切换）：关闭后按新设置重开
+pub fn rebuild(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("island") {
+        let _ = win.close();
+        for _ in 0..60 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if app.get_webview_window("island").is_none() {
+                break;
+            }
+        }
+    }
+    show(app);
 }
 
 /// 前端就绪：显示窗口（创建时隐藏，防首帧黑底闪现）
@@ -133,27 +154,56 @@ pub fn notify_modules(app: &AppHandle, modules: &[String]) {
     let _ = app.emit_to("island", "island-modules", modules.to_vec());
 }
 
-/// 窗口三态尺寸与位置对齐（idle / normal / expanded）
+/// 窗口三态切换：带插值动画（整体放大、水平中心对齐、顶边不动）
+/// 目标位置按位置模式：center/left/right 对齐屏幕，custom 以当前中心为锚对称扩展
 pub fn set_state(app: &AppHandle, state: &str) {
-    let (w, h) = match state {
+    let (tw, th) = match state {
         "idle" => (ISLAND_W_IDLE, ISLAND_H_IDLE),
         "expanded" => (ISLAND_W, ISLAND_H_EXPANDED),
         _ => (ISLAND_W, ISLAND_H_COLLAPSED),
     };
-    if let Some(win) = app.get_webview_window("island") {
-        // 位置模式非 custom 时，宽度变化后按模式重新对齐（顶边不动）
-        let pm = with_setting(app, |conn| pos_mode(conn));
-        if pm.as_deref() != Some("custom") {
+    let Some(win) = app.get_webview_window("island") else { return };
+    let sc = win.scale_factor().unwrap_or(1.0);
+    let (cx, cy, cw, ch) = (
+        win.outer_position().ok().map(|p| p.x as f64 / sc).unwrap_or(0.0),
+        win.outer_position().ok().map(|p| p.y as f64 / sc).unwrap_or(8.0),
+        win.inner_size().ok().map(|s| s.width as f64 / sc).unwrap_or(ISLAND_W),
+        win.inner_size().ok().map(|s| s.height as f64 / sc).unwrap_or(ISLAND_H_COLLAPSED),
+    );
+    let pm = with_setting(app, |conn| pos_mode(conn)).unwrap_or_else(|| "center".into());
+    let (tx, ty) = match pm.as_str() {
+        "left" => (8.0, 8.0),
+        "right" => {
             let (sw, _sh) = logical_screen(app);
-            let x = match pm.as_deref() {
-                Some("left") => 8.0,
-                Some("right") => sw - w - 8.0,
-                _ => (sw - w) / 2.0,
-            };
-            let _ = win.set_position(tauri::LogicalPosition::new(x, 8.0));
+            (sw - tw - 8.0, 8.0)
         }
-        let _ = win.set_size(tauri::LogicalSize::new(w, h));
+        "center" => {
+            let (sw, _sh) = logical_screen(app);
+            ((sw - tw) / 2.0, 8.0)
+        }
+        _ => (cx + (cw - tw) / 2.0, cy.min(8.0)), // custom：水平中心锚定，顶边不动
+    };
+    if (cw - tw).abs() < 0.5 && (ch - th).abs() < 0.5 {
+        let _ = win.set_size(tauri::LogicalSize::new(tw, th));
+        let _ = win.set_position(tauri::LogicalPosition::new(tx, ty));
+        return;
     }
+    let gen = ANIM_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    std::thread::spawn(move || {
+        let steps = 14;
+        for i in 1..=steps {
+            if ANIM_GEN.load(std::sync::atomic::Ordering::Relaxed) != gen {
+                return; // 有新动画接管，本线程退出
+            }
+            let t = i as f64 / steps as f64;
+            let e = 1.0 - (1.0 - t) * (1.0 - t); // easeOutQuad
+            let _ = win.set_size(tauri::LogicalSize::new(cw + (tw - cw) * e, ch + (th - ch) * e));
+            let _ = win.set_position(tauri::LogicalPosition::new(cx + (tx - cx) * e, cy + (ty - cy) * e));
+            std::thread::sleep(std::time::Duration::from_millis(12));
+        }
+        let _ = win.set_size(tauri::LogicalSize::new(tw, th));
+        let _ = win.set_position(tauri::LogicalPosition::new(tx, ty));
+    });
 }
 
 /// 位置模式：center | left | right | custom；没存过时，有手动拖动记录视为 custom，否则 center
@@ -176,6 +226,35 @@ pub fn idle_enabled(conn: &rusqlite::Connection) -> bool {
     crate::storage::get_setting(conn, "island.idle_enabled")
         .map(|v| v == "1")
         .unwrap_or(true)
+}
+
+/// 材质：solid（纯色）/ acrylic（毛玻璃）/ mica（云母）
+pub fn material(conn: &rusqlite::Connection) -> String {
+    crate::storage::get_setting(conn, "island.material").unwrap_or_else(|| "solid".into())
+}
+
+pub fn set_material(conn: &rusqlite::Connection, mat: &str) {
+    let _ = crate::storage::set_setting(conn, "island.material", mat);
+}
+
+/// 强调色模式：endfield（终末地黄绿）/ accent（跟随主程序强调色）
+pub fn accent_mode(conn: &rusqlite::Connection) -> String {
+    crate::storage::get_setting(conn, "island.accent_mode").unwrap_or_else(|| "endfield".into())
+}
+
+pub fn set_accent_mode(conn: &rusqlite::Connection, mode: &str) {
+    let _ = crate::storage::set_setting(conn, "island.accent_mode", mode);
+}
+
+/// 窗口效果配置（Acrylic=毛玻璃 / Mica=云母，均需透明窗口）
+fn effects_for(mat: &str) -> Option<tauri::utils::config::WindowEffectsConfig> {
+    use tauri::window::Effect;
+    let effect = match mat {
+        "acrylic" => Effect::Acrylic,
+        "mica" => Effect::Mica,
+        _ => return None,
+    };
+    Some(tauri::window::EffectsBuilder::new().effect(effect).build())
 }
 
 /// 展开/收起（保持顶边不动），并记住状态

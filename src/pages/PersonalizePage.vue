@@ -211,10 +211,21 @@ void invoke<{ mime: string; data: string } | null>("reminder_bg_get")
 const islandOn = ref(false);
 const islandPos = ref("center");
 const islandIdle = ref(true);
+const islandMaterial = ref("solid");
+const islandAccentMode = ref("endfield");
 const POS_DEFS: Record<string, string> = {
   center: "顶部居中",
   left: "靠左",
   right: "靠右",
+};
+const MATERIAL_DEFS: Record<string, string> = {
+  solid: "纯色",
+  acrylic: "毛玻璃",
+  mica: "云母",
+};
+const ACCENT_MODE_DEFS: Record<string, string> = {
+  endfield: "终末地",
+  accent: "跟随强调色",
 };
 const MODULE_DEFS: Record<string, string> = {
   focus: "当前专注",
@@ -288,6 +299,24 @@ async function setIslandIdle(v: boolean) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
 }
+async function setIslandMaterial(m: string) {
+  try {
+    await invoke("island_set_material", { mat: m });
+    islandMaterial.value = m;
+    msg.value = "原子岛材质已更新";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+async function setIslandAccentMode(m: string) {
+  try {
+    await invoke("island_set_accent_mode", { mode: m });
+    islandAccentMode.value = m;
+    msg.value = m === "endfield" ? "已切换终末地配色" : "已跟随主程序强调色";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
 onMounted(async () => {
   try {
     const enabled = await invoke<boolean>("island_get_enabled");
@@ -296,6 +325,9 @@ onMounted(async () => {
     if (mods.length) islandModules.value = mods;
     islandPos.value = await invoke<string>("island_get_pos_mode");
     islandIdle.value = await invoke<boolean>("island_get_idle_enabled");
+    const d = await invoke<{ material: string; accentMode: string }>("island_data");
+    islandMaterial.value = d.material;
+    islandAccentMode.value = d.accentMode;
   } catch {
     islandOn.value = false;
   }
@@ -366,6 +398,40 @@ onMounted(async () => {
       <div class="row">
         <span>启用常驻胶囊</span>
         <NSwitch v-model:value="islandOn" size="small" @update:value="setIsland" />
+      </div>
+      <div class="row col">
+        <div class="rlabel">
+          <p class="rt">预设</p>
+          <p class="rd">终末地＝超充黄绿深色 HUD；跟随强调色＝用〈强调色〉里设置的的颜色</p>
+        </div>
+        <div class="seg grid2">
+          <button
+            v-for="(label, key) in ACCENT_MODE_DEFS"
+            :key="key"
+            class="seg-item"
+            :class="{ active: islandAccentMode === key }"
+            @click="setIslandAccentMode(key)"
+          >
+            {{ label }}
+          </button>
+        </div>
+      </div>
+      <div class="row col">
+        <div class="rlabel">
+          <p class="rt">材质</p>
+          <p class="rd">毛玻璃/云母为系统级效果（Win11），切换会短暂重建窗口；若出现黑底请换回纯色</p>
+        </div>
+        <div class="seg grid3">
+          <button
+            v-for="(label, key) in MATERIAL_DEFS"
+            :key="key"
+            class="seg-item"
+            :class="{ active: islandMaterial === key }"
+            @click="setIslandMaterial(key)"
+          >
+            {{ label }}
+          </button>
+        </div>
       </div>
       <div class="row col">
         <div class="rlabel">

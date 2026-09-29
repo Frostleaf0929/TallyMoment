@@ -16,6 +16,32 @@ interface IslandData {
   nextTask: NextTask | null;
   tasks: NextTask[];
   idleEnabled: boolean;
+  material: string;
+  accentMode: string;
+}
+
+// 主程序强调色（与 src/styles/theme.css 一致）
+const ACCENT_MAP: Record<string, string> = {
+  indigo: "#7b84ec", teal: "#58b3c4", green: "#6fb59a",
+  violet: "#a08fe0", amber: "#d3a35e", rose: "#d3859b",
+};
+
+function hexA(hex: string, a: number): string {
+  const m = hex.replace("#", "");
+  const v = m.length === 3 ? m.split("").map((c) => c + c).join("") : m;
+  const n = parseInt(v, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+function applyAccent(mode: string) {
+  let hex = "#b8e34b"; // 终末地超充黄绿
+  if (mode === "accent") {
+    const key = localStorage.getItem("ui.accent") || "rose";
+    hex = ACCENT_MAP[key] || localStorage.getItem("ui.customAccent") || "#7b84ec";
+  }
+  const root = document.documentElement;
+  root.style.setProperty("--acc", hex);
+  root.style.setProperty("--acc-line", hexA(hex, 0.45));
 }
 
 let state: "idle" | "normal" | "expanded" = "normal";
@@ -48,7 +74,8 @@ function esc(s: string): string {
 
 function setState(s: "idle" | "normal" | "expanded") {
   state = s;
-  document.body.className = s;
+  document.body.classList.remove("idle", "normal", "expanded");
+  document.body.classList.add(s);
   applyData();
   invoke("island_set_state", { state: s }).catch(() => {});
 }
@@ -61,34 +88,30 @@ function ringProgress(sec: number): number {
 function renderModules() {
   if (!data) return;
   const parts: string[] = [];
+  const unit = (badge: string, name: string, num: string, acc = false) =>
+    `<span class="unit"><span class="urow"><span class="badge">${badge}</span><span class="mod-name">${esc(name)}</span></span>` +
+    `<span class="mod-num${acc ? " acc" : ""}">${num}</span></span>`;
+  let first = true;
   for (const m of modules.filter((x) => ["focus", "next", "done", "clock"].includes(x))) {
+    if (!first) parts.push(`<span class="vsep"></span>`);
+    first = false;
     if (m === "focus") {
       parts.push(
         data.focusName
-          ? `<div class="badge-row"><span class="badge">${data.paused ? "PAUSED" : "FOCUS"}</span><span class="mod-name">${esc(data.focusName)}</span></div>` +
-            `<span class="mod-num${data.paused ? "" : " acc"}">${fmtSec(data.focusSec)}</span>`
-          : `<div class="badge-row"><span class="badge">IDLE</span><span class="mod-name">未在专注</span></div>` +
-            `<span class="mod-num" style="color:var(--ink-dim)">--:--</span>`
+          ? unit(data.paused ? "PAUSED" : "FOCUS", data.focusName, fmtSec(data.focusSec), !data.paused)
+          : unit("IDLE", "未在专注", "--:--")
       );
     } else if (m === "next") {
       parts.push(
         data.nextTask
-          ? `<div class="badge-row"><span class="badge">NEXT</span><span class="mod-name">${esc(data.nextTask.content)}</span></div>` +
-            `<span class="mod-num">${fmtDue(data.nextTask.dueTs)}</span>`
-          : `<div class="badge-row"><span class="badge">NEXT</span><span class="mod-name">暂无任务</span></div>` +
-            `<span class="mod-num" style="color:var(--ink-dim)">—</span>`
+          ? unit("NEXT", data.nextTask.content, fmtDue(data.nextTask.dueTs))
+          : unit("NEXT", "暂无任务", "—")
       );
     } else if (m === "done") {
-      parts.push(
-        `<div class="badge-row"><span class="badge">DONE</span><span class="mod-name">今日完成</span></div>` +
-        `<span class="mod-num acc">${data.doneToday}<small>项</small></span>`
-      );
+      parts.push(unit("DONE", "今日完成", `${data.doneToday}<small>项</small>`, true));
     } else if (m === "clock") {
       const now = new Date();
-      parts.push(
-        `<div class="badge-row"><span class="badge">TIME</span><span class="mod-name">时钟</span></div>` +
-        `<span class="mod-num">${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}</span>`
-      );
+      parts.push(unit("TIME", "时钟", `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`));
     }
   }
   main.innerHTML = parts.join("");
@@ -99,6 +122,9 @@ function applyData() {
   idleEnabled = data.idleEnabled;
   document.body.classList.toggle("paused", data.paused);
   document.body.classList.toggle("focusing", !!data.focusName && !data.paused);
+  document.body.classList.toggle("material-acrylic", data.material === "acrylic");
+  document.body.classList.toggle("material-mica", data.material === "mica");
+  applyAccent(data.accentMode);
 
   const ring = document.querySelector<SVGCircleElement>(".ring-fg");
   if (ring) {

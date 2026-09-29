@@ -23,7 +23,8 @@
   /* 胶囊壳（顶部条） */
   #bar {
     flex: none;
-    display: flex; align-items: center; gap: 10px;
+    position: relative;
+    display: flex; align-items: center; gap: 12px;
     height: 56px; padding: 0 14px 0 8px;
     background: linear-gradient(180deg, #10131a 0%, var(--bg) 100%);
     border: 1px solid rgba(255,255,255,0.10);
@@ -32,6 +33,19 @@
     cursor: default;
     transition: height .22s cubic-bezier(.2,.9,.25,1.2), padding .22s ease, opacity .2s ease;
   }
+  /* 终末地 HUD 四角 L 形角标（左上 + 右下） */
+  #bar::before, #bar::after {
+    content: ""; position: absolute; width: 12px; height: 10px; pointer-events: none;
+    border: 0 solid var(--acc-line); opacity: 0.85;
+  }
+  #bar::before { left: 13px; top: 8px; border-left-width: 2px; border-top-width: 2px; border-top-left-radius: 6px; }
+  #bar::after { right: 13px; bottom: 8px; border-right-width: 2px; border-bottom-width: 2px; border-bottom-right-radius: 6px; }
+
+  /* 材质：系统毛玻璃/云母时内容背景调透，让系统材质透出来 */
+  body.material-acrylic #bar,
+  body.material-acrylic #panel { background: rgba(11, 13, 16, 0.42); border-color: rgba(255,255,255,0.14); }
+  body.material-mica #bar,
+  body.material-mica #panel { background: rgba(11, 13, 16, 0.55); border-color: rgba(255,255,255,0.12); }
 
   /* 电标圆环（标志） */
   .mark { flex: none; position: relative; width: 36px; height: 36px; display: grid; place-items: center; }
@@ -50,25 +64,28 @@
   }
   body.focusing .mark { border-radius: 50%; animation: pulse 2.2s ease-out infinite; }
 
-  /* 主内容区 */
-  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
-  .badge-row { display: flex; align-items: center; gap: 6px; }
+  /* 主内容区：横排单元（终末地 HUD 单行式：徽章上、数值下） */
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: row; align-items: center; gap: 14px; overflow: hidden; }
+  .unit { display: flex; flex-direction: column; justify-content: center; gap: 1px; min-width: 0; flex-shrink: 1; }
+  .urow { display: flex; align-items: center; gap: 5px; min-width: 0; }
   .badge {
-    flex: none; font-size: 9px; font-weight: 700; letter-spacing: 1.5px;
+    flex: none; align-self: flex-start; font-size: 9px; font-weight: 700; letter-spacing: 1.5px;
     color: var(--acc); border: 1px solid var(--acc-line); border-radius: 4px;
-    padding: 1px 5px; line-height: 1.4; text-transform: uppercase;
+    padding: 0 5px; line-height: 1.5; text-transform: uppercase;
   }
   body.paused .badge { color: var(--ink-dim); border-color: rgba(255,255,255,0.2); }
   .mod-name {
     font-size: 11px; color: var(--ink-dim);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;
   }
   .mod-num {
-    font-size: 20px; font-weight: 700; line-height: 1.05;
+    font-size: 18px; font-weight: 700; line-height: 1.1;
     font-variant-numeric: tabular-nums; letter-spacing: 0.5px;
+    white-space: nowrap;
   }
-  .mod-num small { font-size: 11px; font-weight: 600; color: var(--ink-dim); margin-left: 2px; }
+  .mod-num small { font-size: 10px; font-weight: 600; color: var(--ink-dim); margin-left: 2px; }
   .mod-num.acc { color: var(--acc); }
+  .vsep { flex: none; width: 1px; height: 24px; background: var(--line); }
 
   /* 右侧：今日完成 / 时钟 */
   #side { flex: none; display: flex; align-items: center; gap: 10px; }
@@ -79,17 +96,21 @@
   #clock { font-size: 13px; font-weight: 600; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
   .divider { width: 1px; height: 22px; background: var(--line); }
 
-  /* expanded 展开区 */
+  /* expanded 展开区：始终渲染，随窗口拉高做淡入（配合窗口插值动画才丝滑） */
   #panel {
-    display: none; flex: 1; min-height: 0; margin-top: 8px;
+    display: flex; flex: 1; min-height: 0; margin-top: 8px;
     background: linear-gradient(180deg, #10131a 0%, var(--bg) 100%);
     border: 1px solid rgba(255,255,255,0.10);
     border-radius: 18px;
     box-shadow: 0 10px 32px rgba(0,0,0,0.55);
     padding: 12px 14px;
     flex-direction: column; gap: 8px;
+    opacity: 0; transform: translateY(-8px);
+    transition: opacity .2s ease .06s, transform .2s ease .06s;
+    pointer-events: none;
+    overflow: hidden;
   }
-  body.expanded #panel { display: flex; }
+  body.expanded #panel { opacity: 1; transform: none; pointer-events: auto; }
   .panel-title {
     font-size: 9px; font-weight: 700; letter-spacing: 2px; color: var(--ink-dim);
     display: flex; align-items: center; gap: 8px; text-transform: uppercase;
@@ -129,6 +150,7 @@
   #idle-done b { color: var(--acc); font-weight: 700; }
 
   body.idle #bar { height: 40px; padding: 0 12px 0 6px; opacity: 0.92; }
+  body.idle #bar::before, body.idle #bar::after { opacity: 0; }
   body.idle .mark { width: 28px; height: 28px; }
   body.idle .mark > svg { width: 28px; height: 28px; }
   body.idle .mark .bolt svg { width: 11px; height: 11px; }
