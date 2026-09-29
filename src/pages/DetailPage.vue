@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NInput } from "naive-ui";
-import type { AppUsage, RangeReport } from "../types";
+import type { AppUsage, HabitRow, RangeReport } from "../types";
 import { fmtDuration } from "../lib/format";
 import { colorFor } from "../lib/colors";
 import { accentColor } from "../lib/chartColors";
@@ -12,6 +12,7 @@ import { goTab, navIntent } from "../lib/uiState";
 import BallLoader from "../components/BallLoader.vue";
 import DayDetail from "../components/DayDetail.vue";
 import RangeCard from "../components/RangeCard.vue";
+import HabitGrid from "../components/HabitGrid.vue";
 import DayBars from "../components/DayBars.vue";
 import HourlyChart from "../components/HourlyChart.vue";
 
@@ -37,6 +38,55 @@ function shiftItemDay(delta: number) {
   const d = new Date(itemDate.value);
   itemDate.value = new Date(d.getFullYear(), d.getMonth(), d.getDate() + delta).getTime();
 }
+
+/* ---------- 习惯追踪（固定事项 × 近 30 天完成格） ---------- */
+const habitRows = ref<HabitRow[]>([]);
+const selectedHabit = ref<number | null>(null);
+const habitErr = ref("");
+
+async function loadHabit() {
+  habitErr.value = "";
+  try {
+    habitRows.value = await invoke<HabitRow[]>("habit_grid", { days: 30 });
+  } catch (e) {
+    habitErr.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+const selHabit = computed(
+  () => habitRows.value.find((r) => r.taskId === selectedHabit.value) ?? null
+);
+
+/** 选中固定事项的坚持统计（基于近 30 天完成格） */
+const habitStats = computed(() => {
+  const row = selHabit.value;
+  if (!row) return null;
+  const done = row.cells.filter((c) => c.done);
+  const spent = done.map((c) => c.spentMin).filter((v): v is number => v != null);
+  const avg = spent.length ? Math.round(spent.reduce((a, b) => a + b, 0) / spent.length) : null;
+  const byDate = new Map(row.cells.map((c) => [c.date, c.done] as const));
+  // 最近连续：从今天往回，完成了继续、没安排跳过、安排了没做则断
+  let streak = 0;
+  for (let i = 0; i < 365; i++) {
+    const key = ymd(new Date(Date.now() - i * 86400000));
+    const v = byDate.get(key);
+    if (v === undefined) continue;
+    if (v) streak++;
+    else break;
+  }
+  // 最长连续（窗口内的日期排序后数）
+  let best = 0;
+  let cur = 0;
+  for (const key of [...byDate.keys()].sort()) {
+    if (byDate.get(key)) {
+      cur++;
+      best = Math.max(best, cur);
+    } else {
+      cur = 0;
+    }
+  }
+  return { total: row.cells.length, doneCount: done.length, avg, streak, best };
+});
 
 const rangeKey = ref<RangeKey>("week");
 const loading = ref(false);
@@ -151,7 +201,10 @@ const trend = computed(() => {
   };
 });
 
-onMounted(() => void load(false));
+onMounted(() => {
+  void load(false);
+  void loadHabit();
+});
 
 // 图标模式下批量取图标
 watchEffect(() => {
@@ -163,6 +216,14 @@ watchEffect(() => {
 // 从今日页/排行跳转过来：选中该应用，若当前范围没数据自动退到"总共"
 watch(navIntent, (n) => {
   if (!n) return;
+  // 点了待办里的任务名 → 事项视角并选中该固定事项
+  if (n.view === "task" && n.taskId != null) {
+    view.value = "items";
+    fromTodo.value = true;
+    selectedHabit.value = n.taskId;
+    void loadHabit();
+    return;
+  }
   if (n.view === "items") {
     view.value = "items";
     fromTodo.value = true;
@@ -208,6 +269,40 @@ watch(navIntent, (n) => {
           note="周 / 月 / 年 / 总共的范围聚合后续接上；现在先在左侧月历点选某一天查看"
         />
       </section>
+
+      <!-- 习惯追踪：长期坚持的固定事项一眼可见（点待办里的任务名也会跳到这里并选中） -->
+      <section class="glass-card habitcard">
+        <HabitGrid :rows="habitRows" :model-value="selectedHabit" @select="selectedHabit = $event" />
+        <p v-if="habitErr" class="err">读取失败：{{ habitErr }}</p>
+      </section>
+
+      <!-- 选中固定事项的坚持统计 -->
+      <section v-if="selHabit && habitStats" class="glass-card habitstat">
+        <h2>{{ selHabit.content }} · 坚持情况（基于近 30 天完成格）</h2>
+        <div class="hsrow">
+          <div class="hs">
+            <p class="l">安排天数</p>
+            <p class="v">{{ habitStats.total }}</p>
+          </div>
+          <div class="hs">
+            <p class="l">完成次数</p>
+            <p class="v accent">{{ habitStats.doneCount }}</p>
+          </div>
+          <div class="hs">
+            <p class="l">最近连续</p>
+            <p class="v">{{ habitStats.streak }} <small>天</small></p>
+          </div>
+          <div class="hs">
+            <p class="l">最长连续</p>
+            <p class="v">{{ habitStats.best }} <small>天</small></p>
+          </div>
+          <div class="hs">
+            <p class="l">平均用时</p>
+            <p class="v">{{ habitStats.avg != null ? `${habitStats.avg} 分` : "—" }}</p>
+          </div>
+        </div>
+      </section>
+
       <section class="glass-card itemsview">
         <div class="itemshead">
           <h2>事项与记录</h2>
@@ -399,6 +494,51 @@ watch(navIntent, (n) => {
 
 .rangecard {
   padding: 14px 16px;
+}
+
+.habitcard {
+  padding: 14px 16px;
+}
+
+.habitstat h2 {
+  margin: 0 0 10px;
+}
+
+.hsrow {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+
+.hs {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 8px 12px;
+}
+
+.hs .l {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.hs .v {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.hs .v.accent {
+  color: var(--accent-text);
+}
+
+.hs .v small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
 }
 
 .daynav {

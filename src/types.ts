@@ -152,6 +152,22 @@ export interface InsightReport {
   insights: Insight[];
 }
 
+/** 习惯追踪：固定事项某天的完成格 */
+export interface HabitCell {
+  date: string;
+  done: boolean;
+  /** 完成（开始/创建 → 完成）用时分钟数 */
+  spentMin: number | null;
+}
+
+/** 习惯追踪：一个固定事项的完成格行 */
+export interface HabitRow {
+  taskId: number;
+  content: string;
+  repeatMode: string;
+  cells: HabitCell[];
+}
+
 export interface Task {
   id: number;
   content: string;

@@ -592,6 +592,89 @@ pub fn materialize_repeats(conn: &Connection, today: &str) -> Result<usize, Stri
     Ok(made)
 }
 
+/// 习惯追踪：固定事项（重复任务模板）× 近 N 天的完成格
+/// 每天一格：当天有实例 = 该日被安排；实例 done = 完成；spent_min = 开始/创建 → 完成的分钟数
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitCell {
+    pub date: String,
+    pub done: bool,
+    pub spent_min: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitRow {
+    pub task_id: i64,
+    pub content: String,
+    pub repeat_mode: String,
+    pub cells: Vec<HabitCell>,
+}
+
+pub fn habit_grid(conn: &Connection, days: i32) -> Result<Vec<HabitRow>, String> {
+    let days = days.clamp(7, 365);
+    let cutoff = (Local::now() - chrono::Duration::days((days - 1) as i64))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let templates: Vec<(i64, String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT id, content, repeat_mode FROM tasks WHERE repeat_mode != '' AND template_id IS NULL ORDER BY id")
+            .map_err(|e| format!("查询固定事项失败: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| format!("查询固定事项失败: {e}"))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    let mut out: Vec<HabitRow> = Vec::new();
+    for (tid, content, mode) in templates {
+        let mut stmt = conn
+            .prepare(
+                "SELECT done,
+                        COALESCE(substr(datetime(due_ts, 'unixepoch', 'localtime'), 1, 10),
+                                 substr(datetime(created_ts, 'unixepoch', 'localtime'), 1, 10)) AS d,
+                        CASE WHEN done = 1 AND done_ts IS NOT NULL THEN
+                             CAST((done_ts - COALESCE(start_ts, created_ts)) / 60 AS INTEGER) END
+                 FROM tasks WHERE template_id = ?1 OR id = ?1",
+            )
+            .map_err(|e| format!("查询实例失败: {e}"))?;
+        let rows = stmt
+            .query_map([tid], |r| {
+                Ok((
+                    r.get::<_, i64>(0)? != 0,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                ))
+            })
+            .map_err(|e| format!("查询实例失败: {e}"))?;
+        // 同一天多个实例：任一完成即算完成；用时取完成实例里最短的
+        let mut by_date: std::collections::BTreeMap<String, HabitCell> = std::collections::BTreeMap::new();
+        for r in rows.filter_map(|x| x.ok()) {
+            let (done, date, spent) = r;
+            if date.is_empty() || date.as_str() < cutoff.as_str() {
+                continue;
+            }
+            let e = by_date.entry(date.clone()).or_insert(HabitCell {
+                date,
+                done: false,
+                spent_min: None,
+            });
+            e.done = e.done || done;
+            if let Some(m) = spent {
+                e.spent_min = Some(e.spent_min.map_or(m, |p| p.min(m)));
+            }
+        }
+        out.push(HabitRow {
+            task_id: tid,
+            content,
+            repeat_mode: mode,
+            cells: by_date.into_values().collect(),
+        });
+    }
+    Ok(out)
+}
+
 pub fn task_set_done(conn: &Connection, id: i64, done: bool) -> Result<(), String> {
     conn.execute(
         "UPDATE tasks SET done = ?2, done_ts = ?3 WHERE id = ?1",
@@ -1338,6 +1421,9 @@ pub struct ImportSummary {
     pub hourly_rows: usize,
     pub segments: usize,
     pub skipped: usize,
+    /// replace 模式下清掉的本地时间数据行数（daily+hourly+segments）
+    #[serde(default)]
+    pub cleared: usize,
 }
 
 pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
@@ -2194,6 +2280,7 @@ pub fn tasks_import_md(conn: &Connection, path: &str) -> Result<ImportSummary, S
         hourly_rows: 0,
         segments: 0,
         skipped,
+        cleared: 0,
     })
 }
 
@@ -2546,8 +2633,17 @@ fn upsert_hourly(
 
 /// 从 Tai 的 data.db 导入核心逻辑（App/DailyLog/HoursLog）。
 /// Tai 的 HoursLog 有同一小时重复行的问题，这里按 (日期,小时,应用) 先聚合再写入，天然去重。
-pub fn import_tai_data(src_path: &str, conn: &Connection) -> Result<ImportSummary, String> {
+/// mode：merge = 与本地时长累加（历史行为）；fill = 只补本地没有的日期/小时；
+///       replace = 先清空本地时间数据（segments/daily/hourly）再导入。
+///       键鼠计数、任务、提醒规则、日志任何模式都不动。
+pub fn import_tai_data(src_path: &str, conn: &Connection, mode: &str) -> Result<ImportSummary, String> {
     use std::collections::HashMap;
+
+    let mode = match mode {
+        "fill" => "fill",
+        "replace" => "replace",
+        _ => "merge",
+    };
 
     let src = Connection::open_with_flags(
         src_path,
@@ -2574,7 +2670,18 @@ pub fn import_tai_data(src_path: &str, conn: &Connection) -> Result<ImportSummar
         hourly_rows: 0,
         segments: 0,
         skipped: 0,
+        cleared: 0,
     };
+
+    // replace：先清空本地时间数据（汇总与明细），键鼠/任务/规则/日志不受影响
+    if mode == "replace" {
+        for table in ["segments", "daily_stats", "hourly_stats"] {
+            let n = conn
+                .execute(&format!("DELETE FROM {table}"), [])
+                .map_err(|e| format!("清空 {table} 失败: {e}"))?;
+            summary.cleared += n as usize;
+        }
+    }
 
     // 应用维表：name 优先取 exe 文件名（小写），退化用 Name；显示名 Alias > Name
     let mut app_map: HashMap<i64, i64> = HashMap::new();
@@ -2695,13 +2802,49 @@ pub fn import_tai_data(src_path: &str, conn: &Connection) -> Result<ImportSummar
         }
     }
 
-    for ((date, app_id), secs) in &daily {
-        upsert_daily(conn, date, *app_id, *secs)?;
-        summary.daily_rows += 1;
-    }
-    for ((date, hour, app_id), secs) in &hourly {
-        upsert_hourly(conn, date, *hour, *app_id, *secs)?;
-        summary.hourly_rows += 1;
+    match mode {
+        "fill" => {
+            // 只补本地没有的行：已存在（同日同应用 / 同日同小时同应用）一律跳过，不覆盖不累加
+            for ((date, app_id), secs) in &daily {
+                let exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM daily_stats WHERE date = ?1 AND app_id = ?2",
+                    rusqlite::params![date, app_id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| format!("查询日汇总失败: {e}"))?;
+                if exists > 0 {
+                    summary.skipped += 1;
+                    continue;
+                }
+                upsert_daily(conn, date, *app_id, *secs)?;
+                summary.daily_rows += 1;
+            }
+            for ((date, hour, app_id), secs) in &hourly {
+                let exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM hourly_stats WHERE date = ?1 AND hour = ?2 AND app_id = ?3",
+                    rusqlite::params![date, hour, app_id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| format!("查询小时汇总失败: {e}"))?;
+                if exists > 0 {
+                    summary.skipped += 1;
+                    continue;
+                }
+                upsert_hourly(conn, date, *hour, *app_id, *secs)?;
+                summary.hourly_rows += 1;
+            }
+        }
+        _ => {
+            // merge（历史行为：时长累加）与 replace（已清空，直接写入）
+            for ((date, app_id), secs) in &daily {
+                upsert_daily(conn, date, *app_id, *secs)?;
+                summary.daily_rows += 1;
+            }
+            for ((date, hour, app_id), secs) in &hourly {
+                upsert_hourly(conn, date, *hour, *app_id, *secs)?;
+                summary.hourly_rows += 1;
+            }
+        }
     }
     Ok(summary)
 }
@@ -2887,6 +3030,7 @@ pub fn restore_json(conn: &Connection, path: &str) -> Result<ImportSummary, Stri
         hourly_rows: 0,
         segments: 0,
         skipped: 0,
+        cleared: 0,
     };
 
     // 应用：老 id -> 新 id 映射
@@ -3057,7 +3201,7 @@ mod tests {
 
         let dst = tmp_db("ours.db");
         let conn = open(&dst).unwrap();
-        let s = import_tai_data(src_path.to_str().unwrap(), &conn).unwrap();
+        let s = import_tai_data(src_path.to_str().unwrap(), &conn, "merge").unwrap();
 
         assert_eq!(s.apps, 2);
         assert_eq!(s.daily_rows, 2);
@@ -3087,6 +3231,125 @@ mod tests {
             .query_row("SELECT display_name FROM apps WHERE name = 'chrome.exe'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(display, "谷歌浏览器", "别名应作为显示名");
+    }
+
+    #[test]
+    fn tai_import_fill_skips_existing_and_replace_resets() {
+        let src_path = tmp_db("tai-source2.db");
+        let src = Connection::open(&src_path).unwrap();
+        src.execute_batch(
+            "CREATE TABLE App (ID INTEGER PRIMARY KEY, Name TEXT, Alias TEXT, File TEXT);
+             CREATE TABLE DailyLog (ID INTEGER PRIMARY KEY, Date TEXT, Time INTEGER, AppModelID INTEGER);
+             CREATE TABLE HoursLog (ID INTEGER PRIMARY KEY, DataTime TEXT, Time INTEGER, AppModelID INTEGER);
+             INSERT INTO App VALUES (1, 'Chrome', '', 'C:/Program/chrome.exe');
+             INSERT INTO DailyLog VALUES (1, '2025-01-02 00:00:00', 3600, 1);
+             INSERT INTO HoursLog VALUES (1, '2025-01-02 08:00:00', 1200, 1);",
+        )
+        .unwrap();
+
+        let dst = tmp_db("ours-fill.db");
+        let conn = open(&dst).unwrap();
+        // 本地已有：chrome 当天 500 秒（daily+hourly）+ 一段明细 + 一条键鼠记录
+        conn.execute("INSERT INTO apps(name) VALUES('chrome.exe')", []).unwrap();
+        let aid: i64 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO daily_stats(date, app_id, seconds) VALUES('2025-01-02', ?1, 500)",
+            [aid],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO hourly_stats(date, hour, app_id, seconds) VALUES('2025-01-02', 8, ?1, 500)",
+            [aid],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO segments(app_id, start_ts, end_ts, title) VALUES(?1, 100, 200, 't')",
+            [aid],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO input_stats(date, hour, key_count, click_count) VALUES('2025-01-02', 8, 10, 5)",
+            [],
+        )
+        .unwrap();
+
+        // fill：同日同应用 / 同日同小时已存在 → 全部跳过，本地 500 不变
+        let s = import_tai_data(src_path.to_str().unwrap(), &conn, "fill").unwrap();
+        assert_eq!(s.daily_rows, 0);
+        assert_eq!(s.hourly_rows, 0);
+        assert_eq!(s.skipped, 2);
+        let d: i64 = conn
+            .query_row(
+                "SELECT seconds FROM daily_stats WHERE date='2025-01-02' AND app_id=?1",
+                [aid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(d, 500, "fill 不应叠加时长");
+
+        // replace：清空时间数据后写导入值；键鼠记录保留
+        let s2 = import_tai_data(src_path.to_str().unwrap(), &conn, "replace").unwrap();
+        assert!(s2.cleared >= 3, "应清掉 daily+hourly+segments");
+        let d2: i64 = conn
+            .query_row(
+                "SELECT seconds FROM daily_stats WHERE date='2025-01-02' AND app_id=?1",
+                [aid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(d2, 3600, "replace 后应为导入值");
+        let h2: i64 = conn
+            .query_row(
+                "SELECT seconds FROM hourly_stats WHERE date='2025-01-02' AND hour=8 AND app_id=?1",
+                [aid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(h2, 1200);
+        let seg: i64 = conn
+            .query_row("SELECT COUNT(*) FROM segments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(seg, 0, "segments 应被清空");
+        let input: i64 = conn
+            .query_row("SELECT COUNT(*) FROM input_stats", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(input, 1, "键鼠数据保留");
+    }
+
+    #[test]
+    fn habit_grid_merges_template_instances() {
+        let path = std::env::temp_dir().join("tm-habit.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        let now = Local::now().timestamp();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, created_ts, repeat_mode) VALUES('每日喝水', 1, ?1, 'daily')",
+            [now - 3 * 86400],
+        )
+        .unwrap();
+        let tpl: i64 = conn.last_insert_rowid();
+        // 昨天的实例：完成，用时 10 分钟；今天的实例：还没做
+        conn.execute(
+            "INSERT INTO tasks(content, priority, created_ts, repeat_mode, template_id, due_ts, done, done_ts, start_ts)
+             VALUES('每日喝水', 1, ?1, 'daily', ?2, ?3, 1, ?4, ?5)",
+            rusqlite::params![now - 86400, tpl, now - 86400 + 3600, now - 86400 + 4200, now - 86400 + 600],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, created_ts, repeat_mode, template_id, due_ts)
+             VALUES('每日喝水', 1, ?1, 'daily', ?2, ?3)",
+            rusqlite::params![now, tpl, now + 3600],
+        )
+        .unwrap();
+
+        let grid = habit_grid(&conn, 30).unwrap();
+        assert_eq!(grid.len(), 1, "只有一个模板");
+        let row = &grid[0];
+        // 模板行自己（created 3 天前）+ 昨天实例 + 今天实例 = 3 天
+        assert_eq!(row.cells.len(), 3);
+        let done_cells: Vec<_> = row.cells.iter().filter(|c| c.done).collect();
+        assert_eq!(done_cells.len(), 1, "只有昨天完成");
+        assert_eq!(done_cells[0].spent_min, Some(60), "done_ts-start_ts=3600 秒，应为 60 分钟");
     }
 
     #[test]
@@ -3195,7 +3458,7 @@ mod tests {
         src.execute_batch("CREATE TABLE other (x INTEGER);").unwrap();
         let dst = tmp_db("ours2.db");
         let conn = open(&dst).unwrap();
-        assert!(import_tai_data(src_path.to_str().unwrap(), &conn).is_err());
+        assert!(import_tai_data(src_path.to_str().unwrap(), &conn, "merge").is_err());
     }
 }
 

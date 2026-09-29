@@ -3,7 +3,7 @@ import { onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NSwitch } from "naive-ui";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import DataCard from "../components/DataCard.vue";
 
 interface DataInfo {
@@ -23,6 +23,45 @@ const mod = ref<DataMod>("tasks");
 const dataMsg = ref("");
 const dataErr = ref("");
 const stamp = () => new Date().toISOString().slice(0, 10);
+
+/** Tai 时间数据导入模式：fill=只补没有的 / merge=时长累加 / replace=清空后导 */
+const taiMode = ref<"fill" | "merge" | "replace">("fill");
+const taiMsg = ref("");
+const taiErr = ref("");
+
+async function importTaiNow() {
+  taiMsg.value = "";
+  taiErr.value = "";
+  try {
+    const p = await open({
+      multiple: false,
+      directory: false,
+      title: "选择 Tai 的 data.db",
+      filters: [{ name: "SQLite 数据库", extensions: ["db", "sqlite"] }],
+    });
+    if (!p || Array.isArray(p)) return;
+    if (taiMode.value === "replace") {
+      const sure = await ask(
+        "将先清空本地全部时间记录（使用明细、日汇总、时段汇总），再以所选文件为准导入；键鼠计数、任务、提醒规则、日志都会保留。确定继续？",
+        { title: "替代全部时间数据", kind: "warning" }
+      );
+      if (!sure) return;
+    }
+    const s = await invoke<{
+      apps: number;
+      dailyRows: number;
+      hourlyRows: number;
+      skipped: number;
+      cleared: number;
+    }>("import_tai", { path: p, mode: taiMode.value });
+    const parts = [`应用 ${s.apps} 个`, `日汇总 ${s.dailyRows} 行`, `时段 ${s.hourlyRows} 行`];
+    if (s.cleared > 0) parts.push(`已清空本地时间数据 ${s.cleared} 行`);
+    if (s.skipped > 0) parts.push(`跳过已有 ${s.skipped} 条`);
+    taiMsg.value = `导入完成：${parts.join("，")}`;
+  } catch (e) {
+    taiErr.value = String(e).replace(/^.*Error: /, "");
+  }
+}
 
 /** 导出所选模块 */
 async function exportModule() {
@@ -178,6 +217,26 @@ onMounted(async () => {
         <button class="btn" @click="openDataDir">打开数据目录</button>
       </div>
       <!-- 分模块导入导出（日志随日志功能上线后加入） -->
+      <!-- Tai 时间数据导入：三种合并策略 -->
+      <div class="datacard">
+        <p class="rt">导入时间数据（Tai 的 data.db）</p>
+        <div class="seg">
+          <button class="seg-item" :class="{ active: taiMode === 'fill' }" @click="taiMode = 'fill'">补充去重</button>
+          <button class="seg-item" :class="{ active: taiMode === 'merge' }" @click="taiMode = 'merge'">合并累加</button>
+          <button class="seg-item" :class="{ active: taiMode === 'replace' }" @click="taiMode = 'replace'">替代全部</button>
+        </div>
+        <p class="rd more">
+          <b>补充去重</b>：只导入本地没有的日期/时段，已有的不覆盖、不叠加（推荐）。<br />
+          <b>合并累加</b>：时长与本地相加——同一文件不会重复导入，但换一个文件再导同一段时间会把时长加两遍。<br />
+          <b>替代全部</b>：先清空本地全部时间记录，以导入文件为准。键鼠计数、任务、提醒规则、日志在任何模式下都保留。
+        </p>
+        <div class="acts">
+          <button class="btn" @click="importTaiNow">选择 data.db 并导入</button>
+        </div>
+        <p v-if="taiMsg" class="okline">{{ taiMsg }}</p>
+        <p v-if="taiErr" class="err">{{ taiErr }}</p>
+      </div>
+
       <div class="datacard">
         <p class="rt">分模块导入 / 导出</p>
         <div class="seg">

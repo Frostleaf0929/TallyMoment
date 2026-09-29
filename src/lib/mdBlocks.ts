@@ -113,3 +113,141 @@ export function appendBlock(md: string, raw: string): string {
   const sep = md.trim() ? String.fromCharCode(10, 10) : "";
   return md + sep + raw;
 }
+
+/* ---------- 选区格式化（Notion 式：对选中文字 / 光标所在行直接生效） ---------- */
+
+const NL = String.fromCharCode(10);
+
+export interface SelEdit {
+  text: string;
+  selStart: number;
+  selEnd: number;
+}
+
+/** 选区覆盖到的行块（从行首到最后一行的行尾） */
+function lineBlock(text: string, selStart: number, selEnd: number): [number, number] {
+  const ls = selStart <= 0 ? 0 : text.lastIndexOf(NL, selStart - 1) + 1;
+  const nl = text.indexOf(NL, selEnd);
+  const le = nl === -1 ? text.length : nl;
+  return [ls, le];
+}
+
+const RE_HEADING = /^(\s*)(#{1,6})(\s+)(.*)$/;
+const RE_TODO = /^(\s*)-\s*\[[ xX]\]\s*/;
+const RE_LIST = /^(\s*)[-*]\s+/;
+const RE_QUOTE = /^(\s*)>\s?/;
+const RE_NUM = /^(\s*)\d+\.\s+/;
+
+/** 剥掉行首的块前缀（标题/待办/列表/引用/序号），返回缩进与剩余内容 */
+function stripPrefix(line: string): { indent: string; rest: string } {
+  const m =
+    line.match(RE_HEADING) ||
+    line.match(RE_TODO) ||
+    line.match(RE_LIST) ||
+    line.match(RE_QUOTE) ||
+    line.match(RE_NUM);
+  if (!m) return { indent: "", rest: line };
+  return { indent: m[1] ?? "", rest: line.slice(m[0].length) };
+}
+
+/** 行前缀转换：heading=级别循环（无→#→##→###→无），todo/list/quote=开关，plain=转回普通段落 */
+export function toggleLinePrefix(
+  text: string,
+  selStart: number,
+  selEnd: number,
+  kind: "heading" | "todo" | "list" | "quote" | "plain"
+): SelEdit {
+  const [ls, le] = lineBlock(text, selStart, selEnd);
+  const out = text
+    .slice(ls, le)
+    .split(NL)
+    .map((line) => {
+      if (line.trim() === "") return line;
+      switch (kind) {
+        case "heading": {
+          const m = line.match(RE_HEADING);
+          if (m) {
+            const lvl = m[2].length;
+            return lvl >= 3
+              ? m[1] + m[4]
+              : m[1] + "#".repeat(lvl + 1) + " " + m[4];
+          }
+          const p = stripPrefix(line);
+          return p.indent + "# " + p.rest;
+        }
+        case "todo": {
+          if (RE_TODO.test(line)) return line.replace(RE_TODO, "$1");
+          const p = stripPrefix(line);
+          return p.indent + "- [ ] " + p.rest;
+        }
+        case "list": {
+          if (RE_TODO.test(line)) return line.replace(RE_TODO, "$1- ");
+          if (RE_LIST.test(line)) return line.replace(RE_LIST, "$1");
+          const p = stripPrefix(line);
+          return p.indent + "- " + p.rest;
+        }
+        case "quote": {
+          if (RE_QUOTE.test(line)) return line.replace(RE_QUOTE, "$1");
+          const p = stripPrefix(line);
+          return p.indent + "> " + p.rest;
+        }
+        case "plain": {
+          const m =
+            line.match(RE_HEADING) ||
+            line.match(RE_TODO) ||
+            line.match(RE_LIST) ||
+            line.match(RE_QUOTE) ||
+            line.match(RE_NUM);
+          return m ? m[1] + line.slice(m[0].length) : line;
+        }
+      }
+    })
+    .join(NL);
+  return { text: text.slice(0, ls) + out + text.slice(le), selStart: ls, selEnd: ls + out.length };
+}
+
+/** 内联包裹：**加粗** / *斜体* / <u></u> / ~~删除线~~ / `代码`；同一范围再点一次 = 取消 */
+export function wrapSelection(
+  text: string,
+  selStart: number,
+  selEnd: number,
+  open: string,
+  close: string
+): SelEdit {
+  const sel = text.slice(selStart, selEnd);
+  const before = text.slice(0, selStart);
+  const after = text.slice(selEnd);
+  if (sel.length >= open.length + close.length && sel.startsWith(open) && sel.endsWith(close)) {
+    const inner = sel.slice(open.length, sel.length - close.length);
+    return { text: before + inner + after, selStart, selEnd: selStart + inner.length };
+  }
+  if (before.endsWith(open) && after.startsWith(close)) {
+    const s = selStart - open.length;
+    const e = selEnd + close.length;
+    const inner = text.slice(s + open.length, e - close.length);
+    return { text: text.slice(0, s) + inner + text.slice(e), selStart: s, selEnd: s + inner.length };
+  }
+  if (selStart === selEnd) {
+    return {
+      text: before + open + close + after,
+      selStart: selStart + open.length,
+      selEnd: selStart + open.length,
+    };
+  }
+  return { text: before + open + sel + close + after, selStart, selEnd: selEnd + open.length };
+}
+
+/** 光标处插入独立一行（分割线等），前后自动补空行 */
+export function insertAtCursor(
+  text: string,
+  selStart: number,
+  selEnd: number,
+  snippet: string
+): SelEdit {
+  const before = text.slice(0, selStart);
+  const after = text.slice(selEnd);
+  const lead = !before ? "" : before.endsWith(NL + NL) ? "" : before.endsWith(NL) ? NL : NL + NL;
+  const tail = after.startsWith(NL) || after === "" ? "" : NL;
+  const ins = lead + snippet + tail;
+  return { text: before + ins + after, selStart: selStart + ins.length, selEnd: selStart + ins.length };
+}

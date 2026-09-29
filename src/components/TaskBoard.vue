@@ -5,7 +5,7 @@ import { NButton, NCheckbox, NPopconfirm } from "naive-ui";
 import type { Task } from "../types";
 
 const props = defineProps<{ tasks: Task[] }>();
-const emit = defineEmits<{ (e: "reload"): void }>();
+const emit = defineEmits<{ (e: "reload"): void; (e: "jump", taskId: number): void }>();
 
 const editingId = ref<number | null>(null);
 const editDraft = ref("");
@@ -90,7 +90,13 @@ async function remove(t: Task) {
         @keyup.enter="saveEdit(t)"
         @blur="saveEdit(t)"
       />
-      <span v-else class="content" :title="t.content" @dblclick="startEdit(t)">
+      <span
+        v-else
+        class="content clickable"
+        :title="`${t.content}（点击到详细 · 事项查看坚持情况）`"
+        @click="emit('jump', t.templateId ?? t.id)"
+        @dblclick="startEdit(t)"
+      >
         {{ t.content }}
       </span>
       <span v-if="spent(t)" class="spent">{{ spent(t) }}</span>
@@ -176,6 +182,12 @@ async function remove(t: Task) {
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: text;
+}
+
+.content.clickable:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .content.strikethrough {

@@ -571,6 +571,14 @@ fn task_delete(app: tauri::AppHandle, id: i64) -> Result<(), String> {
     storage::task_delete(&conn, id)
 }
 
+/// 习惯追踪格：固定事项 × 近 N 天完成情况
+#[tauri::command]
+fn habit_grid(app: tauri::AppHandle, days: Option<i32>) -> Result<Vec<storage::HabitRow>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::habit_grid(&conn, days.unwrap_or(30))
+}
+
 #[tauri::command]
 fn todo_stats(app: tauri::AppHandle) -> Result<storage::TodoStats, String> {
     let db = app.state::<Db>();
@@ -938,25 +946,35 @@ fn close_reminder(app: tauri::AppHandle) {
     reminder::close(&app);
 }
 
-/// 导入 Tai 的 data.db（同文件防重复导入：按 路径+修改时间 签名）
+/// 导入 Tai 的 data.db。mode：merge=时长累加 / fill=只补本地没有的 / replace=清空时间数据后导入
+/// （键鼠计数、任务、提醒规则、日志任何模式都不动）。merge 模式按 路径+修改时间 防同文件重复导入。
 #[tauri::command]
-fn import_tai(app: tauri::AppHandle, path: String) -> Result<storage::ImportSummary, String> {
+fn import_tai(
+    app: tauri::AppHandle,
+    path: String,
+    mode: Option<String>,
+) -> Result<storage::ImportSummary, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    let sig = std::fs::metadata(&path)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .map(|t| format!("{t:?}|{path}"));
-    if let (Some(s), Some(prev)) = (&sig, storage::get_setting(&conn, "tai_import_sig")) {
-        if *prev == *s {
-            return Err("这个文件已经导入过了（文件内容未变化）".into());
+    let mode = mode.as_deref().unwrap_or("merge");
+    if mode == "merge" {
+        let sig = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .map(|t| format!("{t:?}|{path}"));
+        if let (Some(s), Some(prev)) = (&sig, storage::get_setting(&conn, "tai_import_sig")) {
+            if *prev == *s {
+                return Err("这个文件已经导入过了（文件内容未变化）".into());
+            }
         }
+        let summary = storage::import_tai_data(&path, &conn, mode)?;
+        if let Some(s) = sig {
+            let _ = storage::set_setting(&conn, "tai_import_sig", &s);
+        }
+        return Ok(summary);
     }
-    let summary = storage::import_tai_data(&path, &conn)?;
-    if let Some(s) = sig {
-        let _ = storage::set_setting(&conn, "tai_import_sig", &s);
-    }
-    Ok(summary)
+    // fill / replace：用户明确选择的策略，允许对同一文件重复执行
+    storage::import_tai_data(&path, &conn, mode)
 }
 
 /// 全量导出 JSON：带 path 写到指定位置，否则写数据目录；返回文件路径
@@ -1098,6 +1116,7 @@ pub fn run() {
             task_set_done,
             task_delete,
             todo_stats,
+            habit_grid,
             rule_list,
             rule_add,
             rule_update,

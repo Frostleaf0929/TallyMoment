@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NButton, NInput, NSelect } from "naive-ui";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -32,6 +32,40 @@ const repeatOptions = [
   { label: "每年", value: "yearly" },
 ];
 const newRepeat = ref("");
+
+/* 正在输入的任务本地草稿：切走/意外退出不丢（保存成功后清除） */
+const taskDraftKey = "task.draft.new";
+try {
+  const saved = localStorage.getItem(taskDraftKey);
+  if (saved) {
+    const d = JSON.parse(saved) as { content?: string; due?: string | null; priority?: number; repeat?: string };
+    if (typeof d.content === "string" && d.content) {
+      newContent.value = d.content;
+      if (typeof d.due === "string") newDue.value = d.due;
+      if (typeof d.priority === "number") newPriority.value = d.priority;
+      if (typeof d.repeat === "string") newRepeat.value = d.repeat;
+    }
+  }
+} catch {
+  /* 忽略 */
+}
+let taskDraftTimer = 0;
+function saveTaskDraft() {
+  try {
+    if (!newContent.value.trim()) return;
+    localStorage.setItem(
+      taskDraftKey,
+      JSON.stringify({ content: newContent.value, due: newDue.value, priority: newPriority.value, repeat: newRepeat.value })
+    );
+  } catch {
+    /* 忽略 */
+  }
+}
+watch(newContent, () => {
+  window.clearTimeout(taskDraftTimer);
+  taskDraftTimer = window.setTimeout(saveTaskDraft, 400);
+});
+watch([newDue, newPriority, newRepeat], () => saveTaskDraft());
 
 const priorityOptions = [
   { label: "高", value: 2 },
@@ -218,6 +252,11 @@ async function load() {
 }
 
 
+/** 点任务名 → 详细 · 事项，按任务看坚持情况 */
+function jumpToDetail(taskId: number) {
+  jumpTo("task", undefined, undefined, taskId);
+}
+
 async function addTask() {
   err.value = "";
   if (!newContent.value.trim()) {
@@ -236,6 +275,11 @@ async function addTask() {
     });
     newContent.value = "";
     newDue.value = null;
+    try {
+      localStorage.removeItem(taskDraftKey);
+    } catch {
+      /* 忽略 */
+    }
     await load();
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
@@ -394,7 +438,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
               <NButton size="tiny" quaternary @click="importMd">导入 MD</NButton>
               <NButton size="tiny" quaternary @click="exportMd">导出 MD</NButton>
             </div>
-            <TaskBoard :tasks="tasks" @reload="load" />
+            <TaskBoard :tasks="tasks" @reload="load" @jump="jumpToDetail" />
           </template>
           <template v-else-if="openModule === 'rules'">
             <div class="addrow">

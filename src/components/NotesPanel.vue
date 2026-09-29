@@ -1,10 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { NButton, NDatePicker, NInput } from "naive-ui";
 import MarkdownPreview from "./MarkdownPreview.vue";
-import { appendBlock } from "../lib/mdBlocks";
+import {
+  appendBlock,
+  insertAtCursor,
+  toggleLinePrefix,
+  wrapSelection,
+  type SelEdit,
+} from "../lib/mdBlocks";
 
 /** 每日日志：Markdown 正文 + 图片附件（后端 notes.rs） */
 const props = defineProps<{ dayTs?: number }>();
@@ -64,10 +70,86 @@ async function loadDay() {
     content.value = n?.content ?? "";
     images.value = n?.images ?? [];
     for (const name of images.value) void ensureThumb(date, name);
+    // 本地草稿：上次没保存就离开的内容，提示恢复（否则清掉）
+    draftRestore.value = null;
+    try {
+      const raw = localStorage.getItem(draftKey(date));
+      if (raw) {
+        const d = JSON.parse(raw) as { content?: string; images?: string[]; at?: number };
+        if (typeof d.content === "string" && d.content !== content.value) {
+          draftRestore.value = { content: d.content, images: Array.isArray(d.images) ? d.images : null, at: d.at ?? 0 };
+          msg.value = "检测到未保存的草稿";
+        } else {
+          localStorage.removeItem(draftKey(date));
+        }
+      }
+    } catch {
+      /* 草稿损坏就当没有 */
+    }
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
 }
+
+/* ---------- 实时草稿：输入即缓存到浏览器本地，防意外退出丢全文 ---------- */
+const draftRestore = ref<{ content: string; images: string[] | null; at: number } | null>(null);
+
+function draftKey(date: string) {
+  return `note.draft.${date}`;
+}
+
+function flushDraft(date = dateStr()) {
+  try {
+    localStorage.setItem(
+      draftKey(date),
+      JSON.stringify({ content: content.value, images: images.value, at: Date.now() })
+    );
+  } catch {
+    /* 存不下就算了 */
+  }
+}
+
+function fmtAt(ts: number) {
+  const d = new Date(ts);
+  const hh = `${d.getHours()}`.padStart(2, "0");
+  const mm = `${d.getMinutes()}`.padStart(2, "0");
+  return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
+}
+
+function restoreDraft() {
+  const d = draftRestore.value;
+  if (!d) return;
+  content.value = d.content;
+  if (d.images) {
+    images.value = d.images;
+    for (const name of d.images) void ensureThumb(dateStr(), name);
+  }
+  flushDraft();
+  draftRestore.value = null;
+  msg.value = "已恢复草稿（记得保存）";
+}
+
+function discardDraft() {
+  try {
+    localStorage.removeItem(draftKey(dateStr()));
+  } catch {
+    /* 忽略 */
+  }
+  draftRestore.value = null;
+  msg.value = "草稿已丢弃";
+}
+
+let draftTimer = 0;
+watch(content, () => {
+  window.clearTimeout(draftTimer);
+  draftTimer = window.setTimeout(() => flushDraft(), 500);
+});
+watch(images, () => flushDraft(), { deep: true });
+// 切日期前把正在编辑的内容存到"旧日期"的草稿里
+watch(day, (_nv, ov) => {
+  window.clearTimeout(draftTimer);
+  flushDraft(ymd(ov ?? Date.now()));
+});
 
 async function saveDay() {
   busy.value = true;
@@ -76,6 +158,12 @@ async function saveDay() {
   try {
     await invoke("notes_save", { date: dateStr(), content: content.value, images: images.value });
     msg.value = `已保存 ${dateStr()} 的日志`;
+    try {
+      localStorage.removeItem(draftKey(dateStr()));
+    } catch {
+      /* 忽略 */
+    }
+    draftRestore.value = null;
     await loadList();
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
@@ -84,7 +172,48 @@ async function saveDay() {
   }
 }
 
-/* ---------- 块工具栏：把内容按"块"追加，再用预览里的 ↑↓ 调整顺序 ---------- */
+/* ---------- 工具栏：行转换 + 内联包裹，都对"选中文字/光标所在行"生效（Notion 式） ---------- */
+const editorWrap = ref<HTMLElement | null>(null);
+
+function ta(): HTMLTextAreaElement | null {
+  return editorWrap.value?.querySelector("textarea") ?? null;
+}
+
+function applySel(fn: (t: string, s: number, e: number) => SelEdit) {
+  const el = ta();
+  const s = el?.selectionStart ?? content.value.length;
+  const e = el?.selectionEnd ?? content.value.length;
+  const r = fn(content.value, s, e);
+  content.value = r.text;
+  void nextTick(() => {
+    const t = ta();
+    if (t) {
+      t.focus();
+      t.setSelectionRange(r.selStart, r.selEnd);
+    }
+  });
+}
+
+const line = (kind: "heading" | "todo" | "list" | "quote" | "plain") =>
+  applySel((t, s, e) => toggleLinePrefix(t, s, e, kind));
+const wrap = (open: string, close: string) =>
+  applySel((t, s, e) => wrapSelection(t, s, e, open, close));
+const hr = () => applySel((t, s, e) => insertAtCursor(t, s, e, "---"));
+
+/** 编辑器内 Ctrl+B / Ctrl+I（与 Notion 一致） */
+function onEditorKey(e: KeyboardEvent) {
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "b") {
+    e.preventDefault();
+    wrap("**", "**");
+  } else if (k === "i") {
+    e.preventDefault();
+    wrap("*", "*");
+  }
+}
+
+/** 在末尾追加一块（图片这类整体块仍走追加，光标处由预览里 ↑↓ 调整顺序） */
 function insertBlock(raw: string) {
   content.value = appendBlock(content.value, raw);
 }
@@ -222,16 +351,22 @@ onMounted(async () => {
       <span v-if="!recent.length" class="empty">还没有日志，写第一条试试</span>
     </div>
 
-    <!-- 块工具栏：点一下就往正文追加一个"块"，顺序可在下面预览里用 ↑↓ 调整 -->
+    <!-- 工具栏：选中文字后点按钮直接生效（Notion 式）；没有选中时对光标所在行生效 -->
     <div class="blocks">
-      <button class="tb" @click="insertBlock('# ' + '标题')">标题</button>
-      <button class="tb" @click="insertBlock('正文')">正文</button>
-      <button class="tb" @click="insertBlock('- [ ] ' + '待办')">待办</button>
-      <button class="tb" @click="insertBlock('- ' + '列表项')">列表</button>
-      <button class="tb" @click="insertBlock('> ' + '引用')">引用</button>
-      <button class="tb" @click="insertBlock('---')">分割线</button>
-      <button class="tb" @click="insertBlock('**加粗文字**')">加粗</button>
+      <button class="tb" title="选中行转标题（再点升级，### 后回到正文）" @click="line('heading')">标题</button>
+      <button class="tb" title="转回普通段落" @click="line('plain')">正文</button>
+      <button class="tb" title="选中行加待办框 / 取消" @click="line('todo')">待办</button>
+      <button class="tb" title="选中行加项目符号 / 取消" @click="line('list')">列表</button>
+      <button class="tb" title="选中行变引用 / 取消" @click="line('quote')">引用</button>
       <span class="tb-sep"></span>
+      <button class="tb" title="选中文字加粗（Ctrl+B）" @click="wrap('**', '**')"><b>B</b></button>
+      <button class="tb" title="选中文字斜体（Ctrl+I）" @click="wrap('*', '*')"><i>I</i></button>
+      <button class="tb" title="选中文字下划线" @click="wrap('<u>', '</u>')"><u>U</u></button>
+      <button class="tb" title="选中文字删除线" @click="wrap('~~', '~~')"><s>S</s></button>
+      <button class="tb" title="行内代码" @click="wrap(String.fromCharCode(96), String.fromCharCode(96))">code</button>
+      <button class="tb" title="链接" @click="wrap('[', '](链接地址)')">链接</button>
+      <span class="tb-sep"></span>
+      <button class="tb" title="在光标处插入分割线" @click="hr">分割线</button>
       <button class="tb" @click="addImage">图片…</button>
       <span class="tb-w">
         宽度
@@ -244,12 +379,21 @@ onMounted(async () => {
       </button>
     </div>
 
-    <NInput
-      v-model:value="content"
-      type="textarea"
-      placeholder="写点什么…也可以直接手写 Markdown"
-      :autosize="{ minRows: 5, maxRows: 14 }"
-    />
+    <!-- 未保存草稿提示条：意外退出也不丢内容 -->
+    <div v-if="draftRestore" class="draftbar">
+      <span>有 {{ fmtAt(draftRestore.at) }} 的未保存草稿</span>
+      <button class="tb sm" @click="restoreDraft">恢复草稿</button>
+      <button class="tb sm" @click="discardDraft">丢弃</button>
+    </div>
+
+    <div ref="editorWrap" class="editor" @keydown="onEditorKey">
+      <NInput
+        v-model:value="content"
+        type="textarea"
+        placeholder="写点什么…也可以直接手写 Markdown；选中文字后点上面的按钮直接加格式"
+        :autosize="{ minRows: 5, maxRows: 14 }"
+      />
+    </div>
 
     <div v-if="showPreview" class="preview">
       <MarkdownPreview
@@ -283,6 +427,19 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-wrap: wrap;
+}
+
+.draftbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-sm);
+  padding: 6px 10px;
   flex-wrap: wrap;
 }
 
