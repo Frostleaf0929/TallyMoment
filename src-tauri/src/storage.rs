@@ -46,6 +46,10 @@ pub struct Task {
     pub start_ts: Option<i64>,
     /// 是否有今天是它的一次"实例"（固定事项列表算出来的，不落库）
     pub is_template: bool,
+    /// 到期提醒方式：''=默认卡片 / card / fullscreen / none
+    pub remind_style: String,
+    /// 进行中间隔提醒分钟数（0 = 不提醒）
+    pub remind_interval_min: i64,
 }
 
 #[derive(Serialize)]
@@ -290,6 +294,9 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         "ALTER TABLE tasks ADD COLUMN start_ts INTEGER",
         "ALTER TABLE reminder_rules ADD COLUMN style TEXT NOT NULL DEFAULT 'card'",
         "ALTER TABLE apps ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0",
+        // 06 模块重构：任务级提醒方式（默认卡片/全屏/关闭）与进行中间隔提醒（手动确认回补）
+        "ALTER TABLE tasks ADD COLUMN remind_style TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN remind_interval_min INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = conn.execute(sql, []);
     }
@@ -541,6 +548,8 @@ fn task_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         start_ts: row.get(9)?,
         // 列表查询会额外传入一列"今天是否该出现"（见 task_list）
         is_template: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
+        remind_style: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
+        remind_interval_min: row.get::<_, Option<i64>>(12)?.unwrap_or(0),
     })
 }
 
@@ -549,7 +558,8 @@ pub fn task_list(conn: &Connection) -> Result<Vec<Task>, String> {
         .prepare(
             "SELECT id, content, priority, due_ts, done, done_ts, created_ts,
                     repeat_mode, template_id, start_ts,
-                    CASE WHEN repeat_mode = '' THEN 0 ELSE 1 END
+                    CASE WHEN repeat_mode = '' THEN 0 ELSE 1 END,
+                    remind_style, remind_interval_min
              FROM tasks
              ORDER BY done ASC,
                       CASE WHEN due_ts IS NULL THEN 1 ELSE 0 END ASC, due_ts ASC,
@@ -605,6 +615,8 @@ pub fn task_update(
     content: &str,
     priority: i32,
     due_ts: Option<i64>,
+    remind_style: Option<&str>,
+    remind_interval_min: Option<i64>,
 ) -> Result<(), String> {
     let content = content.trim();
     if content.is_empty() || content.chars().count() > 200 {
@@ -613,9 +625,22 @@ pub fn task_update(
     if !(0..=2).contains(&priority) {
         return Err("优先级非法".into());
     }
+    if let Some(style) = remind_style {
+        if !matches!(style, "" | "card" | "fullscreen" | "none") {
+            return Err("提醒方式非法".into());
+        }
+    }
+    if let Some(m) = remind_interval_min {
+        if !(0..=1440).contains(&m) {
+            return Err("间隔提醒需在 0~1440 分钟".into());
+        }
+    }
     conn.execute(
-        "UPDATE tasks SET content = ?2, priority = ?3, due_ts = ?4 WHERE id = ?1",
-        rusqlite::params![id, content, priority, due_ts],
+        "UPDATE tasks SET content = ?2, priority = ?3, due_ts = ?4,
+            remind_style = COALESCE(?5, remind_style),
+            remind_interval_min = COALESCE(?6, remind_interval_min)
+         WHERE id = ?1",
+        rusqlite::params![id, content, priority, due_ts, remind_style, remind_interval_min],
     )
     .map_err(|e| format!("更新任务失败: {e}"))?;
     Ok(())
@@ -858,12 +883,14 @@ pub struct DueTask {
     pub id: i64,
     pub content: String,
     pub due_ts: i64,
+    /// '' = 默认卡片 / card / fullscreen / none
+    pub remind_style: String,
 }
 
 pub fn due_tasks(conn: &Connection, now: i64) -> Result<Vec<DueTask>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, content, due_ts FROM tasks
+            "SELECT id, content, due_ts, remind_style FROM tasks
              WHERE done = 0 AND due_ts IS NOT NULL AND due_ts <= ?1
                AND COALESCE(reminded_key, '') <> CAST(due_ts AS TEXT)",
         )
@@ -874,12 +901,47 @@ pub fn due_tasks(conn: &Connection, now: i64) -> Result<Vec<DueTask>, String> {
                 id: row.get(0)?,
                 content: row.get(1)?,
                 due_ts: row.get(2)?,
+                remind_style: row.get(3)?,
             })
         })
         .map_err(|e| format!("查询到期任务失败: {e}"))?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r.map_err(|e| format!("读取到期任务失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 进行中且开了间隔提醒的任务（调度用；reminded_key 存 "i:<上次触发ts>"）
+pub struct IntervalTask {
+    pub id: i64,
+    pub content: String,
+    pub start_ts: i64,
+    pub interval_min: i64,
+    pub last_key: String,
+}
+
+pub fn interval_tasks(conn: &Connection) -> Result<Vec<IntervalTask>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, content, start_ts, remind_interval_min, COALESCE(reminded_key, '') FROM tasks
+             WHERE done = 0 AND start_ts IS NOT NULL AND remind_interval_min > 0",
+        )
+        .map_err(|e| format!("查询间隔提醒任务失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(IntervalTask {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                start_ts: row.get(2)?,
+                interval_min: row.get(3)?,
+                last_key: row.get(4)?,
+            })
+        })
+        .map_err(|e| format!("查询间隔提醒任务失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取间隔提醒任务失败: {e}"))?);
     }
     Ok(out)
 }

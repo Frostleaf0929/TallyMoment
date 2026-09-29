@@ -9,6 +9,24 @@ const emit = defineEmits<{ (e: "reload"): void; (e: "jump", taskId: number): voi
 
 const editingId = ref<number | null>(null);
 const editDraft = ref("");
+const editStyle = ref("");
+const editInterval = ref(0);
+
+const STYLE_OPTS = [
+  { label: "到期提醒：默认卡片", value: "" },
+  { label: "到期提醒：卡片", value: "card" },
+  { label: "到期提醒：全屏", value: "fullscreen" },
+  { label: "到期提醒：关闭", value: "none" },
+];
+const INTERVAL_OPTS = [
+  { label: "不间隔提醒", value: 0 },
+  { label: "每 5 分钟确认", value: 5 },
+  { label: "每 15 分钟确认", value: 15 },
+  { label: "每 30 分钟确认", value: 30 },
+  { label: "每 60 分钟确认", value: 60 },
+];
+const intervalLabel = (m: number) =>
+  ({ 5: "每5分确认", 15: "每15分确认", 30: "每30分确认", 60: "每60分确认" })[m] ?? "";
 
 const open = computed(() => props.tasks.filter((t) => !t.done));
 const closed = computed(() => props.tasks.filter((t) => t.done));
@@ -47,17 +65,21 @@ const dueLabel = (t: Task): string => {
 function startEdit(t: Task) {
   editingId.value = t.id;
   editDraft.value = t.content;
+  editStyle.value = t.remindStyle ?? "";
+  editInterval.value = t.remindIntervalMin ?? 0;
 }
 
 async function saveEdit(t: Task) {
   const draft = editDraft.value.trim();
   editingId.value = null;
-  if (!draft || draft === t.content) return;
+  if (!draft) return;
   await invoke("task_update", {
     id: t.id,
     content: draft,
     priority: t.priority,
     dueTs: t.dueTs,
+    remindStyle: editStyle.value,
+    remindIntervalMin: editInterval.value,
   });
   emit("reload");
 }
@@ -82,14 +104,23 @@ async function remove(t: Task) {
         @update:checked="(v: boolean) => toggle(t, v)"
       />
       <span class="prio" :class="priorityClass(t.priority)">{{ priorityLabel(t.priority) }}</span>
-      <input
-        v-if="editingId === t.id"
-        v-model="editDraft"
-        class="edit"
-        autofocus
-        @keyup.enter="saveEdit(t)"
-        @blur="saveEdit(t)"
-      />
+      <div v-if="editingId === t.id" class="editwrap">
+        <input
+          v-model="editDraft"
+          class="edit"
+          autofocus
+          @keyup.enter="saveEdit(t)"
+        />
+        <div class="editrow">
+          <select v-model="editStyle" class="esel">
+            <option v-for="o in STYLE_OPTS" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+          <select v-model="editInterval" class="esel">
+            <option v-for="o in INTERVAL_OPTS" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+          <button class="esave" @mousedown.prevent="saveEdit(t)">保存</button>
+        </div>
+      </div>
       <span
         v-else
         class="content clickable"
@@ -105,6 +136,11 @@ async function remove(t: Task) {
       <span v-if="t.repeatMode" class="rep" :title="t.templateId ? '固定事项生成的今日实例' : '固定事项模板'">
         {{ repeatLabel(t.repeatMode) }}{{ t.templateId ? "" : "·模板" }}
       </span>
+      <span v-if="t.remindIntervalMin > 0" class="rep iv" title="计时中每 N 分钟弹卡确认一次">
+        {{ intervalLabel(t.remindIntervalMin) }}
+      </span>
+      <span v-else-if="t.remindStyle === 'fullscreen'" class="rep fs" title="到期全屏提醒">全屏提醒</span>
+      <span v-else-if="t.remindStyle === 'none'" class="rep no" title="到期不提醒">不提醒</span>
       <button v-if="!t.done" class="startbtn" :class="{ on: !!t.startTs }" :title="t.startTs ? '结束计时' : '开始做'" @click="toggleStart(t)">
         {{ t.startTs ? "计时中" : "开始" }}
       </button>
@@ -193,8 +229,16 @@ async function remove(t: Task) {
   text-decoration: line-through;
 }
 
-.edit {
+.editwrap {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.edit {
+  width: 100%;
   border: 1px solid var(--accent-border);
   background: var(--surface);
   color: var(--text);
@@ -203,6 +247,50 @@ async function remove(t: Task) {
   font-size: 13px;
   font-family: inherit;
   outline: none;
+}
+
+.editrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.esel {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 4px;
+  max-width: 150px;
+}
+
+.esave {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: var(--r-full);
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.rep.iv {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.rep.fs {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.rep.no {
+  color: var(--text-faint);
+  background: var(--surface);
 }
 
 .spent {

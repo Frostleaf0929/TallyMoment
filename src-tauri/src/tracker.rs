@@ -306,21 +306,65 @@ fn check_reminders(app: &AppHandle, now: chrono::DateTime<chrono::Local>) {
         break; // 同一秒只弹一张，其余下秒继续
     }
 
-    // 到期任务提醒
+    // 到期任务提醒（remind_style: none=关闭 / fullscreen=全屏 / 默认卡片）
     let Some(Ok(due)) = with_db(app, |db| storage::due_tasks(db, ts)) else {
         return;
     };
     for t in due {
         let key = t.due_ts.to_string();
+        if t.remind_style == "none" {
+            with_db(app, |db| storage::task_set_reminded(db, t.id, &key));
+            continue;
+        }
         let mut payload = reminder::Payload::new("task", t.id, "任务到期", &t.content);
         payload.duration_ms = 30_000;
-        payload.actions = vec![
-            reminder::ActionDef::new("done", "完成"),
-            reminder::ActionDef::new("snooze10", "10 分钟后"),
-            reminder::ActionDef::new("dismiss", "忽略"),
-        ];
+        if t.remind_style == "fullscreen" {
+            payload.style = "fullscreen".into();
+            payload.actions = vec![
+                reminder::ActionDef::new("done", "完成"),
+                reminder::ActionDef::new("snooze10", "10 分钟后"),
+            ];
+        } else {
+            payload.actions = vec![
+                reminder::ActionDef::new("done", "完成"),
+                reminder::ActionDef::new("snooze10", "10 分钟后"),
+                reminder::ActionDef::new("dismiss", "忽略"),
+            ];
+        }
         reminder::show(app, payload);
         with_db(app, |db| storage::task_set_reminded(db, t.id, &key));
+        break;
+    }
+
+    // 进行中任务的间隔提醒（手动确认回补）：start_ts 有值 + remind_interval_min > 0，
+    // reminded_key 存 "i:<上次触发ts>"，到点弹卡让用户手动确认继续/完成/停止计时
+    let Some(Ok(iv)) = with_db(app, |db| storage::interval_tasks(db)) else {
+        return;
+    };
+    for t in iv {
+        let last = t
+            .last_key
+            .strip_prefix("i:")
+            .and_then(|x| x.parse::<i64>().ok())
+            .unwrap_or(t.start_ts);
+        if ts < last + t.interval_min * 60 {
+            continue;
+        }
+        let mins = (ts - t.start_ts).max(0) / 60;
+        let mut payload = reminder::Payload::new(
+            "task-interval",
+            t.id,
+            &format!("进行中 · 已 {mins} 分钟"),
+            &t.content,
+        );
+        payload.duration_ms = 30_000;
+        payload.actions = vec![
+            reminder::ActionDef::new("continue-interval", "继续"),
+            reminder::ActionDef::new("done", "完成"),
+            reminder::ActionDef::new("stop-timer", "停止计时"),
+        ];
+        reminder::show(app, payload);
+        with_db(app, |db| storage::task_set_reminded(db, t.id, &format!("i:{ts}")));
         break;
     }
 }

@@ -182,6 +182,10 @@ export interface Task {
   templateId: number | null;
   /** 开始做的时间（每日追踪） */
   startTs: number | null;
+  /** 到期提醒方式：""=默认卡片 / card / fullscreen / none */
+  remindStyle: string;
+  /** 进行中间隔提醒分钟数（0 = 不提醒） */
+  remindIntervalMin: number;
   /** 该条本身是固定事项模板 */
   isTemplate: boolean;
 }

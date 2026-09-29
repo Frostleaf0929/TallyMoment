@@ -552,10 +552,20 @@ fn task_update(
     content: String,
     priority: i32,
     due_ts: Option<i64>,
+    remind_style: Option<String>,
+    remind_interval_min: Option<i64>,
 ) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    storage::task_update(&conn, id, &content, priority, due_ts)
+    storage::task_update(
+        &conn,
+        id,
+        &content,
+        priority,
+        due_ts,
+        remind_style.as_deref(),
+        remind_interval_min,
+    )
 }
 
 #[tauri::command]
@@ -722,6 +732,24 @@ fn reminder_action(app: tauri::AppHandle, kind: String, ref_id: i64, action: Str
             match action.as_str() {
                 "done" => storage::task_set_done(&conn, ref_id, true),
                 "snooze10" => storage::task_push_due(&conn, ref_id, 600),
+                _ => Ok(()),
+            }
+        }
+        // 进行中间隔提醒：继续=重新计时；完成=打卡；停止计时=清 start_ts
+        "task-interval" => {
+            let db = app.state::<Db>();
+            let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+            match action.as_str() {
+                "continue-interval" => storage::task_set_reminded(
+                    &conn,
+                    ref_id,
+                    &format!("i:{}", chrono::Local::now().timestamp()),
+                ),
+                "done" => storage::task_set_done(&conn, ref_id, true),
+                "stop-timer" => {
+                    storage::task_set_started(&conn, ref_id, None)?;
+                    storage::task_set_reminded(&conn, ref_id, "")
+                }
                 _ => Ok(()),
             }
         }

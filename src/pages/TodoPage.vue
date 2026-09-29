@@ -212,7 +212,7 @@ const noteCount = ref(0);
 const lastNoteDate = ref("");
 
 const moduleTitle = computed(
-  () => ({ tasks: "任务", rules: "待办提醒", notes: "日志" })[openModule.value as "tasks"] ?? ""
+  () => ({ tasks: "任务", rules: "提示", notes: "日志" })[openModule.value as "tasks"] ?? ""
 );
 
 async function loadNoteSummary() {
@@ -440,7 +440,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 
       <button class="glass-card mcard" @click="openModule = 'rules'">
         <div class="mhead">
-          <h2>待办提醒</h2>
+          <h2>提示</h2>
           <Icon name="bell" :size="16" />
         </div>
         <p class="mnum">{{ rules.filter((r) => r.enabled).length }} <small>条启用中</small></p>
