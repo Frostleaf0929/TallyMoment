@@ -7,8 +7,11 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 pub const ISLAND_W: f64 = 392.0;
 pub const ISLAND_H_COLLAPSED: f64 = 56.0;
 pub const ISLAND_H_EXPANDED: f64 = 316.0;
+/// WinIsland 式三态：idle（无悬停缩小）/ normal（悬停完整）/ expanded（点击展开）
+pub const ISLAND_W_IDLE: f64 = 240.0;
+pub const ISLAND_H_IDLE: f64 = 40.0;
 
-fn logical_screen(app: &AppHandle) -> (f64, f64) {
+pub fn logical_screen(app: &AppHandle) -> (f64, f64) {
     app.primary_monitor()
         .ok()
         .flatten()
@@ -33,14 +36,20 @@ pub fn show(app: &AppHandle) {
         return;
     }
     let (sw, _sh) = logical_screen(app);
-    let (x, y) = saved_pos(app).unwrap_or(((sw - ISLAND_W) / 2.0, 8.0));
-    let expanded = with_setting(app, |conn| {
-        crate::storage::get_setting(conn, "island.expanded")
-            .map(|v| v == "1")
-            .unwrap_or(false)
-    })
-    .unwrap_or(false);
-    let h = if expanded { ISLAND_H_EXPANDED } else { ISLAND_H_COLLAPSED };
+    // 位置模式：有手动拖动记录视为 custom，否则默认顶部居中
+    let pm = with_setting(app, |conn| pos_mode(conn)).unwrap_or_else(|| "center".into());
+    let (x, y) = if pm == "custom" {
+        saved_pos(app).unwrap_or(((sw - ISLAND_W) / 2.0, 8.0))
+    } else {
+        let px = match pm.as_str() {
+            "left" => 8.0,
+            "right" => sw - ISLAND_W - 8.0,
+            _ => (sw - ISLAND_W) / 2.0,
+        };
+        (px, 8.0)
+    };
+    // 初始一律 normal 高度；idle/expanded 由前端状态机切换
+    let h = ISLAND_H_COLLAPSED;
 
     let build = WebviewWindowBuilder::new(app, "island", WebviewUrl::App("island.html".into()))
         .title("拾刻 · 原子岛")
@@ -124,6 +133,51 @@ pub fn notify_modules(app: &AppHandle, modules: &[String]) {
     let _ = app.emit_to("island", "island-modules", modules.to_vec());
 }
 
+/// 窗口三态尺寸与位置对齐（idle / normal / expanded）
+pub fn set_state(app: &AppHandle, state: &str) {
+    let (w, h) = match state {
+        "idle" => (ISLAND_W_IDLE, ISLAND_H_IDLE),
+        "expanded" => (ISLAND_W, ISLAND_H_EXPANDED),
+        _ => (ISLAND_W, ISLAND_H_COLLAPSED),
+    };
+    if let Some(win) = app.get_webview_window("island") {
+        // 位置模式非 custom 时，宽度变化后按模式重新对齐（顶边不动）
+        let pm = with_setting(app, |conn| pos_mode(conn));
+        if pm.as_deref() != Some("custom") {
+            let (sw, _sh) = logical_screen(app);
+            let x = match pm.as_deref() {
+                Some("left") => 8.0,
+                Some("right") => sw - w - 8.0,
+                _ => (sw - w) / 2.0,
+            };
+            let _ = win.set_position(tauri::LogicalPosition::new(x, 8.0));
+        }
+        let _ = win.set_size(tauri::LogicalSize::new(w, h));
+    }
+}
+
+/// 位置模式：center | left | right | custom；没存过时，有手动拖动记录视为 custom，否则 center
+pub fn pos_mode(conn: &rusqlite::Connection) -> String {
+    if let Some(v) = crate::storage::get_setting(conn, "island.pos_mode") {
+        return v;
+    }
+    if crate::storage::get_setting(conn, "island.pos").is_some() {
+        "custom".into()
+    } else {
+        "center".into()
+    }
+}
+
+pub fn set_pos_mode(conn: &rusqlite::Connection, mode: &str) {
+    let _ = crate::storage::set_setting(conn, "island.pos_mode", mode);
+}
+
+pub fn idle_enabled(conn: &rusqlite::Connection) -> bool {
+    crate::storage::get_setting(conn, "island.idle_enabled")
+        .map(|v| v == "1")
+        .unwrap_or(true)
+}
+
 /// 展开/收起（保持顶边不动），并记住状态
 pub fn set_expanded(app: &AppHandle, expanded: bool) {
     let h = if expanded { ISLAND_H_EXPANDED } else { ISLAND_H_COLLAPSED };
@@ -143,7 +197,8 @@ pub fn reset_pos(app: &AppHandle) {
         let _ = win.set_position(tauri::LogicalPosition::new(x, 8.0));
     }
     with_setting(app, |conn| {
-        crate::storage::set_setting(conn, "island.pos", &format!("{x:.0},8"))
+        crate::storage::set_setting(conn, "island.pos", &format!("{x:.0},8"));
+        set_pos_mode(conn, "center");
     });
 }
 
@@ -154,7 +209,9 @@ pub fn save_pos(app: &AppHandle) {
             let sc = win.scale_factor().unwrap_or(1.0);
             let (x, y) = (pos.x as f64 / sc, pos.y as f64 / sc);
             with_setting(app, |conn| {
-                crate::storage::set_setting(conn, "island.pos", &format!("{x:.0},{y:.0}"))
+                crate::storage::set_setting(conn, "island.pos", &format!("{x:.0},{y:.0}"));
+                // 手动拖过后退出位置模式对齐（否则尺寸变化会被拉回预设位置）
+                set_pos_mode(conn, "custom");
             });
         }
     }
@@ -169,11 +226,12 @@ fn saved_pos(app: &AppHandle) -> Option<(f64, f64)> {
 }
 
 /// 在 Db 锁内执行设置读写（island.rs 各函数共用；测试进程无 state 时返回 None）
-fn with_setting<T>(app: &AppHandle, f: impl FnOnce(&rusqlite::Connection) -> T) -> Option<T> {
+pub fn with_setting<T>(app: &AppHandle, f: impl FnOnce(&rusqlite::Connection) -> T) -> Option<T> {
     let db = app.try_state::<crate::Db>()?;
     let guard = db.0.lock().ok()?;
     Some(f(&guard))
 }
+
 
 /// DWM 圆角（窗口 = 胶囊本体，与提醒窗同款做法）
 #[cfg(windows)]

@@ -209,6 +209,13 @@ void invoke<{ mime: string; data: string } | null>("reminder_bg_get")
 
 /* ---------- 原子岛 ---------- */
 const islandOn = ref(false);
+const islandPos = ref("center");
+const islandIdle = ref(true);
+const POS_DEFS: Record<string, string> = {
+  center: "顶部居中",
+  left: "靠左",
+  right: "靠右",
+};
 const MODULE_DEFS: Record<string, string> = {
   focus: "当前专注",
   next: "下个任务",
@@ -258,7 +265,25 @@ async function setIsland(v: boolean) {
 async function resetIslandPos() {
   try {
     await invoke("island_reset_pos");
+    islandPos.value = "center";
     msg.value = "原子岛位置已重置";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+async function setIslandPos(m: string) {
+  try {
+    await invoke("island_set_pos_mode", { mode: m });
+    islandPos.value = m;
+    msg.value = "原子岛位置已更新";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+async function setIslandIdle(v: boolean) {
+  try {
+    await invoke("island_set_idle_enabled", { enabled: v });
+    msg.value = v ? "无悬停时缩小已开启" : "无悬停时缩小已关闭";
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
@@ -269,6 +294,8 @@ onMounted(async () => {
     islandOn.value = enabled;
     const mods = await invoke<string[]>("island_get_modules");
     if (mods.length) islandModules.value = mods;
+    islandPos.value = await invoke<string>("island_get_pos_mode");
+    islandIdle.value = await invoke<boolean>("island_get_idle_enabled");
   } catch {
     islandOn.value = false;
   }
@@ -340,10 +367,33 @@ onMounted(async () => {
         <span>启用常驻胶囊</span>
         <NSwitch v-model:value="islandOn" size="small" @update:value="setIsland" />
       </div>
+      <div class="row col">
+        <div class="rlabel">
+          <p class="rt">位置</p>
+          <p class="rd">吸附屏幕顶部；也可直接拖动胶囊，拖动后按你放的位置停留（自定义）</p>
+        </div>
+        <div class="seg grid3">
+          <button
+            v-for="(label, key) in POS_DEFS"
+            :key="key"
+            class="seg-item"
+            :class="{ active: islandPos === key }"
+            @click="setIslandPos(key)"
+          >
+            {{ label }}
+          </button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">无悬停时缩小</p>
+          <p class="rd">鼠标移开后收成小胶囊只留核心信息，悬停放大成完整胶囊（WinIsland 式）</p>
+        </div>
+        <NSwitch v-model:value="islandIdle" size="small" @update:value="setIslandIdle" />
+      </div>
       <p class="rd more">
-        屏幕常驻小条：显示哪些信息、什么顺序在下面配置（WinIsland 式模块化）；
-        点击胶囊展开待办并可直接勾掉，右上「打开设置」跳回这里；
-        拖动胶囊可挪位置，位置会记住。常驻约多占 40~80MB 内存（一个 WebView 窗口）。
+        悬停显示完整胶囊；点击胶囊本体展开待办列表并可直接勾掉，再点一下收起；
+        「打开设置」跳回这里。常驻约多占 40~80MB 内存（一个 WebView 窗口）。
       </p>
       <div class="mods">
         <div v-for="(m, i) in islandModules" :key="m" class="modrow2">
@@ -796,7 +846,15 @@ onMounted(async () => {
   gap: 6px;
 }
 
-.seg.grid2 .seg-item {
+/* 原子岛位置三选：一行等宽 */
+.seg.grid3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(110px, 1fr));
+  gap: 6px;
+}
+
+.seg.grid2 .seg-item,
+.seg.grid3 .seg-item {
   justify-content: center;
 }
 

@@ -776,6 +776,8 @@ struct IslandData {
     paused: bool,
     next_task: Option<IslandNextTask>,
     tasks: Vec<IslandNextTask>,
+    /// 无悬停时是否缩小（WinIsland 式 idle 态开关）
+    idle_enabled: bool,
 }
 
 #[tauri::command]
@@ -788,6 +790,7 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
         paused: false,
         next_task: None,
         tasks: Vec::new(),
+        idle_enabled: true,
     };
     let shared = app.state::<TrackerShared>();
     let paused = shared.paused.load(Ordering::Relaxed);
@@ -841,6 +844,7 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
         }
     }
     let next_task = tasks.first().cloned();
+    let idle_enabled = island::idle_enabled(&conn);
     IslandData {
         focus_name,
         focus_sec,
@@ -848,6 +852,7 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
         paused,
         next_task,
         tasks,
+        idle_enabled,
     }
 }
 
@@ -908,6 +913,80 @@ fn island_set_modules(app: tauri::AppHandle, modules: Vec<String>) -> Result<(),
     island::set_modules(&conn, &modules);
     island::notify_modules(&app, &modules);
     Ok(())
+}
+
+/// 三态切换：idle（无悬停缩小）/ normal（悬停完整）/ expanded（点击展开）
+#[tauri::command]
+fn island_set_state(app: tauri::AppHandle, state: String) {
+    island::set_state(&app, &state);
+}
+
+/// 位置模式：center | left | right | custom
+#[tauri::command]
+fn island_set_pos_mode(app: tauri::AppHandle, mode: String) -> Result<(), String> {
+    if !matches!(mode.as_str(), "center" | "left" | "right" | "custom") {
+        return Err("bad mode".into());
+    }
+    {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+        island::set_pos_mode(&conn, &mode);
+    }
+    if let Some(win) = app.get_webview_window("island") {
+        if mode != "custom" {
+            let (sw, _sh) = island::logical_screen(&app);
+            let w = match mode.as_str() {
+                "left" | "right" => island::ISLAND_W,
+                _ => island::ISLAND_W,
+            };
+            let x = match mode.as_str() {
+                "left" => 8.0,
+                "right" => sw - w - 8.0,
+                _ => (sw - w) / 2.0,
+            };
+            let _ = win.set_position(tauri::LogicalPosition::new(x, 8.0));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn island_get_pos_mode(app: tauri::AppHandle) -> String {
+    let db = app.state::<Db>();
+    db.0
+        .lock()
+        .ok()
+        .map(|c| island::pos_mode(&c))
+        .unwrap_or_else(|| "center".into())
+}
+
+/// 无悬停缩小开关
+#[tauri::command]
+fn island_get_idle_enabled(app: tauri::AppHandle) -> bool {
+    let db = app.state::<Db>();
+    db.0.lock().map(|c| island::idle_enabled(&c)).unwrap_or(true)
+}
+
+#[tauri::command]
+fn island_set_idle_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+        crate::storage::set_setting(&conn, "island.idle_enabled", if enabled { "1" } else { "0" });
+    }
+    if !enabled {
+        island::set_state(&app, "normal");
+    }
+    Ok(())
+}
+
+/// 前端自实现"按下→移动即拖动、原地松开即点击"：越过阈值后由前端调用
+#[tauri::command]
+fn island_start_drag(app: tauri::AppHandle) -> Result<(), String> {
+    let win = app
+        .get_webview_window("island")
+        .ok_or_else(|| "no island".to_string())?;
+    win.start_dragging().map_err(|e| e.to_string())
 }
 
 /// 展开卡里的「设置」：唤起主面板并跳到个性化
@@ -1328,6 +1407,12 @@ pub fn run() {
             island_get_modules,
             island_set_modules,
             island_open_settings,
+            island_set_state,
+            island_set_pos_mode,
+            island_get_pos_mode,
+            island_set_idle_enabled,
+            island_get_idle_enabled,
+            island_start_drag,
             rule_list,
             rule_add,
             rule_update,
