@@ -412,28 +412,37 @@ watch(navIntent, (n) => {
           <NInput v-model:value="keyword" size="small" placeholder="搜索" clearable style="width: 110px" />
         </div>
         <div class="listbody">
-          <button
-            v-for="a in filteredApps"
-            :key="a.name"
-            class="approw"
-            :class="{ active: selectedApp === a.name }"
-            :title="appLabel(a)"
-            @click="pickApp(a.name)"
-          >
-            <img
-              v-if="appColorMode === 'icon' && iconUrl(a.name)"
-              class="aicon"
-              :src="iconUrl(a.name)"
-              alt=""
-              draggable="false"
-            />
-            <span v-else class="adot" :style="{ background: appColor(a) }"></span>
-            <span class="aname">{{ appLabel(a) }}</span>
-            <span class="atime">{{ fmtDuration(a.seconds) }}</span>
-            <span class="abar">
-              <i :style="{ width: (a.seconds / maxSeconds) * 100 + '%', background: appColor(a) }"></i>
-            </span>
-          </button>
+          <template v-for="a in filteredApps" :key="a.name">
+            <button
+              class="approw"
+              :class="{ active: selectedApp === a.name }"
+              :title="appLabel(a)"
+              @click="pickApp(a.name)"
+            >
+              <img
+                v-if="appColorMode === 'icon' && iconUrl(a.name)"
+                class="aicon"
+                :src="iconUrl(a.name)"
+                alt=""
+                draggable="false"
+              />
+              <span v-else class="adot" :style="{ background: appColor(a) }"></span>
+              <span class="aname">{{ appLabel(a) }}</span>
+              <span class="atime">{{ fmtDuration(a.seconds) }}</span>
+              <span class="abar">
+                <i :style="{ width: (a.seconds / maxSeconds) * 100 + '%', background: appColor(a) }"></i>
+              </span>
+            </button>
+            <!-- 行内小信息卡：紧跟选中应用（进程名 / 路径 / 忽略），底部另有完整卡 -->
+            <div v-if="selectedApp === a.name && info" class="appinfo inline">
+              <p class="ai-line">{{ info.name }}</p>
+              <p class="ai-line path" :title="info.exePath ?? ''">{{ info.exePath || "（无路径记录）" }}</p>
+              <button class="ai-btn" :disabled="infoBusy" @click.stop="toggleIgnore">
+                {{ info.ignored ? "取消忽略此应用" : "忽略此应用" }}
+              </button>
+              <p v-if="info.ignored" class="ai-note">已忽略：不再计时、排行不显示（历史保留）</p>
+            </div>
+          </template>
           <p v-if="!filteredApps.length" class="empty">这个范围没有记录</p>
         </div>
 
@@ -952,6 +961,27 @@ watch(navIntent, (n) => {
   margin: 0;
   font-size: 10.5px;
   color: var(--text-faint);
+}
+
+/* 行内小信息卡（选中应用行正下方） */
+.appinfo.inline {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  border-radius: var(--r-md);
+  margin: 2px 0 6px;
+  padding: 8px 10px;
+  animation: infoin var(--dur) ease;
+}
+
+@keyframes infoin {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .approw {
