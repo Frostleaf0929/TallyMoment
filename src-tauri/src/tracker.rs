@@ -199,12 +199,22 @@ pub fn spawn(app: AppHandle) {
                 }
                 match with_db(&app, |db| storage::app_id_for(db, &k2, &d2, &e2)) {
                     Some(Ok(app_id)) => {
-                        *guard = Some(Session {
-                            app_id,
-                            app_key: k2,
-                            title: t2,
-                            seg_start: ts0,
-                        });
+                        // 已忽略的应用不计时（切换确认时查一次，不是每秒）
+                        let ignored = with_db(&app, |db| {
+                            Ok::<bool, String>(storage::app_is_ignored(db, app_id))
+                        })
+                        .and_then(|r| r.ok())
+                        .unwrap_or(false);
+                        if ignored {
+                            *guard = None;
+                        } else {
+                            *guard = Some(Session {
+                                app_id,
+                                app_key: k2,
+                                title: t2,
+                                seg_start: ts0,
+                            });
+                        }
                     }
                     Some(Err(e)) => eprintln!("[tracker] 应用登记失败: {e}"),
                     None => eprintln!("[tracker] 数据库忙，本秒未记录"),

@@ -188,6 +188,42 @@ function pickApp(name: string | null) {
   selectedApp.value = selectedApp.value === name ? null : name;
   fallbackNote.value = "";
   void load(false);
+  void loadInfo();
+}
+
+/* ---------- 应用信息卡：友好名 / 进程名 / 路径 / 忽略 ---------- */
+const info = ref<{
+  name: string;
+  displayName: string;
+  exePath: string | null;
+  ignored: boolean;
+} | null>(null);
+const infoBusy = ref(false);
+
+async function loadInfo() {
+  if (!selectedApp.value) {
+    info.value = null;
+    return;
+  }
+  try {
+    info.value = await invoke("app_info", { name: selectedApp.value });
+  } catch {
+    info.value = null;
+  }
+}
+
+async function toggleIgnore() {
+  if (!info.value || infoBusy.value) return;
+  infoBusy.value = true;
+  try {
+    await invoke("app_set_ignored", { name: info.value.name, ignored: !info.value.ignored });
+    await loadInfo();
+    await load(false);
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  } finally {
+    infoBusy.value = false;
+  }
 }
 
 const appLabel = (a: AppUsage) => (appNameEnglish.value ? a.name.replace(/\.exe$/i, "") : a.displayName);
@@ -265,6 +301,7 @@ watch(navIntent, (n) => {
   view.value = "time";
   selectedApp.value = n.app ?? null;
   void load(true);
+  void loadInfo();
 });
 </script>
 
@@ -398,6 +435,17 @@ watch(navIntent, (n) => {
             </span>
           </button>
           <p v-if="!filteredApps.length" class="empty">这个范围没有记录</p>
+        </div>
+
+        <!-- 选中应用的信息卡：友好名 / 进程名 / 路径 / 忽略 -->
+        <div v-if="info" class="appinfo">
+          <p class="ai-name">{{ info.displayName }}</p>
+          <p class="ai-line">{{ info.name }}</p>
+          <p class="ai-line path" :title="info.exePath ?? ''">{{ info.exePath || "（无路径记录）" }}</p>
+          <button class="ai-btn" :disabled="infoBusy" @click="toggleIgnore">
+            {{ info.ignored ? "取消忽略此应用" : "忽略此应用" }}
+          </button>
+          <p v-if="info.ignored" class="ai-note">已忽略：不再计时，排行里也不再出现（历史保留）</p>
         </div>
       </aside>
       </div>
@@ -845,6 +893,65 @@ watch(navIntent, (n) => {
   flex-direction: column;
   gap: 5px;
   padding-right: 4px;
+}
+
+/* 选中应用的信息卡（列表卡底部固定区） */
+.appinfo {
+  flex: none;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ai-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ai-line {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.ai-line.path {
+  color: var(--text-faint);
+  font-size: 11px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.ai-btn {
+  margin-top: 6px;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: var(--r-full);
+  font-size: 11.5px;
+  font-family: inherit;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: color var(--dur), border-color var(--dur), background var(--dur);
+}
+
+.ai-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.ai-note {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--text-faint);
 }
 
 .approw {

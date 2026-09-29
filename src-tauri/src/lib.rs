@@ -757,6 +757,22 @@ fn reminder_show_full_window(app: tauri::AppHandle) {
     reminder::show_full_ready(&app);
 }
 
+/// 单个应用信息（详细页应用卡：友好名/进程名/路径/忽略状态）
+#[tauri::command]
+fn app_info(app: tauri::AppHandle, name: String) -> Result<storage::AppInfo, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::app_info(&conn, &name)
+}
+
+/// 忽略/恢复某应用：忽略后不再计时、报表不再显示（历史数据保留）
+#[tauri::command]
+fn app_set_ignored(app: tauri::AppHandle, name: String, ignored: bool) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::app_set_ignored(&conn, &name, ignored)
+}
+
 /// Tai 对齐导出：data.db + 每日/时段 CSV（path 为用户选择的 .db 位置）
 #[tauri::command]
 fn export_tai(app: tauri::AppHandle, path: String) -> Result<Vec<String>, String> {
@@ -1139,6 +1155,8 @@ pub fn run() {
             todo_stats,
             habit_grid,
             habit_toggle,
+            app_info,
+            app_set_ignored,
             rule_list,
             rule_add,
             rule_update,

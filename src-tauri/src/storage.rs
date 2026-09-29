@@ -121,6 +121,50 @@ fn ensure_dir_writable(dir: &std::path::Path) -> bool {
     }
 }
 
+/// 单个应用信息（详细页应用卡）
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppInfo {
+    pub name: String,
+    pub display_name: String,
+    pub exe_path: Option<String>,
+    pub ignored: bool,
+}
+
+pub fn app_info(conn: &Connection, name: &str) -> Result<AppInfo, String> {
+    conn.query_row(
+        "SELECT name, COALESCE(display_name, name), exe_path, ignored FROM apps WHERE name = ?1",
+        [name],
+        |r| {
+            Ok(AppInfo {
+                name: r.get(0)?,
+                display_name: r.get(1)?,
+                exe_path: r.get(2)?,
+                ignored: r.get::<_, i64>(3)? != 0,
+            })
+        },
+    )
+    .map_err(|_| format!("应用 {name} 不存在"))
+}
+
+/// 忽略/恢复：忽略后 tracker 不再计时，报表里也不再出现（历史数据保留）
+pub fn app_set_ignored(conn: &Connection, name: &str, ignored: bool) -> Result<(), String> {
+    conn.execute(
+        "UPDATE apps SET ignored = ?2 WHERE name = ?1",
+        rusqlite::params![name, ignored as i64],
+    )
+    .map_err(|e| format!("更新忽略状态失败: {e}"))?;
+    Ok(())
+}
+
+pub fn app_is_ignored(conn: &Connection, app_id: i64) -> bool {
+    conn.query_row("SELECT ignored FROM apps WHERE id = ?1", [app_id], |r| {
+        r.get::<_, i64>(0)
+    })
+    .map(|v| v != 0)
+    .unwrap_or(false)
+}
+
 /// 用 exe 版本资源的 FileDescription 回填显示名（Tai 式友好名：花笺、哔哩哔哩……）
 /// 只处理 显示名为空 / 等于进程名 / 等于去 .exe 进程名 的行；返回回填条数
 pub fn backfill_friendly_names(conn: &Connection) -> Result<usize, String> {
@@ -245,6 +289,7 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         "ALTER TABLE tasks ADD COLUMN template_id INTEGER",
         "ALTER TABLE tasks ADD COLUMN start_ts INTEGER",
         "ALTER TABLE reminder_rules ADD COLUMN style TEXT NOT NULL DEFAULT 'card'",
+        "ALTER TABLE apps ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = conn.execute(sql, []);
     }
@@ -264,9 +309,21 @@ pub fn app_id_for(
         |row| row.get::<_, i64>(0),
     )
     .or_else(|_| {
+        // 没有更好的名字（空 / 就是进程名去后缀）时，读 exe 版本资源的 FileDescription
+        // （任务栏悬停名：花笺、哔哩哔哩……Tai 式友好名在首次记录时就拿对）
+        let mut display = display_name.to_string();
+        let stem = std::path::Path::new(name)
+            .file_stem()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if (display.is_empty() || display == stem) && !exe_path.is_empty() {
+            if let Some(fd) = crate::app_icon::file_description(exe_path) {
+                display = fd;
+            }
+        }
         conn.execute(
             "INSERT OR IGNORE INTO apps(name, display_name, exe_path) VALUES(?1, ?2, ?3)",
-            [name, display_name, exe_path],
+            [name, display.as_str(), exe_path],
         )
         .map_err(|e| format!("插入应用失败: {e}"))?;
         conn.query_row(
@@ -357,7 +414,7 @@ pub fn today_app_usage(conn: &Connection, date: &str) -> Result<Vec<AppUsage>, S
     let mut stmt = conn
         .prepare(
             "SELECT a.name, COALESCE(a.display_name, a.name), s.seconds
-             FROM daily_stats s JOIN apps a ON a.id = s.app_id
+             FROM daily_stats s JOIN apps a ON a.id = s.app_id AND a.ignored = 0
              WHERE s.date = ?1 ORDER BY s.seconds DESC",
         )
         .map_err(|e| format!("查询失败: {e}"))?;
@@ -382,7 +439,7 @@ pub fn today_hourly(conn: &Connection, date: &str) -> Result<Vec<HourSlice>, Str
     let mut stmt = conn
         .prepare(
             "SELECT s.hour, a.name, s.seconds
-             FROM hourly_stats s JOIN apps a ON a.id = s.app_id
+             FROM hourly_stats s JOIN apps a ON a.id = s.app_id AND a.ignored = 0
              WHERE s.date = ?1 ORDER BY s.hour, s.seconds DESC",
         )
         .map_err(|e| format!("查询失败: {e}"))?;
@@ -407,7 +464,7 @@ pub fn today_segments(conn: &Connection, day_start: i64, day_end: i64) -> Result
     let mut stmt = conn
         .prepare(
             "SELECT a.name, s.start_ts, s.end_ts, s.title
-             FROM segments s JOIN apps a ON a.id = s.app_id
+             FROM segments s JOIN apps a ON a.id = s.app_id AND a.ignored = 0
              WHERE s.start_ts >= ?1 AND s.start_ts < ?2 ORDER BY s.start_ts",
         )
         .map_err(|e| format!("查询失败: {e}"))?;
@@ -1293,7 +1350,7 @@ fn write_tai_csv(
     };
     let sql = format!(
         "SELECT {t} AS t, COALESCE(a.display_name, a.name), COALESCE(a.display_name, a.name), s.seconds
-         FROM {tb} s JOIN apps a ON a.id = s.app_id ORDER BY t",
+         FROM {tb} s JOIN apps a ON a.id = s.app_id AND a.ignored = 0 ORDER BY t",
         t = date_sel,
         tb = table
     );
@@ -1336,7 +1393,7 @@ fn write_tai_xlsx(conn: &Connection, path: &std::path::Path) -> Result<(), Strin
         let mut stmt = conn
             .prepare(
                 "SELECT s.date, COALESCE(a.display_name, a.name), COALESCE(a.display_name, a.name), s.seconds
-                 FROM daily_stats s JOIN apps a ON a.id = s.app_id ORDER BY s.date",
+                 FROM daily_stats s JOIN apps a ON a.id = s.app_id AND a.ignored = 0 ORDER BY s.date",
             )
             .map_err(|e| format!("读取日汇总失败: {e}"))?;
         let rows = stmt
@@ -1359,7 +1416,7 @@ fn write_tai_xlsx(conn: &Connection, path: &std::path::Path) -> Result<(), Strin
             .prepare(
                 "SELECT s.date || ' ' || printf('%02d:00:00', s.hour), COALESCE(a.display_name, a.name),
                         COALESCE(a.display_name, a.name), s.seconds
-                 FROM hourly_stats s JOIN apps a ON a.id = s.app_id
+                 FROM hourly_stats s JOIN apps a ON a.id = s.app_id AND a.ignored = 0
                  ORDER BY s.date, s.hour",
             )
             .map_err(|e| format!("读取小时汇总失败: {e}"))?;
@@ -1601,7 +1658,7 @@ pub fn recent_hourly(conn: &Connection, days: i32) -> Result<Vec<HourSlice>, Str
     let mut stmt = conn
         .prepare(
             "SELECT h.hour, a.name, SUM(h.seconds)
-             FROM hourly_stats h JOIN apps a ON a.id = h.app_id
+             FROM hourly_stats h JOIN apps a ON a.id = h.app_id AND a.ignored = 0
              WHERE h.date IN (
                  SELECT DISTINCT date FROM hourly_stats ORDER BY date DESC LIMIT ?1
              )
@@ -1732,7 +1789,7 @@ pub fn period_report(conn: &Connection, kind: &str, key: &str) -> Result<PeriodR
     let mut app_stmt = conn
         .prepare(
             "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds)
-             FROM daily_stats d JOIN apps a ON a.id = d.app_id
+             FROM daily_stats d JOIN apps a ON a.id = d.app_id AND a.ignored = 0
              WHERE d.date LIKE ?1
              GROUP BY d.app_id ORDER BY 3 DESC LIMIT 60",
         )
@@ -1752,7 +1809,7 @@ pub fn period_report(conn: &Connection, kind: &str, key: &str) -> Result<PeriodR
     let mut hour_stmt = conn
         .prepare(
             "SELECT h.hour, a.name, SUM(h.seconds)
-             FROM hourly_stats h JOIN apps a ON a.id = h.app_id
+             FROM hourly_stats h JOIN apps a ON a.id = h.app_id AND a.ignored = 0
              WHERE h.date LIKE ?1
              GROUP BY h.hour, h.app_id",
         )
@@ -1849,7 +1906,7 @@ pub fn app_list(conn: &Connection, limit: i64) -> Result<Vec<AppUsage>, String> 
     let mut stmt = conn
         .prepare(
             "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds)
-             FROM daily_stats d JOIN apps a ON a.id = d.app_id
+             FROM daily_stats d JOIN apps a ON a.id = d.app_id AND a.ignored = 0
              GROUP BY d.app_id ORDER BY 3 DESC LIMIT ?1",
         )
         .map_err(|e| format!("查询应用清单失败: {e}"))?;
@@ -1904,7 +1961,7 @@ pub fn app_period_report(
         let mut stmt = conn
             .prepare(
                 "SELECT h.hour, SUM(h.seconds)
-                 FROM hourly_stats h JOIN apps a ON a.id = h.app_id
+                 FROM hourly_stats h JOIN apps a ON a.id = h.app_id AND a.ignored = 0
                  WHERE h.date = ?1 AND a.name = ?2 GROUP BY h.hour",
             )
             .map_err(|e| format!("查询应用日分布失败: {e}"))?;
@@ -1947,7 +2004,7 @@ pub fn app_period_report(
     };
     let sql = format!(
         "SELECT {group_expr} AS k, MIN(d.date), SUM(d.seconds)
-         FROM daily_stats d JOIN apps a ON a.id = d.app_id
+         FROM daily_stats d JOIN apps a ON a.id = d.app_id AND a.ignored = 0
          WHERE d.date LIKE ?1 AND a.name = ?2
          GROUP BY k ORDER BY k"
     );
@@ -2057,7 +2114,7 @@ pub fn range_report(
 
     let apps_sql = format!(
         "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds)
-         FROM daily_stats d JOIN apps a ON a.id = d.app_id
+         FROM daily_stats d JOIN apps a ON a.id = d.app_id AND a.ignored = 0
          WHERE d.date >= ?1 AND d.date <= ?2 {app_cond}
          GROUP BY d.app_id ORDER BY 3 DESC LIMIT 300",
         app_cond = if app_filter.is_some() { "AND a.name = ?3" } else { "" }
@@ -2085,7 +2142,7 @@ pub fn range_report(
 
     let hourly_sql = format!(
         "SELECT h.hour, a.name, SUM(h.seconds)
-         FROM hourly_stats h JOIN apps a ON a.id = h.app_id
+         FROM hourly_stats h JOIN apps a ON a.id = h.app_id AND a.ignored = 0
          WHERE h.date >= ?1 AND h.date <= ?2 {app_cond}
          GROUP BY h.hour, h.app_id",
         app_cond = if app_filter.is_some() { "AND a.name = ?3" } else { "" }
@@ -2121,7 +2178,7 @@ pub fn range_report(
     };
     let bucket_sql = format!(
         "SELECT {group_expr} AS k, MIN(d.date), SUM(d.seconds)
-         FROM daily_stats d JOIN apps a ON a.id = d.app_id
+         FROM daily_stats d JOIN apps a ON a.id = d.app_id AND a.ignored = 0
          WHERE d.date >= ?1 AND d.date <= ?2 {app_cond}
          GROUP BY k ORDER BY k",
         app_cond = if app_filter.is_some() { "AND a.name = ?3" } else { "" }
@@ -3321,7 +3378,7 @@ mod tests {
 
         let h: i64 = conn
             .query_row(
-                "SELECT h.seconds FROM hourly_stats h JOIN apps a ON a.id = h.app_id
+                "SELECT h.seconds FROM hourly_stats h JOIN apps a ON a.id = h.app_id AND a.ignored = 0
                  WHERE a.name = 'chrome.exe' AND h.date = '2025-01-02' AND h.hour = 8",
                 [],
                 |r| r.get(0),
@@ -3331,7 +3388,7 @@ mod tests {
 
         let d: i64 = conn
             .query_row(
-                "SELECT dd.seconds FROM daily_stats dd JOIN apps a ON a.id = dd.app_id
+                "SELECT dd.seconds FROM daily_stats dd JOIN apps a ON a.id = dd.app_id AND a.ignored = 0
                  WHERE a.name = 'code' AND dd.date = '2025-01-02'",
                 [],
                 |r| r.get(0),
