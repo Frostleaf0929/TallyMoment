@@ -17,14 +17,17 @@ const bucketMax = () => Math.max(1, ...(todoStats.value?.buckets ?? [1]));
 const loading = ref(true);
 const renderErr = ref("");
 
-/** 统计范围：1 = 今天 / 7 = 近 7 天 / 30 = 近 30 天（长期分析） */
+/** 统计范围：1 = 今天 / 7 = 近 7 天 / 30 = 近 30 天 / 0 = 总共（从最早记录起） */
 const range = ref(1);
 const rangeOpts = [
   { d: 1, label: "今天" },
   { d: 7, label: "近 7 天" },
   { d: 30, label: "近 30 天" },
+  { d: 0, label: "总共" },
 ];
-const rangeLabel = computed(() => (range.value > 1 ? `近 ${range.value} 天` : "今天"));
+const rangeLabel = computed(() =>
+  range.value === 0 ? "总共" : range.value > 1 ? `近 ${range.value} 天` : "今天"
+);
 
 function setRange(d: number) {
   if (range.value === d) return;

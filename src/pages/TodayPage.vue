@@ -114,7 +114,7 @@ const startedAt = () => {
 
     <section class="glass-card">
       <h2>应用排行</h2>
-      <AppRanking :apps="report?.apps ?? []" @pick="(n: string) => jumpTo('app', n)" />
+      <AppRanking :apps="report?.apps ?? []" @pick="(n: string) => jumpTo('app', n)" @renamed="refresh" />
     </section>
   </div>
 </template>

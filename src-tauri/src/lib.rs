@@ -757,6 +757,14 @@ fn reminder_show_full_window(app: tauri::AppHandle) {
     reminder::show_full_ready(&app);
 }
 
+/// 应用显示名：把 floral-notepaper.exe 这类进程名改成"花笺"这样的真实软件名（空串=恢复默认）
+#[tauri::command]
+fn app_rename(app: tauri::AppHandle, name: String, display_name: String) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::app_set_display(&conn, &name, &display_name)
+}
+
 /// Tai 对齐导出：data.db + 每日/时段 CSV（path 为用户选择的 .db 位置）
 #[tauri::command]
 fn export_tai(app: tauri::AppHandle, path: String) -> Result<Vec<String>, String> {
@@ -1135,6 +1143,7 @@ pub fn run() {
             todo_stats,
             habit_grid,
             habit_toggle,
+            app_rename,
             rule_list,
             rule_add,
             rule_update,

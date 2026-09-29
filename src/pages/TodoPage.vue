@@ -187,6 +187,14 @@ function maskRelease(e: MouseEvent, close: () => void) {
   maskDownOnSelf = false;
 }
 
+/** 日志面板当前编辑的日期（放大按钮跳「详细 · 事项」用） */
+function noteDateStr(): string {
+  const d = new Date(pickedDay.value);
+  const m = `${d.getMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getDate()}`.padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 function openDetail(date: string) {
   detailDate.value = date;
 }
@@ -489,6 +497,17 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
           <div class="modhead">
             <h2>{{ moduleTitle }}</h2>
             <div class="dacts">
+              <!-- 日志二级框：放大图标与关闭并排，跳「详细 · 事项」看同一天 -->
+              <button
+                v-if="openModule === 'notes'"
+                class="wbtn"
+                title="在「详细 · 事项」中打开"
+                @click="jumpTo('items', undefined, noteDateStr())"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12">
+                  <rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+                </svg>
+              </button>
               <button class="wbtn" title="关闭" @click="openModule = ''">
                 <svg width="12" height="12" viewBox="0 0 12 12">
                   <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.2" />

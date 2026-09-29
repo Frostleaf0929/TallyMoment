@@ -280,8 +280,8 @@ watch(navIntent, (n) => {
         <button class="vbtn" :class="{ active: view === 'time' }" @click="view = 'time'">应用</button>
         <button class="vbtn" :class="{ active: view === 'items' }" @click="view = 'items'">事项</button>
       </div>
-      <!-- 从待办跳过来时的返回按钮：与上面这排对齐，默认圆形图标、悬停展开成胶囊 -->
-      <button v-if="fromTodo" class="back" title="返回待办" @click="goTab('todo')">
+      <!-- 返回待办：常显（不管怎么进来的都能一键回去），默认圆形图标、悬停展开成胶囊 -->
+      <button class="back" title="返回待办" @click="goTab('todo')">
         <svg viewBox="0 0 24 24" class="bkicon" aria-hidden="true">
           <path d="M14.5 5.5L8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
         </svg>

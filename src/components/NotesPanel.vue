@@ -2,7 +2,6 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { jumpTo } from "../lib/uiState";
 import { NButton, NDatePicker, NInput } from "naive-ui";
 import MarkdownPreview from "./MarkdownPreview.vue";
 import {
@@ -32,11 +31,6 @@ const err = ref("");
 const busy = ref(false);
 /** 视图三态：edit 只编辑 / split 上下分栏（编辑+预览）/ preview 只读预览 */
 const noteView = ref<"edit" | "split" | "preview">("split");
-
-/** 放大：跳到「详细 · 事项」看这天（那边也有"编辑"胶囊跳回来） */
-function zoomToDetail() {
-  jumpTo("items", undefined, dateStr());
-}
 
 /** 插入图片的宽度（新图片块用） */
 const imgWidth = ref<"100%" | "60%" | "33%">("100%");
@@ -376,11 +370,6 @@ onMounted(async () => {
       <span class="tb-sep"></span>
       <button class="tb" title="在光标处插入分割线" @click="hr">分割线</button>
       <button class="tb" @click="addImage">图片…</button>
-      <button class="tb" style="margin-left: auto" title="在「详细 · 事项」中打开这天" @click="zoomToDetail">
-        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-          <rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
-        </svg>
-      </button>
     </div>
     <div class="blocks subrow">
       <span class="tb-w">

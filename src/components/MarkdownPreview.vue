@@ -7,6 +7,8 @@ const props = defineProps<{
   content: string;
   /** 附件名 -> dataURL */
   images: Record<string, string>;
+  /** 只读（详细页展示用）：隐藏块排序/删除按钮 */
+  readonly?: boolean;
 }>();
 const emit = defineEmits<{ (e: "update:content", v: string): void }>();
 
@@ -33,7 +35,7 @@ function del(i: number) {
     <p v-if="!blocks.length" class="empty">还没有内容，用上面的按钮插入块试试</p>
     <div v-for="(b, i) in blocks" :key="i" class="mdblock" :class="`k-${b.kind}`">
       <div class="mdbody" v-html="b.html"></div>
-      <div class="mdacts">
+      <div v-if="!readonly" class="mdacts">
         <button class="mb" title="上移" :disabled="i === 0" @click="up(i)">↑</button>
         <button class="mb" title="下移" :disabled="i === blocks.length - 1" @click="down(i)">↓</button>
         <button class="mb del" title="删除这一块" @click="del(i)">×</button>

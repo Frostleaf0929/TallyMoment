@@ -5,6 +5,7 @@ import { goTab, notesIntent } from "../lib/uiState";
 import type { DayReport } from "../types";
 import { fmtDuration } from "../lib/format";
 import HourlyChart from "./HourlyChart.vue";
+import MarkdownPreview from "./MarkdownPreview.vue";
 
 /** 某一天的对照详情：完成率 / 使用时长 / 小时分布 / 日志与图片
  *  同时用于待办页的弹层与「详细 · 事项」页 */
@@ -14,7 +15,10 @@ const report = ref<DayReport | null>(null);
 const stats = ref<{ todayDone: number; weekRate: number; ontimeRate: number; avgMinutes: number } | null>(
   null
 );
+/** 日志原文（渲染用，不再截断拼接——此前 join(" ") 把层级和分行全弄没了） */
 const note = ref("");
+/** 附件名 -> dataURL（给块式渲染识别图片） */
+const noteImages = ref<Record<string, string>>({});
 const images = ref<string[]>([]);
 const thumbs = ref<string[]>([]);
 const imgLoading = ref(false);
@@ -23,14 +27,14 @@ const preview = ref("");
 /** 完成率：后端已经按百分数给值（0~100），-1 = 没有数据显示"—"（此前前端又乘了一次 100，出现 1000%） */
 const pct = (v: number | undefined) => (v === undefined || v < 0 ? "—" : `${Math.round(v)}%`);
 
-/** 前端缩成 320px 缩略图：原图直接进 DOM 是卡顿主因 */
+/** 前端缩成 640px 缩略图：原图直接进 DOM 是卡顿主因；320 太糊（用户反馈），640 清晰度够 */
 function toThumb(dataUrl: string): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
     img.decoding = "async";
     img.onload = () => {
       try {
-        const k = Math.min(1, 320 / Math.max(img.width, img.height));
+        const k = Math.min(1, 640 / Math.max(img.width, img.height));
         const cv = document.createElement("canvas");
         cv.width = Math.max(1, Math.round(img.width * k));
         cv.height = Math.max(1, Math.round(img.height * k));
@@ -51,6 +55,7 @@ async function load(date: string) {
   if (!date) return;
   report.value = null;
   note.value = "";
+  noteImages.value = {};
   images.value = [];
   thumbs.value = [];
   const [rep, n, st] = await Promise.all([
@@ -60,7 +65,7 @@ async function load(date: string) {
     ]);
   report.value = rep;
   stats.value = st;
-  note.value = (n?.content ?? "").split(String.fromCharCode(10)).slice(0, 14).join(" ");
+  note.value = n?.content ?? "";
   const names = n?.images ?? [];
   if (!names.length) return;
   imgLoading.value = true;
@@ -69,6 +74,10 @@ async function load(date: string) {
     const urls = list.map(([, mime, b64]) => `data:${mime};base64,${b64}`);
     images.value = urls;
     thumbs.value = await Promise.all(urls.map(toThumb));
+    // 名字 -> 缩略图映射：块式渲染用它在正文里显示图片
+    const m: Record<string, string> = {};
+    names.forEach((nm, i) => (m[nm] = thumbs.value[i] ?? urls[i]));
+    noteImages.value = m;
   } catch {
     /* 忽略 */
   } finally {
@@ -117,7 +126,10 @@ function editNote() {
         </button>
       </div>
       <div class="notebody">
-        <p class="dtext notetext">{{ note || "（这天还没有日志，点右上角「编辑」去写）" }}</p>
+        <div class="mdhost">
+          <MarkdownPreview v-if="note" :content="note" :images="noteImages" readonly />
+          <p v-else class="dtext">（这天还没有日志，点右上角「编辑」去写）</p>
+        </div>
         <div v-if="thumbs.length" class="dimgs">
           <img
             v-for="(src, i) in thumbs"
@@ -186,7 +198,7 @@ function editNote() {
 }
 
 .notecard {
-  min-height: 150px;
+  min-height: 170px;
 }
 
 .notehead {
@@ -194,9 +206,40 @@ function editNote() {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  /* 与下方内容/图片拉开竖向距离（此前图片几乎贴着编辑按钮） */
+  margin-bottom: 14px;
 }
 
-/* 编辑胶囊：与「返回待办」同款（圆形图标，悬停展开文字） */
+/* 日志渲染区：限高滚动，文字在左占大头 */
+.mdhost {
+  flex: 1;
+  min-width: 0;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.notebody {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.notebody .dimgs {
+  flex: none;
+  width: 260px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notebody .dimgs img {
+  width: 100%;
+  height: auto;
+  max-height: 210px;
+  object-fit: cover;
+}
+
+/* 编辑胶囊：与「返回待办」同款（圆形图标，悬停展开） */
 .editnote {
   display: inline-flex;
   align-items: center;
@@ -239,31 +282,6 @@ function editNote() {
   max-width: 44px;
   opacity: 1;
   margin-left: 5px;
-}
-
-.notebody {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-}
-
-/* 文字在左占大头，图片在右固定宽 */
-.notetext {
-  flex: 1;
-  min-width: 0;
-  font-size: 12.5px;
-}
-
-.notebody .dimgs {
-  flex: none;
-  width: 190px;
-  flex-direction: column;
-}
-
-.notebody .dimgs img {
-  width: 100%;
-  height: auto;
-  max-height: 150px;
 }
 
 .dtext {

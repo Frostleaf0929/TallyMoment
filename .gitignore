@@ -32,3 +32,4 @@ src-tauri/target
 # 开发记录（含真实使用数据与界面截图，仅存本地，不随仓库公开）
 logs/
 WORKLOG.md
+.dev-data-backup-*/

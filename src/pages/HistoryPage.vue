@@ -76,6 +76,19 @@ async function loadPeriod(kind: "month" | "year" | "all", key: string) {
   }
 }
 
+/** 应用改名后按当前模式刷新显示名 */
+async function refreshAll() {
+  if (mode.value === "recent") {
+    const date = selected.value || days.value[0]?.date || "";
+    if (date) await pick(date);
+    return;
+  }
+  const kind = mode.value as "month" | "year" | "all";
+  const key =
+    kind === "month" ? selectedMonth.value : kind === "year" ? selectedYear.value : "all";
+  if (key) await loadPeriod(kind, key);
+}
+
 /** 日历选择器（与详细页统一风格） */
 function onMonthPick(ts: number | null) {
   if (!ts) return;
@@ -262,7 +275,7 @@ onMounted(async () => {
 
         <section class="glass-card">
           <h2>应用排行</h2>
-          <AppRanking :apps="report.apps" @pick="(n: string) => jumpTo('app', n)" />
+          <AppRanking :apps="report.apps" @pick="(n: string) => jumpTo('app', n)" @renamed="refreshAll" />
         </section>
       </template>
       <BallLoader v-else-if="loading" label="加载中…" />
@@ -306,7 +319,7 @@ onMounted(async () => {
 
         <section class="glass-card">
           <h2>应用排行</h2>
-          <AppRanking :apps="period.apps" @pick="(n: string) => jumpTo('app', n)" />
+          <AppRanking :apps="period.apps" @pick="(n: string) => jumpTo('app', n)" @renamed="refreshAll" />
         </section>
       </template>
       <BallLoader v-else-if="loading" label="加载中…" />

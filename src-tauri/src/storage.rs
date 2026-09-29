@@ -121,6 +121,22 @@ fn ensure_dir_writable(dir: &std::path::Path) -> bool {
     }
 }
 
+/// 应用显示名：把 floral-notepaper.exe 这类进程名改成"花笺"这样的真实软件名
+/// （存 apps.display_name；传空串 = 清除，恢复默认）
+pub fn app_set_display(conn: &Connection, name: &str, display_name: &str) -> Result<(), String> {
+    let v: Option<&str> = if display_name.trim().is_empty() {
+        None
+    } else {
+        Some(display_name.trim())
+    };
+    conn.execute(
+        "UPDATE apps SET display_name = ?2 WHERE name = ?1",
+        rusqlite::params![name, v],
+    )
+    .map_err(|e| format!("更新显示名失败: {e}"))?;
+    Ok(())
+}
+
 /// 打开连接并建表（WAL + 忙等待，两张汇总表都有唯一约束防重复——吸收 Tai 的坑）
 pub fn open(path: &std::path::Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("打开数据库失败: {e}"))?;
@@ -3465,6 +3481,26 @@ mod tests {
             s_fill.daily_rows, s_fill.hourly_rows, s_fill.skipped,
             s_merge.daily_rows, s_merge.hourly_rows,
             s_replace.cleared, s_replace.daily_rows, s_replace.hourly_rows
+        );
+    }
+
+    #[test]
+    #[ignore = "仅本机一次性操作：把真实 Tai 库导入拾刻 dev 实库（fill 补充去重，先自动备份）；cargo test tai_into_app -- --ignored --nocapture"]
+    fn tai_real_import_into_app_db() {
+        let src = "E:/02_Programs/Utilities/Tai/Data/data.db";
+        assert!(std::path::Path::new(src).exists(), "Tai 库不在预期路径");
+        // 拾刻 dev 实库（exe 旁 Data/tallymoment.db）；执行前确认拾刻程序已退出
+        let app_db = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/debug/Data/tallymoment.db");
+        assert!(app_db.exists(), "拾刻实库不在 {:?}", app_db);
+        let conn = open(&app_db).unwrap();
+        // 导入前先备份整库（与界面「替代全部」同一套备份逻辑）
+        let backup = backup_database(&conn).unwrap();
+        eprintln!("已备份到 {backup}");
+        let s = import_tai_data(src, &conn, "fill").unwrap();
+        eprintln!(
+            "导入完成：应用 {} 个，日汇总 {} 行，时段 {} 行，跳过已有 {} 条",
+            s.apps, s.daily_rows, s.hourly_rows, s.skipped
         );
     }
 
