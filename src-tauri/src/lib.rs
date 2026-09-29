@@ -906,6 +906,7 @@ fn island_set_modules(app: tauri::AppHandle, modules: Vec<String>) -> Result<(),
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
     island::set_modules(&conn, &modules);
+    island::notify_modules(&app, &modules);
     Ok(())
 }
 
@@ -1488,13 +1489,17 @@ pub fn run() {
             input_hook::spawn(app.handle().clone());
 
             // 原子岛：上一次开着就随启动恢复
-            {
+            // 注意：island::show 内部也要拿 Db 锁，必须先释放外层锁再调用（Mutex 不可重入，
+            // 在锁内调 show 会启动死锁——软件打不开的根因）
+            let should_show_island = {
                 let db = app.state::<Db>().inner().clone();
-                if let Ok(conn) = db.0.lock() {
-                    if island::enabled(&conn) {
-                        island::show(app.handle());
-                    }
+                match db.0.lock() {
+                    Ok(conn) => island::enabled(&conn),
+                    Err(_) => false,
                 }
+            };
+            if should_show_island {
+                island::show(app.handle());
             }
             Ok(())
         })

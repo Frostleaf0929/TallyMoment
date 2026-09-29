@@ -42,7 +42,7 @@ pub fn show(app: &AppHandle) {
     .unwrap_or(false);
     let h = if expanded { ISLAND_H_EXPANDED } else { ISLAND_H_COLLAPSED };
 
-    let build = WebviewWindowBuilder::new(app, "island", WebviewUrl::App("index.html".into()))
+    let build = WebviewWindowBuilder::new(app, "island", WebviewUrl::App("island.html".into()))
         .title("拾刻 · 原子岛")
         .inner_size(ISLAND_W, h)
         .position(x.max(0.0), y.max(0.0))
@@ -116,6 +116,12 @@ pub fn set_modules(conn: &rusqlite::Connection, modules: &[String]) {
         "island.modules",
         &serde_json::to_string(modules).unwrap_or_else(|_| "[]".into()),
     );
+}
+
+/// 个性化改完模块配置后通知岛刷新（island.ts 监听）
+pub fn notify_modules(app: &AppHandle, modules: &[String]) {
+    use tauri::Emitter;
+    let _ = app.emit_to("island", "island-modules", modules.to_vec());
 }
 
 /// 展开/收起（保持顶边不动），并记住状态

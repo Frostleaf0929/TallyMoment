@@ -8,6 +8,16 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(() => ({
   plugins: [vue()],
 
+  // 多页入口：island 是原子岛的独立轻量页面（无 Vue/naive-ui/echarts，毫秒级加载）
+  build: {
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        island: "island.html",
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
