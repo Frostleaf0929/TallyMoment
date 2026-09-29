@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, watchEffect } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NInput } from "naive-ui";
 import type { AppUsage, HabitRow, RangeReport } from "../types";
@@ -203,6 +203,7 @@ const infoBusy = ref(false);
 async function loadInfo() {
   if (!selectedApp.value) {
     info.value = null;
+    inlineVisible.value = true;
     return;
   }
   try {
@@ -210,6 +211,28 @@ async function loadInfo() {
   } catch {
     info.value = null;
   }
+  void nextTick(updateCardVis);
+}
+
+/* ---------- 两张信息卡互斥：行内卡可见时藏底部卡，行内卡滚出视野时底部卡顶上 ---------- */
+const inlineVisible = ref(true);
+const listbodyEl = ref<HTMLElement | null>(null);
+let cardRaf = 0;
+
+function updateCardVis() {
+  window.cancelAnimationFrame(cardRaf);
+  cardRaf = window.requestAnimationFrame(() => {
+    const row = document.querySelector(".approw.active") as HTMLElement | null;
+    const c = document.querySelector(".content") as HTMLElement | null;
+    if (!row || !c) {
+      inlineVisible.value = true;
+      return;
+    }
+    const rr = row.getBoundingClientRect();
+    const cr = c.getBoundingClientRect();
+    // 选中行还露在可视区里 → 行内卡算"在视野"（卡就在行下方）
+    inlineVisible.value = rr.bottom > cr.top + 8 && rr.top < cr.bottom - 8;
+  });
 }
 
 async function toggleIgnore() {
@@ -266,6 +289,17 @@ const trend = computed(() => {
 onMounted(() => {
   void load(false);
   void loadHabit();
+  // 两层滚动（内容区 / 应用列表自身）都影响卡片可见性
+  const c = document.querySelector(".content");
+  c?.addEventListener("scroll", updateCardVis, { passive: true });
+  listbodyEl.value?.addEventListener("scroll", updateCardVis, { passive: true });
+  window.addEventListener("resize", updateCardVis);
+});
+onUnmounted(() => {
+  document.querySelector(".content")?.removeEventListener("scroll", updateCardVis);
+  listbodyEl.value?.removeEventListener("scroll", updateCardVis);
+  window.removeEventListener("resize", updateCardVis);
+  window.cancelAnimationFrame(cardRaf);
 });
 
 // 切回详细页时刷新习惯数据（v-show 页面 onMounted 只跑一次）
@@ -411,7 +445,7 @@ watch(navIntent, (n) => {
           <h2>应用</h2>
           <NInput v-model:value="keyword" size="small" placeholder="搜索" clearable style="width: 110px" />
         </div>
-        <div class="listbody">
+        <div ref="listbodyEl" class="listbody" @scroll.passive="updateCardVis">
           <template v-for="a in filteredApps" :key="a.name">
             <button
               class="approw"
@@ -433,8 +467,8 @@ watch(navIntent, (n) => {
                 <i :style="{ width: (a.seconds / maxSeconds) * 100 + '%', background: appColor(a) }"></i>
               </span>
             </button>
-            <!-- 行内信息卡：紧跟选中应用，内容与底部完整卡一致（正式名/进程名/路径/忽略） -->
-            <div v-if="selectedApp === a.name && info" class="appinfo inline">
+            <!-- 行内信息卡：紧跟选中应用，内容与底部完整卡一致；底部卡在它滚出视野前隐藏 -->
+            <div v-if="selectedApp === a.name && info" v-show="inlineVisible" class="appinfo inline">
               <p class="ai-name">{{ info.displayName }}</p>
               <p class="ai-line">{{ info.name }}</p>
               <p class="ai-line path" :title="info.exePath ?? ''">{{ info.exePath || "（无路径记录）" }}</p>
@@ -447,8 +481,8 @@ watch(navIntent, (n) => {
           <p v-if="!filteredApps.length" class="empty">这个范围没有记录</p>
         </div>
 
-        <!-- 选中应用的信息卡：友好名 / 进程名 / 路径 / 忽略 -->
-        <div v-if="info" class="appinfo">
+        <!-- 底部完整信息卡：行内卡在视野里时隐藏，滚出后顶上 -->
+        <div v-if="info && !inlineVisible" class="appinfo">
           <p class="ai-name">{{ info.displayName }}</p>
           <p class="ai-line">{{ info.name }}</p>
           <p class="ai-line path" :title="info.exePath ?? ''">{{ info.exePath || "（无路径记录）" }}</p>
