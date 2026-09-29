@@ -9,6 +9,8 @@ pub struct AppUsage {
     pub name: String,
     pub display_name: String,
     pub seconds: i64,
+    /// 区间内后台运行秒数（track_background 应用）
+    pub bg_seconds: i64,
 }
 
 #[derive(Serialize)]
@@ -133,11 +135,13 @@ pub struct AppInfo {
     pub display_name: String,
     pub exe_path: Option<String>,
     pub ignored: bool,
+    /// 是否跟踪后台运行时长（BongoCat 这类挂后台也算时间的应用）
+    pub track_background: bool,
 }
 
 pub fn app_info(conn: &Connection, name: &str) -> Result<AppInfo, String> {
     conn.query_row(
-        "SELECT name, COALESCE(display_name, name), exe_path, ignored FROM apps WHERE name = ?1",
+        "SELECT name, COALESCE(display_name, name), exe_path, ignored, track_background FROM apps WHERE name = ?1",
         [name],
         |r| {
             Ok(AppInfo {
@@ -145,6 +149,7 @@ pub fn app_info(conn: &Connection, name: &str) -> Result<AppInfo, String> {
                 display_name: r.get(1)?,
                 exe_path: r.get(2)?,
                 ignored: r.get::<_, i64>(3)? != 0,
+                track_background: r.get::<_, i64>(4)? != 0,
             })
         },
     )
@@ -152,6 +157,56 @@ pub fn app_info(conn: &Connection, name: &str) -> Result<AppInfo, String> {
 }
 
 /// 忽略/恢复：忽略后 tracker 不再计时，报表里也不再出现（历史数据保留）
+/// 后台跟踪开关
+pub fn app_set_track_background(conn: &Connection, name: &str, on: bool) -> Result<(), String> {
+    conn.execute(
+        "UPDATE apps SET track_background = ?2 WHERE name = ?1",
+        rusqlite::params![name, if on { 1 } else { 0 }],
+    )
+    .map_err(|e| format!("更新后台跟踪设置失败: {e}"))?;
+    Ok(())
+}
+
+/// 开了后台跟踪的应用（枚举线程用）
+pub fn track_background_apps(conn: &Connection) -> Result<Vec<(i64, String)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, name FROM apps WHERE track_background = 1 AND ignored = 0")
+        .map_err(|e| format!("查询后台跟踪应用失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|e| format!("查询后台跟踪应用失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取后台跟踪应用失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 后台秒数累加（小时表 + 日表，均 UPSERT；前台 seconds 不动）
+pub fn bg_add_seconds(
+    conn: &Connection,
+    date: &str,
+    hour: i32,
+    app_id: i64,
+    secs: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO hourly_stats(date, hour, app_id, seconds, bg_seconds)
+         VALUES(?1, ?2, ?3, 0, ?4)
+         ON CONFLICT(date, hour, app_id) DO UPDATE SET bg_seconds = bg_seconds + ?4",
+        rusqlite::params![date, hour, app_id, secs],
+    )
+    .map_err(|e| format!("写后台小时统计失败: {e}"))?;
+    conn.execute(
+        "INSERT INTO daily_stats(date, app_id, seconds, bg_seconds)
+         VALUES(?1, ?2, 0, ?3)
+         ON CONFLICT(date, app_id) DO UPDATE SET bg_seconds = bg_seconds + ?3",
+        rusqlite::params![date, app_id, secs],
+    )
+    .map_err(|e| format!("写后台日统计失败: {e}"))?;
+    Ok(())
+}
+
 pub fn app_set_ignored(conn: &Connection, name: &str, ignored: bool) -> Result<(), String> {
     conn.execute(
         "UPDATE apps SET ignored = ?2 WHERE name = ?1",
@@ -297,6 +352,10 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         // 06 模块重构：任务级提醒方式（默认卡片/全屏/关闭）与进行中间隔提醒（手动确认回补）
         "ALTER TABLE tasks ADD COLUMN remind_style TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN remind_interval_min INTEGER NOT NULL DEFAULT 0",
+        // 12 后台时长：应用级开关 + 统计表后台秒数列（独立于前台 seconds）
+        "ALTER TABLE apps ADD COLUMN track_background INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE hourly_stats ADD COLUMN bg_seconds INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE daily_stats ADD COLUMN bg_seconds INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = conn.execute(sql, []);
     }
@@ -431,6 +490,7 @@ pub fn today_app_usage(conn: &Connection, date: &str) -> Result<Vec<AppUsage>, S
                 name: row.get(0)?,
                 display_name: row.get(1)?,
                 seconds: row.get(2)?,
+                bg_seconds: 0,
             })
         })
         .map_err(|e| format!("查询失败: {e}"))?;
@@ -1862,6 +1922,7 @@ pub fn period_report(conn: &Connection, kind: &str, key: &str) -> Result<PeriodR
                 name: r.get(0)?,
                 display_name: r.get(1)?,
                 seconds: r.get(2)?,
+                bg_seconds: 0,
             })
         })
         .map_err(|e| format!("查询周期应用排行失败: {e}"))?
@@ -1978,6 +2039,7 @@ pub fn app_list(conn: &Connection, limit: i64) -> Result<Vec<AppUsage>, String> 
                 name: r.get(0)?,
                 display_name: r.get(1)?,
                 seconds: r.get(2)?,
+                bg_seconds: 0,
             })
         })
         .map_err(|e| format!("查询应用清单失败: {e}"))?;
@@ -2175,7 +2237,7 @@ pub fn range_report(
     let app_filter = app.filter(|a| !a.is_empty());
 
     let apps_sql = format!(
-        "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds)
+        "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds), SUM(d.bg_seconds)
          FROM daily_stats d JOIN apps a ON a.id = d.app_id AND a.ignored = 0
          WHERE d.date >= ?1 AND d.date <= ?2 {app_cond}
          GROUP BY d.app_id ORDER BY 3 DESC LIMIT 300",
@@ -2187,6 +2249,7 @@ pub fn range_report(
             name: r.get(0)?,
             display_name: r.get(1)?,
             seconds: r.get(2)?,
+            bg_seconds: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
         })
     };
     let apps: Vec<AppUsage> = match app_filter {

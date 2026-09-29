@@ -82,6 +82,7 @@ fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
                 name: s.app_key.clone(),
                 display_name: display.clone(),
                 seconds: secs,
+                bg_seconds: 0,
             }),
         }
         match hourly
@@ -1018,6 +1019,18 @@ fn island_set_idle_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), S
     Ok(())
 }
 
+/// 应用级"后台跟踪"开关（BongoCat 等挂后台的应用也累计时长）
+#[tauri::command]
+fn app_set_track_background(
+    app: tauri::AppHandle,
+    name: String,
+    on: bool,
+) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::app_set_track_background(&conn, &name, on)
+}
+
 /// 材质（solid/acrylic/mica）：存设置并重建窗口生效
 #[tauri::command]
 fn island_set_material(app: tauri::AppHandle, mat: String) -> Result<(), String> {
@@ -1480,6 +1493,7 @@ pub fn run() {
             island_start_drag,
             island_set_material,
             island_set_accent_mode,
+            app_set_track_background,
             rule_list,
             rule_add,
             rule_update,
@@ -1643,7 +1657,10 @@ pub fn run() {
             // 原子岛：上一次开着就随启动恢复
             // 注意：island::show 内部也要拿 Db 锁，必须先释放外层锁再调用（Mutex 不可重入，
             // 在锁内调 show 会启动死锁——软件打不开的根因）
-            let should_show_island = {
+            // 后台时长枚举线程（12）：每 5 秒盘点开了"后台跟踪"的应用
+    tracker::spawn_bg_tracker(app.handle().clone());
+
+    let should_show_island = {
                 let db = app.state::<Db>().inner().clone();
                 match db.0.lock() {
                     Ok(conn) => island::enabled(&conn),

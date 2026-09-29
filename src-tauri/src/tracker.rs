@@ -260,6 +260,76 @@ fn snoozed_until(id: i64) -> Option<i64> {
     map.lock().ok().and_then(|m| m.get(&id).copied())
 }
 
+/// Windows 进程名集合（Toolhelp32 快照，去重；BongoCat 这类挂后台也要算时间）
+#[cfg(windows)]
+fn process_names() -> std::collections::HashSet<String> {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    let mut out = std::collections::HashSet::new();
+    unsafe {
+        if let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
+            let mut entry = PROCESSENTRY32W {
+                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            if Process32FirstW(snap, &mut entry).is_ok() {
+                loop {
+                    let name = String::from_utf16_lossy(
+                        &entry.szExeFile[..entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(0)],
+                    )
+                    .to_lowercase();
+                    if !name.is_empty() {
+                        out.insert(name);
+                    }
+                    if Process32NextW(snap, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = windows::Win32::Foundation::CloseHandle(snap);
+        }
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn process_names() -> std::collections::HashSet<String> {
+    std::collections::HashSet::new()
+}
+
+/// 后台时长线程：每 5 秒枚举进程，对开了"后台跟踪"的应用累计 bg_seconds
+/// （独立于前台会话；暂停时不计）
+pub fn spawn_bg_tracker(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(5));
+        let paused = app
+            .state::<TrackerShared>()
+            .paused
+            .load(Ordering::Relaxed);
+        if paused {
+            continue;
+        }
+        let Some(Ok(targets)) = with_db(&app, |db| storage::track_background_apps(db)) else {
+            continue;
+        };
+        if targets.is_empty() {
+            continue;
+        }
+        let names = process_names();
+        let now = Local::now();
+        let date = now.format("%Y-%m-%d").to_string();
+        let hour = now.hour() as i32;
+        for (app_id, name) in targets {
+            // apps.name 存进程名（小写文件名），快照同样小写对齐
+            if names.contains(&name.to_lowercase()) {
+                with_db(&app, |db| storage::bg_add_seconds(db, &date, hour, app_id, 5));
+            }
+        }
+    });
+}
+
 /// 提醒调度：规则（间隔/定点）+ 到期任务；每秒检查，键去重
 fn check_reminders(app: &AppHandle, now: chrono::DateTime<chrono::Local>) {
     let ts = now.timestamp();

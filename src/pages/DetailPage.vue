@@ -197,6 +197,7 @@ const info = ref<{
   displayName: string;
   exePath: string | null;
   ignored: boolean;
+  trackBackground: boolean;
 } | null>(null);
 const infoBusy = ref(false);
 
@@ -235,6 +236,19 @@ function updateCardVis() {
   });
 }
 
+
+async function toggleTrackBg() {
+  if (!info.value) return;
+  infoBusy.value = true;
+  try {
+    await invoke("app_set_track_background", { name: info.value.name, on: !info.value.trackBackground });
+    info.value = { ...info.value, trackBackground: !info.value.trackBackground };
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  } finally {
+    infoBusy.value = false;
+  }
+}
 async function toggleIgnore() {
   if (!info.value || infoBusy.value) return;
   infoBusy.value = true;
@@ -463,6 +477,7 @@ watch(navIntent, (n) => {
               <span v-else class="adot" :style="{ background: appColor(a) }"></span>
               <span class="aname">{{ appLabel(a) }}</span>
               <span class="atime">{{ fmtDuration(a.seconds) }}</span>
+              <span v-if="a.bgSeconds > 0" class="abg" title="后台运行时长">后台 {{ fmtDuration(a.bgSeconds) }}</span>
               <span class="abar">
                 <i :style="{ width: (a.seconds / maxSeconds) * 100 + '%', background: appColor(a) }"></i>
               </span>
@@ -475,7 +490,11 @@ watch(navIntent, (n) => {
               <button class="ai-btn" :disabled="infoBusy" @click.stop="toggleIgnore">
                 {{ info.ignored ? "取消忽略此应用" : "忽略此应用" }}
               </button>
+              <button class="ai-btn bg" :disabled="infoBusy" @click.stop="toggleTrackBg">
+                {{ info.trackBackground ? "停止后台跟踪" : "跟踪后台时长" }}
+              </button>
               <p v-if="info.ignored" class="ai-note">已忽略：不再计时、排行不显示（历史保留）</p>
+              <p v-else-if="info.trackBackground" class="ai-note">后台跟踪中：切到别的应用也会累计这个应用的时间</p>
             </div>
           </template>
           <p v-if="!filteredApps.length" class="empty">这个范围没有记录</p>
@@ -489,7 +508,11 @@ watch(navIntent, (n) => {
           <button class="ai-btn" :disabled="infoBusy" @click="toggleIgnore">
             {{ info.ignored ? "取消忽略此应用" : "忽略此应用" }}
           </button>
+          <button class="ai-btn bg" :disabled="infoBusy" @click="toggleTrackBg">
+            {{ info.trackBackground ? "停止后台跟踪" : "跟踪后台时长" }}
+          </button>
           <p v-if="info.ignored" class="ai-note">已忽略：不再计时，排行里也不再出现（历史保留）</p>
+          <p v-else-if="info.trackBackground" class="ai-note">后台跟踪中：切到别的应用也会累计这个应用的时间</p>
         </div>
       </aside>
       </div>
@@ -1079,6 +1102,22 @@ watch(navIntent, (n) => {
 
 .approw.active .aname {
   color: var(--accent-text);
+}
+
+.abg {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-faint);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.ai-btn.bg {
+  color: var(--warn);
 }
 
 .atime {

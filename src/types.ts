@@ -9,6 +9,8 @@ export interface AppUsage {
   name: string;
   displayName: string;
   seconds: number;
+  /** 后台运行秒数（开了"后台跟踪"的应用才有值） */
+  bgSeconds: number;
 }
 
 export interface HourSlice {

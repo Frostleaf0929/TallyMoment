@@ -41,6 +41,8 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
     "Win32_Foundation",
+    # 后台时长：Toolhelp32 枚举系统进程
+    "Win32_System_Diagnostics_ToolHelp",
 ] }
 
 
