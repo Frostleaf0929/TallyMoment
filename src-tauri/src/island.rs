@@ -60,6 +60,21 @@ pub fn show(app: &AppHandle) {
         Ok(win) => {
             round_corners(&win);
             eprintln!("[island] 窗口已创建");
+            // 兜底：前端就绪信号 2.5 秒内没来（加载失败/事件丢失）也强制显示，
+            // 宁可短暂黑底也不能"开关打开了却什么都不出现"
+            let handle = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(2500));
+                if let Some(w) = handle.get_webview_window("island") {
+                    match w.is_visible() {
+                        Ok(false) => {
+                            eprintln!("[island] 就绪信号超时，强制显示");
+                            let _ = w.show();
+                        }
+                        _ => {}
+                    }
+                }
+            });
         }
         Err(e) => eprintln!("[island] 创建失败: {e}"),
     }
@@ -73,9 +88,34 @@ pub fn hide(app: &AppHandle) {
 
 /// 前端就绪：显示窗口（创建时隐藏，防首帧黑底闪现）
 pub fn on_ready(app: &AppHandle) {
+    eprintln!("[island] 前端就绪，显示窗口");
     if let Some(win) = app.get_webview_window("island") {
         let _ = win.show();
     }
+}
+
+/// 模块配置：胶囊条显示哪些信息、什么顺序（settings 里存 JSON 数组）
+pub fn modules(conn: &rusqlite::Connection) -> Vec<String> {
+    const DEFAULT: [ &str; 3 ] = ["focus", "next", "done"];
+    match crate::storage::get_setting(conn, "island.modules") {
+        Some(v) => {
+            let arr: Vec<String> = serde_json::from_str(&v).unwrap_or_default();
+            if arr.is_empty() {
+                DEFAULT.iter().map(|s| s.to_string()).collect()
+            } else {
+                arr
+            }
+        }
+        None => DEFAULT.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+pub fn set_modules(conn: &rusqlite::Connection, modules: &[String]) {
+    let _ = crate::storage::set_setting(
+        conn,
+        "island.modules",
+        &serde_json::to_string(modules).unwrap_or_else(|_| "[]".into()),
+    );
 }
 
 /// 展开/收起（保持顶边不动），并记住状态

@@ -158,6 +158,7 @@ const online = ref(false);
 const paused = ref(false);
 let timer: number | undefined;
 let unlistenState: UnlistenFn | undefined;
+let unlistenIsland: UnlistenFn | undefined;
 
 async function ping() {
   try {
@@ -211,11 +212,18 @@ onMounted(async () => {
   } catch {
     /* 用默认值 */
   }
+  // 原子岛展开卡里的「打开设置」：跳到个性化
+  try {
+    unlistenIsland = await listen("island-open-settings", () => (active.value = "personalize"));
+  } catch {
+    /* 浏览器直开时忽略 */
+  }
   await loadWallpaper();
 });
 onUnmounted(() => {
   clearInterval(timer);
   unlistenState?.();
+  unlistenIsland?.();
   window.removeEventListener("mousemove", onBrandMove);
   window.removeEventListener("mouseup", onBrandUp);
 });

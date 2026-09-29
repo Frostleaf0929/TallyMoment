@@ -209,6 +209,44 @@ void invoke<{ mime: string; data: string } | null>("reminder_bg_get")
 
 /* ---------- 原子岛 ---------- */
 const islandOn = ref(false);
+const MODULE_DEFS: Record<string, string> = {
+  focus: "当前专注",
+  next: "下个任务",
+  done: "今日完成",
+  clock: "时钟",
+};
+const islandModules = ref<string[]>(["focus", "next", "done"]);
+const missingMods = computed(() =>
+  Object.keys(MODULE_DEFS).filter((m) => !islandModules.value.includes(m))
+);
+
+async function saveModules() {
+  try {
+    await invoke("island_set_modules", { modules: islandModules.value });
+    msg.value = "模块配置已更新";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+function moveMod(i: number, dir: -1 | 1) {
+  const j = i + dir;
+  if (j < 0 || j >= islandModules.value.length) return;
+  const arr = [...islandModules.value];
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  islandModules.value = arr;
+  void saveModules();
+}
+
+function removeMod(i: number) {
+  islandModules.value = islandModules.value.filter((_, k) => k !== i);
+  void saveModules();
+}
+
+function addMod(m: string) {
+  islandModules.value = [...islandModules.value, m];
+  void saveModules();
+}
 async function setIsland(v: boolean) {
   try {
     await invoke("island_set_enabled", { enabled: v });
@@ -229,6 +267,8 @@ onMounted(async () => {
   try {
     const enabled = await invoke<boolean>("island_get_enabled");
     islandOn.value = enabled;
+    const mods = await invoke<string[]>("island_get_modules");
+    if (mods.length) islandModules.value = mods;
   } catch {
     islandOn.value = false;
   }
@@ -301,13 +341,28 @@ onMounted(async () => {
         <NSwitch v-model:value="islandOn" size="small" @update:value="setIsland" />
       </div>
       <p class="rd more">
-        屏幕常驻小条：当前专注 / 下个任务倒计时 / 今日完成数，点击展开待办并可直接勾掉；
+        屏幕常驻小条：显示哪些信息、什么顺序在下面配置（WinIsland 式模块化）；
+        点击胶囊展开待办并可直接勾掉，右上「打开设置」跳回这里；
         拖动胶囊可挪位置，位置会记住。常驻约多占 40~80MB 内存（一个 WebView 窗口）。
       </p>
+      <div class="mods">
+        <div v-for="(m, i) in islandModules" :key="m" class="modrow2">
+          <span class="mname">{{ MODULE_DEFS[m] || m }}</span>
+          <button class="mini" :disabled="i === 0" title="上移" @click="moveMod(i, -1)">↑</button>
+          <button class="mini" :disabled="i === islandModules.length - 1" title="下移" @click="moveMod(i, 1)">↓</button>
+          <button class="mini" title="从胶囊移除" @click="removeMod(i)">移除</button>
+        </div>
+        <div v-if="missingMods.length" class="modrow2">
+          <span class="mname faint">添加模块：</span>
+          <button v-for="m in missingMods" :key="m" class="mini add" @click="addMod(m)">
+            + {{ MODULE_DEFS[m] }}
+          </button>
+        </div>
+      </div>
       <div class="acts" style="display: flex; gap: 8px">
         <button class="btn" @click="resetIslandPos">位置重置（回屏幕顶部居中）</button>
       </div>
-      <p v-if="msg" class="okline">{{ msg }}</p>
+      <p v-if="msg" class="ok">{{ msg }}</p>
     </div>
 
     <!-- 皮肤预设 -->
@@ -830,6 +885,56 @@ onMounted(async () => {
   margin: 0;
   font-size: 12px;
   color: var(--good);
+}
+
+.mods {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.modrow2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mname {
+  flex: 1;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.mname.faint {
+  color: var(--text-faint);
+}
+
+.mini {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: color var(--dur), border-color var(--dur);
+}
+
+.mini:hover {
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+}
+
+.mini:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.mini.add {
+  color: var(--accent-text);
+  border-color: var(--accent-border);
 }
 
 .err {

@@ -893,6 +893,31 @@ fn island_reset_pos(app: tauri::AppHandle) {
     island::reset_pos(&app);
 }
 
+/// 胶囊条模块配置（有序数组：focus / next / done / clock）
+#[tauri::command]
+fn island_get_modules(app: tauri::AppHandle) -> Vec<String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| ()).ok();
+    conn.map(|c| island::modules(&c)).unwrap_or_default()
+}
+
+#[tauri::command]
+fn island_set_modules(app: tauri::AppHandle, modules: Vec<String>) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    island::set_modules(&conn, &modules);
+    Ok(())
+}
+
+/// 展开卡里的「设置」：唤起主面板并跳到个性化
+#[tauri::command]
+fn island_open_settings(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+    }
+    let _ = app.emit_to("main", "island-open-settings", ());
+}
+
 /// 单个应用信息（详细页应用卡：友好名/进程名/路径/忽略状态）
 #[tauri::command]
 fn app_info(app: tauri::AppHandle, name: String) -> Result<storage::AppInfo, String> {
@@ -1299,6 +1324,9 @@ pub fn run() {
             island_ready,
             island_reset_pos,
             island_get_enabled,
+            island_get_modules,
+            island_set_modules,
+            island_open_settings,
             rule_list,
             rule_add,
             rule_update,

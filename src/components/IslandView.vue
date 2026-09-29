@@ -21,8 +21,23 @@ interface IslandData {
 const data = ref<IslandData | null>(null);
 const nowSec = ref(Math.floor(Date.now() / 1000));
 const expanded = ref(false);
+/** 胶囊条模块（顺序即显示顺序）：focus / next / done / clock */
+const modules = ref<string[]>(["focus", "next", "done"]);
 let timer: number | undefined;
 let clock: number | undefined;
+
+const clockLabel = computed(() => {
+  const d = new Date(nowSec.value * 1000);
+  return `${`${d.getHours()}`.padStart(2, "0")}:${`${d.getMinutes()}`.padStart(2, "0")}`;
+});
+
+async function openSettings() {
+  try {
+    await invoke("island_open_settings");
+  } catch {
+    /* 忽略 */
+  }
+}
 
 async function refresh() {
   try {
@@ -70,6 +85,9 @@ const nextLabel = computed(() => {
 
 onMounted(() => {
   void invoke("island_ready");
+  void invoke<string[]>("island_get_modules")
+    .then((m) => (modules.value = m))
+    .catch(() => {});
   void refresh();
   timer = window.setInterval(refresh, 1000);
   clock = window.setInterval(() => (nowSec.value = Math.floor(Date.now() / 1000)), 1000);
@@ -85,14 +103,28 @@ onUnmounted(() => {
     <!-- 胶囊条：中部空白区可拖动，右侧按钮展开/收起 -->
     <div class="bar" data-tauri-drag-region>
       <span class="mark"></span>
-      <span class="focus" data-tauri-drag-region :class="{ off: data?.paused }">{{ focusLabel }}</span>
-      <span class="div" data-tauri-drag-region></span>
-      <span class="next" data-tauri-drag-region :title="data?.nextTask?.content">
-        <span class="tag">下个</span>{{ nextLabel }}
-      </span>
-      <span class="done" data-tauri-drag-region>
-        <b class="num">{{ data?.doneToday ?? 0 }}</b> 今日
-      </span>
+      <template v-for="(m, i) in modules" :key="m">
+        <span
+          v-if="m === 'focus'"
+          class="focus"
+          data-tauri-drag-region
+          :class="{ off: data?.paused }"
+          :title="focusLabel"
+        >{{ focusLabel }}</span>
+        <span
+          v-else-if="m === 'next'"
+          class="next"
+          data-tauri-drag-region
+          :title="data?.nextTask?.content"
+        >
+          <span class="tag">下个</span>{{ nextLabel }}
+        </span>
+        <span v-else-if="m === 'done'" class="done" data-tauri-drag-region>
+          <b class="num">{{ data?.doneToday ?? 0 }}</b> 今日
+        </span>
+        <span v-else-if="m === 'clock'" class="clock num" data-tauri-drag-region>{{ clockLabel }}</span>
+        <span v-if="i < modules.length - 1" class="div" data-tauri-drag-region></span>
+      </template>
       <button class="tg" :title="expanded ? '收起' : '展开待办'" @click="toggleExpand">
         <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true" :class="{ flip: expanded }">
           <path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
@@ -109,6 +141,15 @@ onUnmounted(() => {
         <span class="tdue num">{{ fmtDue(t.dueTs) }}</span>
       </div>
       <p v-if="!(data?.tasks ?? []).length" class="tempty">没有排期中的任务</p>
+      <div class="tfoot">
+        <button class="setbtn" @click="openSettings">
+          <svg width="11" height="11" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8" />
+            <path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          </svg>
+          打开设置
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -191,6 +232,35 @@ onUnmounted(() => {
   flex: none;
   font-size: 11.5px;
   color: #8b8a82;
+}
+
+.clock {
+  flex: none;
+  font-size: 13px;
+}
+
+.tfoot {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.setbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(232, 179, 75, 0.4);
+  background: transparent;
+  color: #e8b34b;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-family: inherit;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.setbtn:hover {
+  background: rgba(232, 179, 75, 0.12);
 }
 
 .num {
