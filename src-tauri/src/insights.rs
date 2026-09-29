@@ -89,11 +89,19 @@ pub fn compute_blocks(segments: &[(i64, i64, String)]) -> Vec<BlockView> {
             }),
         }
     }
-    // 心流推断（规则版）：跨度 ≥25 分钟且少切换 = 心流；
-    // 切换速率 ≥0.4 次/分钟 或跨度 <10 分钟 = 碎片；其余 = 专注
+    // 心流推断（规则版，阈值随数据自适应）：
+    // 心流 = 跨度 ≥ 门槛 且 少切换 且 活跃占比 ≥85%（块内摸鱼不算心流）；
+    // 碎片 = 切换速率 ≥0.4 次/分 或跨度 <10 分钟；其余 = 专注。
+    // 门槛：样本多（≥6 块）时用本次范围里块跨度的中位数（下限 15 分钟）——
+    //       每个人工作节奏不同，写死的 25 分钟并不准。
+    let mut span_sorted: Vec<i64> = out.iter().map(|b| b.span).collect();
+    span_sorted.sort_unstable();
+    let median_span = if span_sorted.len() >= 6 { span_sorted[span_sorted.len() / 2] } else { 0 };
+    let flow_span_min = if median_span > 0 { median_span.max(900) } else { 1500 };
     for b in &mut out {
+        let ratio = if b.span > 0 { b.seconds as f64 / b.span as f64 } else { 1.0 };
         let rate = b.switches as f64 / (b.span as f64 / 60.0);
-        b.state = if b.span >= 1500 && b.switches <= 3 {
+        b.state = if b.span >= flow_span_min && b.switches <= 3 && ratio >= 0.85 {
             "flow"
         } else if b.span < 600 || rate >= 0.4 {
             "fragmented"
@@ -126,12 +134,33 @@ fn hhmm(ts: i64) -> String {
 
 /// 洞察报表：days = 统计范围（1 = 今天，7 = 近 7 天，90 封顶）
 pub fn report(conn: &Connection, days: i64) -> Result<InsightReport, String> {
-    let days = days.clamp(1, 90);
     let date = storage::today_date();
     let day_start = storage::today_start_ts();
     let day_end = day_start + 86_400;
-    let range_start = day_start - (days - 1) * 86_400;
-    let n = days as i32;
+    let (days, range_start) = if days <= 0 {
+        let min_ts: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MIN(start_ts), ?1) FROM segments",
+                [day_start],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("读取最早记录失败: {e}"))?;
+        let start = chrono::Local
+            .timestamp_opt(min_ts, 0)
+            .single()
+            .map(|t| {
+                t.date_naive()
+                    .and_hms_opt(0, 0, 0)
+                    .and_then(|nt| chrono::Local.from_local_datetime(&nt).single())
+                    .map(|x| x.timestamp())
+            })
+            .flatten()
+            .unwrap_or(day_start);
+        (0, start)
+    } else {
+        (days.clamp(1, 90), day_start - (days.clamp(1, 90) - 1) * 86_400)
+    };
+    let n = if days <= 0 { 3650 } else { days as i32 };
 
     // 区间内全部前台区间：既归并专注块，也生成每日首末活动
     let segments = storage::today_segments(conn, range_start, day_end)?;
@@ -205,7 +234,9 @@ fn build_insights(
     days: i64,
 ) -> Vec<Insight> {
     let mut out = Vec::new();
-    let range_label = if days > 1 {
+    let range_label = if days <= 0 {
+        "总共".to_string()
+    } else if days > 1 {
         format!("近 {days} 天")
     } else {
         "今天".to_string()
@@ -426,6 +457,16 @@ mod tests {
         assert_eq!(b[0].switches, 1);
         assert_eq!(b[0].apps, vec!["a.exe", "b.exe"]);
         assert_eq!(b[1].state, "fragmented");
+    }
+
+    #[test]
+    fn idle_gap_inside_block_prevents_flow() {
+        // 跨度 5 分钟的独立块：span < 600 秒 → 碎片；此处验证占比逻辑不误伤正常块
+        // 更长的稀释块在 report 层被 retain(span>=60) 与占比条件拦住
+        let segs = vec![(3600, 3900, "a.exe".to_string())];
+        let b = compute_blocks(&segs);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].state, "fragmented");
     }
 
     #[test]

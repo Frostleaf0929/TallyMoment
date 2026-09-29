@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TallyMoment",
+  "productName": "拾刻",
   "version": "0.2.0",
   "identifier": "com.tallymoment.app",
   "build": {

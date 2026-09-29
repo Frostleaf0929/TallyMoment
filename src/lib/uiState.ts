@@ -29,3 +29,9 @@ export const tabIntent = ref<{ tab: string; at: number } | null>(null);
 export function goTab(tab: string) {
   tabIntent.value = { tab, at: Date.now() };
 }
+
+/** 当前激活页（App.vue 同步写入；页面用它感知"自己被切到"，回来时刷新数据） */
+export const activeTab = ref("today");
+
+/** 要求待办页打开日志面板并定位到某天（详细·事项的"编辑"胶囊按钮用） */
+export const notesIntent = ref<{ date: string; at: number } | null>(null);

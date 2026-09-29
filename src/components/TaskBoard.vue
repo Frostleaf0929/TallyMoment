@@ -93,7 +93,6 @@ async function remove(t: Task) {
       <span
         v-else
         class="content clickable"
-        :title="`${t.content}（点击到详细 · 事项查看坚持情况）`"
         @click="emit('jump', t.templateId ?? t.id)"
         @dblclick="startEdit(t)"
       >

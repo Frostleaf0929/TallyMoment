@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watchEffect } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -15,7 +15,7 @@ import InsightsPage from "./pages/InsightsPage.vue";
 import TodoPage from "./pages/TodoPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 import PersonalizePage from "./pages/PersonalizePage.vue";
-import { appsTopN, isLight, navIntent, tabIntent } from "./lib/uiState";
+import { activeTab, appsTopN, isLight, navIntent, tabIntent } from "./lib/uiState";
 import {
   applyAppearance,
   glass,
@@ -70,6 +70,9 @@ watchEffect(() => {
   active.value = n.view === "app" || n.view === "items" || n.view === "task" ? "detail" : "history";
 });
 const collapsed = ref(localStorage.getItem("ui.side") === "collapsed");
+
+// 当前页广播给各页面（v-show 页面感知"自己被切到"时刷新数据）
+watch(active, (t) => (activeTab.value = t));
 
 const naiveTheme = ref<GlobalTheme | null>(darkTheme);
 watchEffect(() => {

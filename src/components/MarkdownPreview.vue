@@ -138,10 +138,12 @@ function del(i: number) {
 }
 
 .mdbody :deep(.mdimg) {
-  max-width: 100%;
+  max-width: min(60%, 300px);
+  max-height: 210px;
   border-radius: var(--r-sm);
   display: block;
   margin: 4px 0;
+  object-fit: contain;
 }
 
 .mdbody :deep(.miss) {

@@ -579,6 +579,14 @@ fn habit_grid(app: tauri::AppHandle, days: Option<i32>) -> Result<Vec<storage::H
     storage::habit_grid(&conn, days.unwrap_or(30))
 }
 
+/// 习惯格打卡：切换某固定事项某天的完成状态（当天没实例就补卡）
+#[tauri::command]
+fn habit_toggle(app: tauri::AppHandle, task_id: i64, date: String) -> Result<bool, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::habit_toggle(&conn, task_id, &date)
+}
+
 #[tauri::command]
 fn todo_stats(app: tauri::AppHandle) -> Result<storage::TodoStats, String> {
     let db = app.state::<Db>();
@@ -974,6 +982,15 @@ fn import_tai(
         return Ok(summary);
     }
     // fill / replace：用户明确选择的策略，允许对同一文件重复执行
+    if mode == "replace" {
+        // 替代全部是破坏性操作：清空前先自动备份整库到 数据目录/backups/
+        let backup = storage::backup_database(&conn)?;
+        let summary = storage::import_tai_data(&path, &conn, mode)?;
+        return Ok(storage::ImportSummary {
+            backup_path: Some(backup),
+            ..summary
+        });
+    }
     storage::import_tai_data(&path, &conn, mode)
 }
 
@@ -1117,6 +1134,7 @@ pub fn run() {
             task_delete,
             todo_stats,
             habit_grid,
+            habit_toggle,
             rule_list,
             rule_add,
             rule_update,

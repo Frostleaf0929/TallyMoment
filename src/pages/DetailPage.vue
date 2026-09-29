@@ -8,11 +8,10 @@ import { colorFor } from "../lib/colors";
 import { accentColor } from "../lib/chartColors";
 import { appColorMode, appNameEnglish } from "../lib/appearance";
 import { iconColor, iconUrl, requestIcons } from "../lib/appIcons";
-import { goTab, navIntent } from "../lib/uiState";
+import { activeTab, goTab, navIntent } from "../lib/uiState";
 import BallLoader from "../components/BallLoader.vue";
 import DayDetail from "../components/DayDetail.vue";
 import RangeCard from "../components/RangeCard.vue";
-import HabitGrid from "../components/HabitGrid.vue";
 import DayBars from "../components/DayBars.vue";
 import HourlyChart from "../components/HourlyChart.vue";
 
@@ -56,6 +55,33 @@ async function loadHabit() {
 const selHabit = computed(
   () => habitRows.value.find((r) => r.taskId === selectedHabit.value) ?? null
 );
+
+/** 全部固定事项总览（近 30 天完成格汇总）：想看的不只是单个任务，还有整体坚持度 */
+const habitOverview = computed(() => {
+  let arranged = 0;
+  let done = 0;
+  let best = 0;
+  let bestName = "";
+  for (const row of habitRows.value) {
+    arranged += row.cells.length;
+    done += row.cells.filter((c) => c.done).length;
+    const byDate = new Map(row.cells.map((c) => [c.date, c.done] as const));
+    let cur = 0;
+    for (const k of [...byDate.keys()].sort()) {
+      if (byDate.get(k)) {
+        cur++;
+        if (cur > best) {
+          best = cur;
+          bestName = row.content;
+        }
+      } else {
+        cur = 0;
+      }
+    }
+  }
+  const rate = arranged > 0 ? Math.round((done / arranged) * 100) : -1;
+  return { arranged, done, rate, best, bestName };
+});
 
 /** 选中固定事项的坚持统计（基于近 30 天完成格） */
 const habitStats = computed(() => {
@@ -206,6 +232,11 @@ onMounted(() => {
   void loadHabit();
 });
 
+// 切回详细页时刷新习惯数据（v-show 页面 onMounted 只跑一次）
+watch(activeTab, (t) => {
+  if (t === "detail") void loadHabit();
+});
+
 // 图标模式下批量取图标
 watchEffect(() => {
   if (appColorMode.value === "icon" || appColorMode.value === "iconColor") {
@@ -270,13 +301,31 @@ watch(navIntent, (n) => {
         />
       </section>
 
-      <!-- 习惯追踪：长期坚持的固定事项一眼可见（点待办里的任务名也会跳到这里并选中） -->
-      <section class="glass-card habitcard">
-        <HabitGrid :rows="habitRows" :model-value="selectedHabit" @select="selectedHabit = $event" />
-        <p v-if="habitErr" class="err">读取失败：{{ habitErr }}</p>
+      <!-- 全部固定事项总览：整体坚持度 + 最长连击保持者 -->
+      <section v-if="habitRows.length" class="glass-card habitstat">
+        <h2>全部固定事项 · 总览（基于近 30 天完成格；逐项明细可用上面的格点 / 时间轴视图在〈待办〉查看）</h2>
+        <div class="hsrow">
+          <div class="hs">
+            <p class="l">累计安排</p>
+            <p class="v">{{ habitOverview.arranged }} <small>天次</small></p>
+          </div>
+          <div class="hs">
+            <p class="l">完成</p>
+            <p class="v accent">{{ habitOverview.done }} <small>天次</small></p>
+          </div>
+          <div class="hs">
+            <p class="l">总体完成率</p>
+            <p class="v">{{ habitOverview.rate < 0 ? "—" : `${habitOverview.rate}%` }}</p>
+          </div>
+          <div class="hs">
+            <p class="l">最长连续</p>
+            <p class="v">{{ habitOverview.best }} <small>天</small></p>
+            <p class="l">{{ habitOverview.bestName || "—" }}</p>
+          </div>
+        </div>
       </section>
 
-      <!-- 选中固定事项的坚持统计 -->
+      <!-- 选中固定事项的坚持统计（完成格在待办页底部；点待办里的任务名跳到这里并选中） -->
       <section v-if="selHabit && habitStats" class="glass-card habitstat">
         <h2>{{ selHabit.content }} · 坚持情况（基于近 30 天完成格）</h2>
         <div class="hsrow">

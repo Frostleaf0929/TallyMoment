@@ -78,6 +78,18 @@ pub struct TodoStats {
 }
 
 /// 数据库文件位置：绿色优先（exe 旁 Data/），不可写时回退 %APPDATA%\TallyMoment\Data
+/// 把当前库完整快照到数据目录 backups/tm-backup-<时间戳>.db，返回路径
+/// （VACUUM INTO 生成单文件快照，WAL 内容已合并进去）
+pub fn backup_database(conn: &Connection) -> Result<String, String> {
+    let db_path = resolve_db_path()?;
+    let dir = db_path.parent().ok_or("数据目录异常")?.join("backups");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建备份目录失败: {e}"))?;
+    let path = dir.join(format!("tm-backup-{}.db", Local::now().format("%Y%m%d-%H%M%S")));
+    conn.execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])
+        .map_err(|e| format!("备份失败: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 pub fn resolve_db_path() -> Result<PathBuf, String> {
     let primary = std::env::current_exe()
         .ok()
@@ -675,6 +687,48 @@ pub fn habit_grid(conn: &Connection, days: i32) -> Result<Vec<HabitRow>, String>
     Ok(out)
 }
 
+/// 习惯格打卡：该日有实例则切换完成状态；没有则补一个实例并直接标记完成（补卡）
+pub fn habit_toggle(conn: &Connection, template_id: i64, date: &str) -> Result<bool, String> {
+    let row: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT id, done FROM tasks
+             WHERE (template_id = ?1 OR id = ?1)
+               AND COALESCE(substr(datetime(due_ts, 'unixepoch', 'localtime'), 1, 10),
+                            substr(datetime(created_ts, 'unixepoch', 'localtime'), 1, 10)) = ?2
+             ORDER BY (template_id IS NULL) LIMIT 1",
+            rusqlite::params![template_id, date],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    match row {
+        Some((id, done)) => {
+            task_set_done(conn, id, done == 0)?;
+            Ok(done == 0)
+        }
+        None => {
+            let (content, priority): (String, i32) = conn
+                .query_row(
+                    "SELECT content, priority FROM tasks WHERE id = ?1",
+                    [template_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(|_| "固定事项不存在".to_string())?;
+            let due = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                .ok()
+                .and_then(|d| d.and_hms_opt(9, 0, 0))
+                .map(|d| d.and_utc().timestamp());
+            let now = Local::now().timestamp();
+            conn.execute(
+                "INSERT INTO tasks(content, priority, due_ts, created_ts, done, done_ts, repeat_mode, template_id)
+                 VALUES(?1, ?2, ?3, ?4, 1, ?4, '', ?5)",
+                rusqlite::params![content, priority, due, now, template_id],
+            )
+            .map_err(|e| format!("补卡失败: {e}"))?;
+            Ok(true)
+        }
+    }
+}
+
 pub fn task_set_done(conn: &Connection, id: i64, done: bool) -> Result<(), String> {
     conn.execute(
         "UPDATE tasks SET done = ?2, done_ts = ?3 WHERE id = ?1",
@@ -782,8 +836,8 @@ pub fn todo_stats(conn: &Connection) -> Result<TodoStats, String> {
     };
     let avg_minutes: i64 = conn
         .query_row(
-            "SELECT COALESCE(AVG(done_ts - created_ts), 0) / 60 FROM tasks
-             WHERE done = 1 AND done_ts IS NOT NULL AND done_ts >= created_ts",
+            "SELECT COALESCE(AVG(done_ts - COALESCE(start_ts, created_ts)), 0) / 60 FROM tasks
+             WHERE done = 1 AND done_ts IS NOT NULL AND done_ts >= COALESCE(start_ts, created_ts)",
             [],
             |r| r.get::<_, f64>(0).map(|v| v as i64),
         )
@@ -1424,6 +1478,9 @@ pub struct ImportSummary {
     /// replace 模式下清掉的本地时间数据行数（daily+hourly+segments）
     #[serde(default)]
     pub cleared: usize,
+    /// replace 前自动备份的文件路径（命令层填）
+    #[serde(default)]
+    pub backup_path: Option<String>,
 }
 
 pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
@@ -2281,6 +2338,7 @@ pub fn tasks_import_md(conn: &Connection, path: &str) -> Result<ImportSummary, S
         segments: 0,
         skipped,
         cleared: 0,
+        backup_path: None,
     })
 }
 
@@ -2651,18 +2709,26 @@ pub fn import_tai_data(src_path: &str, conn: &Connection, mode: &str) -> Result<
     )
     .map_err(|e| format!("打开 Tai 数据库失败: {e}"))?;
 
-    for t in ["App", "DailyLog", "HoursLog"] {
-        let n: i64 = src
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
-                [t],
-                |r| r.get(0),
-            )
-            .map_err(|e| format!("读取表结构失败: {e}"))?;
-        if n == 0 {
-            return Err(format!("不是有效的 Tai 数据库（缺少表 {t}）"));
+    // Tai 的表名有两种形态：导出/教程里是 App / DailyLog / HoursLog，
+    // 真实运行库是 AppModels / DailyLogModels / HoursLogModels（首次接真库才发现）
+    let mut table = |base: &str, src: &Connection| -> Result<String, String> {
+        for cand in [base.to_string(), format!("{base}Models")] {
+            let n: i64 = src
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                    [&cand],
+                    |r| r.get(0),
+                )
+                .map_err(|e| format!("读取表结构失败: {e}"))?;
+            if n > 0 {
+                return Ok(cand);
+            }
         }
-    }
+        Err(format!("不是有效的 Tai 数据库（缺少表 {base}）"))
+    };
+    let app_t = table("App", &src)?;
+    let daily_t = table("DailyLog", &src)?;
+    let hours_t = table("HoursLog", &src)?;
 
     let mut summary = ImportSummary {
         apps: 0,
@@ -2671,6 +2737,7 @@ pub fn import_tai_data(src_path: &str, conn: &Connection, mode: &str) -> Result<
         segments: 0,
         skipped: 0,
         cleared: 0,
+        backup_path: None,
     };
 
     // replace：先清空本地时间数据（汇总与明细），键鼠/任务/规则/日志不受影响
@@ -2686,7 +2753,7 @@ pub fn import_tai_data(src_path: &str, conn: &Connection, mode: &str) -> Result<
     // 应用维表：name 优先取 exe 文件名（小写），退化用 Name；显示名 Alias > Name
     let mut app_map: HashMap<i64, i64> = HashMap::new();
     let mut stmt = src
-        .prepare("SELECT ID, Name, Alias, File FROM App")
+        .prepare(&format!("SELECT ID, Name, Alias, File FROM {app_t}"))
         .map_err(|e| format!("读取 App 失败: {e}"))?;
     let rows = stmt
         .query_map([], |r| {
@@ -2731,7 +2798,7 @@ pub fn import_tai_data(src_path: &str, conn: &Connection, mode: &str) -> Result<
     // 每日汇总（聚合同日多行）
     let mut daily: HashMap<(String, i64), i64> = HashMap::new();
     let mut stmt = src
-        .prepare("SELECT AppModelID, Date, Time FROM DailyLog")
+        .prepare(&format!("SELECT AppModelID, Date, Time FROM {daily_t}"))
         .map_err(|e| format!("读取 DailyLog 失败: {e}"))?;
     let rows = stmt
         .query_map([], |r| {
@@ -2768,7 +2835,7 @@ pub fn import_tai_data(src_path: &str, conn: &Connection, mode: &str) -> Result<
     // 每小时汇总（聚合去重）
     let mut hourly: HashMap<(String, i32, i64), i64> = HashMap::new();
     let mut stmt = src
-        .prepare("SELECT AppModelID, DataTime, Time FROM HoursLog")
+        .prepare(&format!("SELECT AppModelID, DataTime, Time FROM {hours_t}"))
         .map_err(|e| format!("读取 HoursLog 失败: {e}"))?;
     let rows = stmt
         .query_map([], |r| {
@@ -3031,6 +3098,7 @@ pub fn restore_json(conn: &Connection, path: &str) -> Result<ImportSummary, Stri
         segments: 0,
         skipped: 0,
         cleared: 0,
+        backup_path: None,
     };
 
     // 应用：老 id -> 新 id 映射
@@ -3350,6 +3418,54 @@ mod tests {
         let done_cells: Vec<_> = row.cells.iter().filter(|c| c.done).collect();
         assert_eq!(done_cells.len(), 1, "只有昨天完成");
         assert_eq!(done_cells[0].spent_min, Some(60), "done_ts-start_ts=3600 秒，应为 60 分钟");
+    }
+
+    #[test]
+    fn habit_toggle_flips_and_backfills() {
+        let path = std::env::temp_dir().join("tm-habit-toggle.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        let now = Local::now().timestamp();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, created_ts, repeat_mode) VALUES('每日锻炼', 1, ?1, 'daily')",
+            [now - 5 * 86400],
+        )
+        .unwrap();
+        let tpl: i64 = conn.last_insert_rowid();
+        let yesterday = (Local::now() - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+
+        // 当天没有实例 → 补卡并标记完成
+        assert!(habit_toggle(&conn, tpl, &yesterday).unwrap());
+        let grid = habit_grid(&conn, 30).unwrap();
+        let cell = grid[0].cells.iter().find(|c| c.date == yesterday).unwrap();
+        assert!(cell.done, "补卡应直接完成");
+
+        // 再点一次 → 取消完成
+        assert!(!habit_toggle(&conn, tpl, &yesterday).unwrap());
+        let grid = habit_grid(&conn, 30).unwrap();
+        let cell = grid[0].cells.iter().find(|c| c.date == yesterday).unwrap();
+        assert!(!cell.done, "再点应取消");
+    }
+
+    #[test]
+    #[ignore = "仅本机：只读用户真实 Tai 库验证三种导入模式；cargo test tai_real -- --ignored"]
+    fn tai_real_data_import_modes_smoke() {
+        let src = "E:/02_Programs/Utilities/Tai/Data/data.db";
+        assert!(std::path::Path::new(src).exists(), "Tai 库不在预期路径");
+        let dst = tmp_db("tai-real.db");
+        let conn = open(&dst).unwrap();
+        let s_fill = import_tai_data(src, &conn, "fill").unwrap();
+        let s_fill2 = import_tai_data(src, &conn, "fill").unwrap();
+        assert_eq!(s_fill2.daily_rows + s_fill2.hourly_rows, 0, "fill 第二遍应全跳过");
+        let s_merge = import_tai_data(src, &conn, "merge").unwrap();
+        let s_replace = import_tai_data(src, &conn, "replace").unwrap();
+        assert!(s_replace.daily_rows > 0 && s_replace.hourly_rows > 0, "replace 后应有数据");
+        eprintln!(
+            "fill: daily={} hourly={} skipped={} | merge: daily={} hourly={} | replace: cleared={} daily={} hourly={}",
+            s_fill.daily_rows, s_fill.hourly_rows, s_fill.skipped,
+            s_merge.daily_rows, s_merge.hourly_rows,
+            s_replace.cleared, s_replace.daily_rows, s_replace.hourly_rows
+        );
     }
 
     #[test]

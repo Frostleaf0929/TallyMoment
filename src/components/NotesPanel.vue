@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { jumpTo } from "../lib/uiState";
 import { NButton, NDatePicker, NInput } from "naive-ui";
 import MarkdownPreview from "./MarkdownPreview.vue";
 import {
@@ -29,8 +30,15 @@ const recent = ref<DailyNote[]>([]);
 const msg = ref("");
 const err = ref("");
 const busy = ref(false);
-/** 预览（块式），插入的图片宽度 */
-const showPreview = ref(true);
+/** 视图三态：edit 只编辑 / split 上下分栏（编辑+预览）/ preview 只读预览 */
+const noteView = ref<"edit" | "split" | "preview">("split");
+
+/** 放大：跳到「详细 · 事项」看这天（那边也有"编辑"胶囊跳回来） */
+function zoomToDetail() {
+  jumpTo("items", undefined, dateStr());
+}
+
+/** 插入图片的宽度（新图片块用） */
 const imgWidth = ref<"100%" | "60%" | "33%">("100%");
 
 function ymd(ts: number): string {
@@ -351,7 +359,7 @@ onMounted(async () => {
       <span v-if="!recent.length" class="empty">还没有日志，写第一条试试</span>
     </div>
 
-    <!-- 工具栏：选中文字后点按钮直接生效（Notion 式）；没有选中时对光标所在行生效 -->
+    <!-- 工具栏固定两行：第一行是文字效果，第二行是"新图片宽度"+ 视图切换 -->
     <div class="blocks">
       <button class="tb" title="选中行转标题（再点升级，### 后回到正文）" @click="line('heading')">标题</button>
       <button class="tb" title="转回普通段落" @click="line('plain')">正文</button>
@@ -368,15 +376,24 @@ onMounted(async () => {
       <span class="tb-sep"></span>
       <button class="tb" title="在光标处插入分割线" @click="hr">分割线</button>
       <button class="tb" @click="addImage">图片…</button>
+      <button class="tb" style="margin-left: auto" title="在「详细 · 事项」中打开这天" @click="zoomToDetail">
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+          <rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+        </svg>
+      </button>
+    </div>
+    <div class="blocks subrow">
       <span class="tb-w">
-        宽度
+        新图片宽度
         <button class="tb sm" :class="{ active: imgWidth === '33%' }" @click="imgWidth = '33%'">小</button>
         <button class="tb sm" :class="{ active: imgWidth === '60%' }" @click="imgWidth = '60%'">中</button>
         <button class="tb sm" :class="{ active: imgWidth === '100%' }" @click="imgWidth = '100%'">全宽</button>
       </span>
-      <button class="tb" style="margin-left: auto" @click="showPreview = !showPreview">
-        {{ showPreview ? "隐藏预览" : "显示预览" }}
-      </button>
+      <div class="viewseg">
+        <button :class="{ on: noteView === 'edit' }" @click="noteView = 'edit'">编辑</button>
+        <button :class="{ on: noteView === 'split' }" @click="noteView = 'split'">分栏</button>
+        <button :class="{ on: noteView === 'preview' }" @click="noteView = 'preview'">预览</button>
+      </div>
     </div>
 
     <!-- 未保存草稿提示条：意外退出也不丢内容 -->
@@ -386,7 +403,7 @@ onMounted(async () => {
       <button class="tb sm" @click="discardDraft">丢弃</button>
     </div>
 
-    <div ref="editorWrap" class="editor" @keydown="onEditorKey">
+    <div v-show="noteView !== 'preview'" ref="editorWrap" class="editor" @keydown="onEditorKey">
       <NInput
         v-model:value="content"
         type="textarea"
@@ -395,7 +412,7 @@ onMounted(async () => {
       />
     </div>
 
-    <div v-if="showPreview" class="preview">
+    <div v-show="noteView !== 'edit'" class="preview">
       <MarkdownPreview
         :content="content"
         :images="imageMap"
@@ -476,6 +493,36 @@ onMounted(async () => {
   height: 16px;
   background: var(--border);
   margin: 0 2px;
+}
+
+.blocks.subrow {
+  justify-content: space-between;
+}
+
+.viewseg {
+  display: inline-flex;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  padding: 2px;
+  background: var(--surface);
+}
+
+.viewseg button {
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 12px;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  transition: background var(--dur), color var(--dur);
+}
+
+.viewseg button.on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
 }
 
 .tb-w {

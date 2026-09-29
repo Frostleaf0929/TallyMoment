@@ -3,9 +3,12 @@ import { computed, ref } from "vue";
 import type { HabitRow } from "../types";
 
 /** 习惯追踪（参考 dsh whale 的习惯追踪器）：固定事项 × 近 N 天完成格
- *  点行名选中该事项，详细页下方显示它的统计 */
+ *  点行名选中，点格子直接打卡（当天没安排的过去日期 = 补卡完成） */
 const props = defineProps<{ rows: HabitRow[]; modelValue: number | null }>();
-const emit = defineEmits<{ (e: "select", taskId: number): void }>();
+const emit = defineEmits<{
+  (e: "select", taskId: number): void;
+  (e: "toggle", taskId: number, date: string): void;
+}>();
 
 const spanDays = ref<7 | 14 | 30>(7);
 const spans: { d: 7 | 14 | 30; label: string }[] = [
@@ -13,6 +16,7 @@ const spans: { d: 7 | 14 | 30; label: string }[] = [
   { d: 14, label: "14 天" },
   { d: 30, label: "30 天" },
 ];
+const viewMode = ref<"grid" | "timeline">("grid");
 
 const repeatLabel = (mode: string): string =>
   ({ daily: "每天", weekly: "每周", monthly: "每月", yearly: "每年" })[mode] ?? "";
@@ -22,6 +26,13 @@ function ymd(d: Date): string {
   const day = `${d.getDate()}`.padStart(2, "0");
   return `${d.getFullYear()}-${m}-${day}`;
 }
+
+const todayStr = ymd(new Date());
+
+/** 格点行的列定义：repeat() 的次数不能用 CSS 变量（v-bind 不行），用内联 style 生成 */
+const rowGrid = computed(
+  () => `minmax(130px, 1fr) repeat(${spanDays.value}, 34px)`
+);
 
 /** 近 N 天的日期轴（今天在最后） */
 const axis = computed(() => {
@@ -51,31 +62,73 @@ function cellOf(row: HabitRow, date: string) {
 
 function tip(row: HabitRow, date: string): string {
   const c = cellOf(row, date);
-  if (!c) return `${date} · 未安排`;
+  if (!c) return `${date} · 未安排（点击补卡）`;
   const mins = c.spentMin != null ? `，用时 ${c.spentMin} 分钟` : "";
-  return `${date} · ${c.done ? "已完成" : "没完成"}${mins}`;
+  return `${date} · ${c.done ? "已完成，点击取消" : "没完成，点击标记"}${mins}`;
+}
+
+/** 点格子：今天/过去的日期才允许打卡（未来还没到，不能预打卡） */
+function onCell(row: HabitRow, date: string) {
+  if (date > todayStr) return;
+  emit("toggle", row.taskId, date);
+}
+
+/* ---------- 时间轴视图：每行一根横条（首次安排 → 最近安排），完成日画实点 ---------- */
+const idxOf = computed(() => {
+  const m = new Map<string, number>();
+  axis.value.forEach((a, i) => m.set(a.date, i));
+  return m;
+});
+
+function barStyle(row: HabitRow) {
+  const dates = row.cells.map((c) => c.date).filter((d) => idxOf.value.has(d)).sort();
+  if (!dates.length) return { display: "none" };
+  const a = idxOf.value.get(dates[0]) ?? 0;
+  const b = idxOf.value.get(dates[dates.length - 1]) ?? 0;
+  const n = spanDays.value;
+  return {
+    left: `${(a / n) * 100}%`,
+    width: `${Math.max(2, ((b - a + 1) / n) * 100)}%`,
+  };
+}
+
+function dotStyle(date: string) {
+  const i = idxOf.value.get(date);
+  if (i == null) return { display: "none" };
+  return { left: `${((i + 0.5) / spanDays.value) * 100}%` };
 }
 </script>
 
 <template>
   <div>
     <div class="hg-head">
-      <p class="hg-title">习惯追踪 · 固定事项完成格（点行名看统计）</p>
-      <div class="hg-spans">
-        <button
-          v-for="s in spans"
-          :key="s.d"
-          :class="{ on: spanDays === s.d }"
-          @click="spanDays = s.d"
-        >
-          {{ s.label }}
-        </button>
+      <p class="hg-title">习惯追踪 · 固定事项完成情况（点行名选中，点格子打卡）</p>
+      <div class="hg-ctl">
+        <div class="hg-mode">
+          <button :class="{ on: viewMode === 'grid' }" @click="viewMode = 'grid'">格点</button>
+          <button :class="{ on: viewMode === 'timeline' }" @click="viewMode = 'timeline'">时间轴</button>
+        </div>
+        <div class="hg-spans">
+          <button
+            v-for="s in spans"
+            :key="s.d"
+            :class="{ on: spanDays === s.d }"
+            @click="spanDays = s.d"
+          >
+            {{ s.label }}
+          </button>
+        </div>
       </div>
     </div>
 
-    <div v-if="rows.length" class="hg-scroll">
+    <p v-if="!rows.length" class="hg-empty">
+      还没有固定事项：在〈任务〉新建时把重复选成「每天 / 每周…」，它就会出现在这里，坚持情况一眼可见。
+    </p>
+
+    <!-- 格点视图 -->
+    <div v-else-if="viewMode === 'grid'" class="hg-scroll">
       <div class="hg-grid">
-        <div class="hg-row head">
+        <div class="hg-row head" :style="{ gridTemplateColumns: rowGrid }">
           <span class="hg-name"></span>
           <span v-for="a in axis" :key="a.date" class="hg-col">
             <b>{{ a.md }}</b><i>{{ a.wk }}</i>
@@ -86,13 +139,14 @@ function tip(row: HabitRow, date: string): string {
           :key="r.taskId"
           class="hg-row"
           :class="{ sel: modelValue === r.taskId }"
+          :style="{ gridTemplateColumns: rowGrid }"
           @click="emit('select', r.taskId)"
         >
-          <span class="hg-name" :title="r.content">
+          <span class="hg-name">
             <em v-if="repeatLabel(r.repeatMode)" class="rep">{{ repeatLabel(r.repeatMode) }}</em>
             <span class="nm">{{ r.content }}</span>
           </span>
-          <span v-for="a in axis" :key="a.date" class="hg-cell" :title="tip(r, a.date)">
+          <span v-for="a in axis" :key="a.date" class="hg-cell" :title="tip(r, a.date)" @click.stop="onCell(r, a.date)">
             <span
               class="dot"
               :class="{ done: cellOf(r, a.date)?.done, miss: cellOf(r, a.date) && !cellOf(r, a.date)!.done }"
@@ -105,9 +159,42 @@ function tip(row: HabitRow, date: string): string {
         </div>
       </div>
     </div>
-    <p v-else class="hg-empty">
-      还没有固定事项：在〈待办〉新建任务时把重复选成「每天 / 每周…」，它就会出现在这里，坚持情况一眼可见。
-    </p>
+
+    <!-- 时间轴视图 -->
+    <div v-else class="hg-scroll">
+      <div class="hg-grid tl">
+        <div class="hg-row head">
+          <span class="hg-name"></span>
+          <span class="tl-axis">
+            <i v-for="a in axis" :key="a.date" :style="{ left: `${((idxOf.get(a.date)! + 0.5) / spanDays) * 100}%` }">{{ a.md }}</i>
+          </span>
+        </div>
+        <div
+          v-for="r in rows"
+          :key="r.taskId"
+          class="hg-row"
+          :class="{ sel: modelValue === r.taskId }"
+          @click="emit('select', r.taskId)"
+        >
+          <span class="hg-name">
+            <em v-if="repeatLabel(r.repeatMode)" class="rep">{{ repeatLabel(r.repeatMode) }}</em>
+            <span class="nm">{{ r.content }}</span>
+          </span>
+          <div class="tl-track">
+            <span class="tl-bar" :style="barStyle(r)"></span>
+            <span
+              v-for="c in r.cells"
+              :key="c.date"
+              class="tl-dot"
+              :class="{ done: c.done }"
+              :style="dotStyle(c.date)"
+              :title="tip(r, c.date)"
+              @click.stop="onCell(r, c.date)"
+            ></span>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -118,6 +205,7 @@ function tip(row: HabitRow, date: string): string {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 10px;
+  flex-wrap: wrap;
 }
 
 .hg-title {
@@ -127,11 +215,19 @@ function tip(row: HabitRow, date: string): string {
   color: var(--text-muted);
 }
 
+.hg-ctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hg-mode,
 .hg-spans {
   display: flex;
   gap: 4px;
 }
 
+.hg-mode button,
 .hg-spans button {
   border: 1px solid var(--border);
   background: transparent;
@@ -144,12 +240,14 @@ function tip(row: HabitRow, date: string): string {
   transition: background var(--dur), color var(--dur);
 }
 
+.hg-mode button.on,
 .hg-spans button.on {
   color: var(--accent-text);
   background: var(--accent-soft);
   border-color: var(--accent-border);
 }
 
+/* 关键：容器宽度 = 内容宽（不随可视区截断），横向滚动时行背景跟着走 */
 .hg-scroll {
   overflow-x: auto;
 }
@@ -158,12 +256,12 @@ function tip(row: HabitRow, date: string): string {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 520px;
+  width: max-content;
+  min-width: 100%;
 }
 
 .hg-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) repeat(v-bind("spanDays"), 34px);
   align-items: center;
   gap: 2px;
   padding: 6px 10px;
@@ -238,6 +336,7 @@ function tip(row: HabitRow, date: string): string {
 .hg-cell {
   display: flex;
   justify-content: center;
+  cursor: pointer;
 }
 
 .dot {
@@ -253,6 +352,10 @@ function tip(row: HabitRow, date: string): string {
   transition: background var(--dur), border-color var(--dur), transform var(--dur);
 }
 
+.hg-cell:hover .dot {
+  transform: scale(1.12);
+}
+
 .dot.done {
   background: var(--accent);
   border-color: var(--accent);
@@ -263,7 +366,7 @@ function tip(row: HabitRow, date: string): string {
   height: 12px;
 }
 
-/* 当天安排了但没完成：显眼的空心圈（边框用警示色弱化版） */
+/* 当天安排了但没完成：虚线圈提示 */
 .dot.miss {
   border-style: dashed;
   border-color: color-mix(in srgb, var(--danger) 45%, transparent);
@@ -277,6 +380,65 @@ function tip(row: HabitRow, date: string): string {
   height: 8px;
   margin: 6px;
   padding: 0;
+}
+
+/* ---------- 时间轴视图 ---------- */
+.hg-row.tl-row,
+.hg-grid.tl .hg-row {
+  grid-template-columns: minmax(130px, 1fr) 1fr;
+  min-width: 420px;
+}
+
+.tl-axis,
+.tl-track {
+  position: relative;
+  height: 22px;
+  margin-right: 4px;
+}
+
+.tl-axis {
+  height: 16px;
+}
+
+.tl-axis i {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-style: normal;
+  font-size: 9.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-track {
+  background: var(--chart-rail);
+  border-radius: var(--r-full);
+}
+
+.tl-bar {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.tl-dot {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface-solid);
+  cursor: pointer;
+}
+
+.tl-dot.done {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .hg-empty {

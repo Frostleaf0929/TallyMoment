@@ -10,7 +10,9 @@ import ReminderRules from "../components/ReminderRules.vue";
 import CalendarHeat from "../components/CalendarHeat.vue";
 import NotesPanel from "../components/NotesPanel.vue";
 import DayDetail from "../components/DayDetail.vue";
-import { jumpTo } from "../lib/uiState";
+import { jumpTo, navIntent, notesIntent, tabIntent, activeTab } from "../lib/uiState";
+import HabitGrid from "../components/HabitGrid.vue";
+import type { HabitRow } from "../types";
 
 const tasks = ref<Task[]>([]);
 const rules = ref<ReminderRule[]>([]);
@@ -66,6 +68,13 @@ watch(newContent, () => {
   taskDraftTimer = window.setTimeout(saveTaskDraft, 400);
 });
 watch([newDue, newPriority, newRepeat], () => saveTaskDraft());
+
+const debouncedHabitRefresh = ref(0);
+let habitRefreshTimer = 0;
+watch(() => tasks.value.map((t) => `${t.id}:${t.done ? 1 : 0}`).join(","), () => {
+  window.clearTimeout(habitRefreshTimer);
+  habitRefreshTimer = window.setTimeout(() => (debouncedHabitRefresh.value = Date.now()), 600);
+});
 
 const priorityOptions = [
   { label: "高", value: 2 },
@@ -168,6 +177,16 @@ async function exportAll() {
 const detailDate = ref("");
 const sheetBig = ref(false);
 
+/* 遮罩只有"按下和松开都在遮罩上"才关：在输入框里拖选文字滑出卡片不会误关 */
+let maskDownOnSelf = false;
+function maskDown(e: MouseEvent) {
+  maskDownOnSelf = e.target === e.currentTarget;
+}
+function maskRelease(e: MouseEvent, close: () => void) {
+  if (maskDownOnSelf && e.target === e.currentTarget) close();
+  maskDownOnSelf = false;
+}
+
 function openDetail(date: string) {
   detailDate.value = date;
 }
@@ -257,6 +276,49 @@ function jumpToDetail(taskId: number) {
   jumpTo("task", undefined, undefined, taskId);
 }
 
+/* 任何跨页跳转都先关掉本页的二级框：不然遮罩盖着新页面，看起来像"点了没反应" */
+watch([navIntent, tabIntent], () => {
+  openModule.value = "";
+  detailDate.value = "";
+});
+
+/* 详细 · 事项 里点"编辑"→ 打开日志面板并定位到那天 */
+watch(notesIntent, async (n) => {
+  if (!n) return;
+  notesIntent.value = null;
+  pickedDay.value = new Date(`${n.date}T00:00:00`).getTime();
+  openModule.value = "notes";
+  await load();
+});
+
+/* ---------- 习惯追踪（固定事项完成格，挪到待办页底部；点格子直接打卡） ---------- */
+const habitRows = ref<HabitRow[]>([]);
+const selHabitId = ref<number | null>(null);
+
+async function loadHabit() {
+  try {
+    habitRows.value = await invoke<HabitRow[]>("habit_grid", { days: 30 });
+  } catch {
+    habitRows.value = [];
+  }
+}
+
+async function toggleHabitCell(taskId: number, date: string) {
+  try {
+    await invoke("habit_toggle", { taskId, date });
+    await loadHabit();
+    await load();
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+// 切回待办页 / 任务有变动时都刷新完成格
+watch(activeTab, (t) => {
+  if (t === "todo") void loadHabit();
+});
+watch(debouncedHabitRefresh, () => void loadHabit());
+
 async function addTask() {
   err.value = "";
   if (!newContent.value.trim()) {
@@ -289,6 +351,7 @@ async function addTask() {
 onMounted(async () => {
   await load();
   void loadNoteSummary();
+  void loadHabit();
 });
 const rateLabel = (v: number) => (v < 0 ? "—" : `${v}%`);
 const bucketLabels = ["<15分", "15~60分", "1~4时", "4~24时", "≥1天"];
@@ -387,6 +450,16 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     </section>
 
 
+    <!-- 习惯追踪：固定事项完成格（点格子直接打卡，点行名选中看趋势） -->
+    <section class="glass-card habithost">
+      <HabitGrid
+        :rows="habitRows"
+        :model-value="selHabitId"
+        @select="selHabitId = $event"
+        @toggle="toggleHabitCell"
+      />
+    </section>
+
     <!-- 完成区间分布（已迁到洞察页，这里停用） -->
     <section v-if="false" class="glass-card">
       <h2>完成用时分布（全部任务）</h2>
@@ -410,7 +483,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
          不 Teleport 的话 position:fixed 会被困在卡片内部（表现成"同级卡片"） -->
     <!-- 模块二级框：任务 / 待办提醒 / 日志 -->
     <Teleport to="body">
-      <div v-show="openModule" class="mask" @click.self="openModule = ''">
+      <div v-show="openModule" class="mask" @mousedown="maskDown" @mouseup="maskRelease($event, () => (openModule = ''))">
         <span class="grain" aria-hidden="true"></span>
         <div class="sheet glass-card">
           <div class="modhead">
@@ -454,7 +527,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     </Teleport>
 
     <Teleport to="body">
-      <div v-show="detailDate" class="mask" @click.self="detailDate = ''">
+      <div v-show="detailDate" class="mask" @mousedown="maskDown" @mouseup="maskRelease($event, () => (detailDate = ''))">
         <span class="grain" aria-hidden="true"></span>
       <div class="sheet glass-card" :class="{ big: sheetBig }">
         <div class="modhead">
