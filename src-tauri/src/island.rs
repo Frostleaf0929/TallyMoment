@@ -84,6 +84,22 @@ pub fn show(app: &AppHandle) {
         Ok(win) => {
             round_corners(&win);
             eprintln!("[island] 窗口已创建");
+            // 入场：从屏幕上方滑入（zmd-charge 式弹出；仅首次创建时播一次）
+            {
+                let win2 = win.clone();
+                let (tx, ty) = (x.max(0.0), y.max(0.0));
+                std::thread::spawn(move || {
+                    let steps = 10;
+                    for i in 0..=steps {
+                        let t = i as f64 / steps as f64;
+                        let e = 1.0 - (1.0 - t) * (1.0 - t);
+                        let yy = ty - 64.0 * (1.0 - e);
+                        let _ = win2.set_position(tauri::LogicalPosition::new(tx, yy));
+                        std::thread::sleep(std::time::Duration::from_millis(14));
+                    }
+                    let _ = win2.set_position(tauri::LogicalPosition::new(tx, ty));
+                });
+            }
             // 兜底：前端就绪信号 2.5 秒内没来（加载失败/事件丢失）也强制显示，
             // 宁可短暂黑底也不能"开关打开了却什么都不出现"
             let handle = app.clone();
@@ -167,7 +183,11 @@ pub fn notify_modules(app: &AppHandle, modules: &[String]) {
 /// 目标位置按位置模式：center/left/right 对齐屏幕，custom 以当前中心为锚对称扩展
 pub fn set_state(app: &AppHandle, state: &str) {
     let (tw, th) = match state {
-        "idle" => (ISLAND_W_IDLE, ISLAND_H_IDLE),
+        // idle 宽度可在个性化里调（WinIsland 的"隐藏后宽度"）
+        "idle" => (
+            with_setting(app, |conn| idle_width(conn)).unwrap_or(ISLAND_W_IDLE),
+            ISLAND_H_IDLE,
+        ),
         "expanded" => (ISLAND_W, ISLAND_H_EXPANDED),
         _ => (ISLAND_W, ISLAND_H_COLLAPSED),
     };
@@ -226,6 +246,30 @@ pub fn pos_mode(conn: &rusqlite::Connection) -> String {
 
 pub fn set_pos_mode(conn: &rusqlite::Connection, mode: &str) {
     let _ = crate::storage::set_setting(conn, "island.pos_mode", mode);
+}
+
+/// 鼠标离开后延迟多久缩成 idle（秒，0=立即）
+pub fn hide_delay_sec(conn: &rusqlite::Connection) -> i64 {
+    crate::storage::get_setting(conn, "island.hide_delay_sec")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(1)
+        .clamp(0, 30)
+}
+
+pub fn set_hide_delay_sec(conn: &rusqlite::Connection, sec: i64) {
+    let _ = crate::storage::set_setting(conn, "island.hide_delay_sec", &sec.to_string());
+}
+
+/// idle 态的宽度（px，WinIsland 的"隐藏后宽度"）
+pub fn idle_width(conn: &rusqlite::Connection) -> f64 {
+    crate::storage::get_setting(conn, "island.idle_width")
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(ISLAND_W_IDLE)
+        .clamp(120.0, 360.0)
+}
+
+pub fn set_idle_width(conn: &rusqlite::Connection, w: f64) {
+    let _ = crate::storage::set_setting(conn, "island.idle_width", &format!("{w:.0}"));
 }
 
 pub fn idle_enabled(conn: &rusqlite::Connection) -> bool {

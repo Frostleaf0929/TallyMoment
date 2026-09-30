@@ -212,6 +212,8 @@ const islandOn = ref(false);
 const islandPos = ref("center");
 const islandIdle = ref(true);
 const islandMaterial = ref("solid");
+const islandHideDelay = ref(1);
+const islandIdleWidth = ref(240);
 const islandAccentMode = ref("endfield");
 const POS_DEFS: Record<string, string> = {
   center: "顶部居中",
@@ -308,6 +310,22 @@ async function setIslandMaterial(m: string) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
 }
+async function setIslandBehavior(part: "delay" | "width", delta: number) {
+  try {
+    if (part === "delay") {
+      const v = Math.min(30, Math.max(0, islandHideDelay.value + delta));
+      await invoke("island_set_behavior", { hideDelaySec: v });
+      islandHideDelay.value = v;
+    } else {
+      const v = Math.min(360, Math.max(120, islandIdleWidth.value + delta));
+      await invoke("island_set_behavior", { idleWidth: v });
+      islandIdleWidth.value = v;
+    }
+    msg.value = "原子岛行为已更新";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
 async function setIslandAccentMode(m: string) {
   try {
     await invoke("island_set_accent_mode", { mode: m });
@@ -325,9 +343,11 @@ onMounted(async () => {
     if (mods.length) islandModules.value = mods;
     islandPos.value = await invoke<string>("island_get_pos_mode");
     islandIdle.value = await invoke<boolean>("island_get_idle_enabled");
-    const d = await invoke<{ material: string; accentMode: string }>("island_data");
+    const d = await invoke<{ material: string; accentMode: string; hideDelaySec: number; idleWidth: number }>("island_data");
     islandMaterial.value = d.material;
     islandAccentMode.value = d.accentMode;
+    islandHideDelay.value = d.hideDelaySec;
+    islandIdleWidth.value = d.idleWidth;
   } catch {
     islandOn.value = false;
   }
@@ -452,10 +472,32 @@ onMounted(async () => {
       </div>
       <div class="row">
         <div class="rlabel">
-          <p class="rt">无悬停时缩小</p>
-          <p class="rd">鼠标移开后收成小胶囊只留核心信息，悬停放大成完整胶囊（WinIsland 式）</p>
+          <p class="rt">自动隐藏（无悬停时缩小）</p>
+          <p class="rd">鼠标移开后收成小胶囊只留核心信息，悬停放大成完整胶囊；右键按住胶囊可直接拖动位置，左键点击展开</p>
         </div>
         <NSwitch v-model:value="islandIdle" size="small" @update:value="setIslandIdle" />
+      </div>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">隐藏延迟</p>
+          <p class="rd">鼠标离开后等几秒再缩小（0 = 立即）</p>
+        </div>
+        <div class="stepper">
+          <button class="mini" @click="setIslandBehavior('delay', -1)">−</button>
+          <span class="sval">{{ islandHideDelay }} 秒</span>
+          <button class="mini" @click="setIslandBehavior('delay', 1)">+</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">隐藏后宽度</p>
+          <p class="rd">缩小态胶囊的宽度（120~360，按你喜欢调）</p>
+        </div>
+        <div class="stepper">
+          <button class="mini" @click="setIslandBehavior('width', -20)">−</button>
+          <span class="sval">{{ islandIdleWidth }} px</span>
+          <button class="mini" @click="setIslandBehavior('width', 20)">+</button>
+        </div>
       </div>
       <p class="rd more">
         悬停显示完整胶囊；点击胶囊本体展开待办列表并可直接勾掉，再点一下收起；
@@ -1032,6 +1074,23 @@ onMounted(async () => {
 
 .mname.faint {
   color: var(--text-faint);
+}
+
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 3px 8px;
+  background: var(--surface);
+}
+
+.sval {
+  min-width: 52px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .mini {

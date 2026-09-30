@@ -18,6 +18,8 @@ interface IslandData {
   idleEnabled: boolean;
   material: string;
   accentMode: string;
+  hideDelaySec: number;
+  idleWidth: number;
 }
 
 // 主程序强调色（与 src/styles/theme.css 一致）
@@ -179,7 +181,13 @@ function tickClock() {
 // ===== 点击 vs 拖动判别 =====
 let downX = 0, downY = 0, dragStarted = false, pressing = false;
 
+bar.addEventListener("contextmenu", (e) => e.preventDefault());
 bar.addEventListener("mousedown", (e) => {
+  // 右键长按直接拖动（WinIsland 的"右键长按移动"），左键留给点击展开
+  if (e.button === 2) {
+    invoke("island_start_drag").catch(() => {});
+    return;
+  }
   if (e.button !== 0) return;
   pressing = true;
   dragStarted = false;
@@ -200,12 +208,26 @@ window.addEventListener("mouseup", () => {
   if (!dragStarted) setState(state === "expanded" ? "normal" : "expanded");
 });
 
-// WinIsland 式悬停：进入放大、离开缩小（展开态不缩回，点本体再收起）
+// WinIsland 式悬停：进入放大、离开延迟缩小（展开态不缩回，点本体再收起）
+let hideTimer: number | undefined;
 document.addEventListener("mouseenter", () => {
+  if (hideTimer !== undefined) {
+    clearTimeout(hideTimer);
+    hideTimer = undefined;
+  }
   if (state === "idle") setState("normal");
 });
 document.addEventListener("mouseleave", () => {
-  if (state === "normal" && idleEnabled) setState("idle");
+  if (state !== "normal" || !idleEnabled) return;
+  const delay = Math.max(0, data?.hideDelaySec ?? 1) * 1000;
+  if (delay === 0) {
+    setState("idle");
+    return;
+  }
+  hideTimer = window.setTimeout(() => {
+    hideTimer = undefined;
+    if (state === "normal") setState("idle");
+  }, delay);
 });
 
 // 任务完成 + 设置

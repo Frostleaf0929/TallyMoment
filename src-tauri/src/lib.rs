@@ -811,6 +811,10 @@ struct IslandData {
     material: String,
     /// 强调色模式：endfield / accent
     accent_mode: String,
+    /// 鼠标离开后延迟缩小秒数
+    hide_delay_sec: i64,
+    /// idle 态宽度
+    idle_width: f64,
 }
 
 #[tauri::command]
@@ -826,6 +830,8 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
         idle_enabled: true,
         material: "solid".into(),
         accent_mode: "endfield".into(),
+        hide_delay_sec: 1,
+        idle_width: 240.0,
     };
     let shared = app.state::<TrackerShared>();
     let paused = shared.paused.load(Ordering::Relaxed);
@@ -882,7 +888,11 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
     let idle_enabled = island::idle_enabled(&conn);
     let material = island::material(&conn);
     let accent_mode = island::accent_mode(&conn);
+    let hide_delay_sec = island::hide_delay_sec(&conn);
+    let idle_width = island::idle_width(&conn);
     IslandData {
+        hide_delay_sec,
+        idle_width,
         focus_name,
         focus_sec,
         done_today,
@@ -1035,6 +1045,30 @@ fn get_track_self(app: tauri::AppHandle) -> bool {
     app.state::<TrackerShared>()
         .track_self
         .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 行为设置：隐藏延迟（秒）/ 隐藏后宽度（px）
+#[tauri::command]
+fn island_set_behavior(
+    app: tauri::AppHandle,
+    hide_delay_sec: Option<i64>,
+    idle_width: Option<f64>,
+) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    if let Some(sec) = hide_delay_sec {
+        if !(0..=30).contains(&sec) {
+            return Err("隐藏延迟需在 0~30 秒".into());
+        }
+        island::set_hide_delay_sec(&conn, sec);
+    }
+    if let Some(w) = idle_width {
+        if !(120.0..=360.0).contains(&w) {
+            return Err("隐藏后宽度需在 120~360".into());
+        }
+        island::set_idle_width(&conn, w);
+    }
+    Ok(())
 }
 
 /// 应用级"后台跟踪"开关（BongoCat 等挂后台的应用也累计时长）
@@ -1518,6 +1552,7 @@ pub fn run() {
             app_set_track_background,
             set_track_self,
             get_track_self,
+            island_set_behavior,
             rule_list,
             rule_add,
             rule_update,
