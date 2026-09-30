@@ -18,6 +18,7 @@ interface DataInfo {
 /** 开发模式下自启动会因缺少 dev 服务器而报连接错误，界面上直接说明 */
 const isDev = import.meta.env.DEV;
 const autoStart = ref(false);
+const trackSelf = ref(false);
 type DataMod = "tasks" | "rules" | "all";
 const mod = ref<DataMod>("tasks");
 const dataMsg = ref("");
@@ -132,6 +133,15 @@ async function importModule() {
 const data = ref<DataInfo | null>(null);
 const msg = ref("");
 
+async function toggleTrackSelf(v: boolean) {
+  try {
+    await invoke("set_track_self", { on: v });
+    trackSelf.value = v;
+  } catch (e) {
+    dataErr.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
 async function toggleAutoStart(v: boolean) {
   try {
     if (v) await enable();
@@ -166,6 +176,11 @@ onMounted(async () => {
     autoStart.value = false;
   }
   try {
+    trackSelf.value = await invoke<boolean>("get_track_self");
+  } catch {
+    trackSelf.value = false;
+  }
+  try {
     data.value = await invoke<DataInfo>("data_info");
   } catch {
     /* 忽略 */
@@ -194,6 +209,13 @@ onMounted(async () => {
         开机时那个服务器没在运行，所以会弹出「无法访问此页面 / localhost 拒绝连接」——这是开发模式的必然现象，
         不是自启动没注册。打包之后（pnpm tauri build）界面从程序自带文件加载，自启动就正常了。
       </p>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">记录拾刻自身</p>
+          <p class="rd">默认关闭：弹提醒卡会把拾刻置为前台，计进去会污染应用统计；打开后拾刻自己的前台时间也正常记录</p>
+        </div>
+        <NSwitch :value="trackSelf" @update:value="toggleTrackSelf" />
+      </div>
       <div class="row">
         <div class="rlabel">
           <p class="rt">记录</p>

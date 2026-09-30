@@ -21,6 +21,8 @@ const TRAY_REFRESH_SECS: i64 = 30;
 pub struct TrackerShared {
     pub paused: AtomicBool,
     pub session: Mutex<Option<Session>>,
+    /// 是否记录拾刻自身的前台时间（默认 false=排除，防提醒弹窗污染统计）
+    pub track_self: AtomicBool,
 }
 
 /// 当前进行中的前台会话
@@ -172,8 +174,8 @@ pub fn spawn(app: AppHandle) {
             continue;
         };
 
-        if self_key.as_ref() == Some(&app_key) {
-            // 前台是自己：不计时
+        if self_key.as_ref() == Some(&app_key) && !shared.track_self.load(Ordering::Relaxed) {
+            // 前台是自己且未开"记录自身"：不计时（弹提醒卡会把拾刻置前台，计进去会污染统计）
             if let Ok(mut guard) = shared.session.lock() {
                 if let Some(s) = guard.take() {
                     with_db(&app, |db| close_session(db, &s, now));

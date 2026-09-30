@@ -14,15 +14,23 @@ pub const ISLAND_H_IDLE: f64 = 40.0;
 /// 动画代数：新动画开始时 +1，旧动画线程发现代数不一致即自行退出（防鼠标快速进出堆叠）
 static ANIM_GEN: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
-pub fn logical_screen(app: &AppHandle) -> (f64, f64) {
+/// 主屏逻辑几何：(原点x, 原点y, 宽, 高)——多屏时原点非 0,0，定位必须加偏移
+pub fn logical_screen(app: &AppHandle) -> (f64, f64, f64, f64) {
     app.primary_monitor()
         .ok()
         .flatten()
         .map(|m| {
             let sc = m.scale_factor();
-            (m.size().width as f64 / sc, m.size().height as f64 / sc)
+            let pos = m.position();
+            let size = m.size();
+            (
+                pos.x as f64 / sc,
+                pos.y as f64 / sc,
+                size.width as f64 / sc,
+                size.height as f64 / sc,
+            )
         })
-        .unwrap_or((1280.0, 800.0))
+        .unwrap_or((0.0, 0.0, 1280.0, 800.0))
 }
 
 /// 读取开关
@@ -38,16 +46,16 @@ pub fn show(app: &AppHandle) {
         let _ = win.show();
         return;
     }
-    let (sw, _sh) = logical_screen(app);
+    let (mx, _my, sw, _sh) = logical_screen(app);
     // 位置模式：有手动拖动记录视为 custom，否则默认顶部居中
     let pm = with_setting(app, |conn| pos_mode(conn)).unwrap_or_else(|| "center".into());
     let (x, y) = if pm == "custom" {
-        saved_pos(app).unwrap_or(((sw - ISLAND_W) / 2.0, 8.0))
+        saved_pos(app).unwrap_or((mx + (sw - ISLAND_W) / 2.0, 8.0))
     } else {
         let px = match pm.as_str() {
-            "left" => 8.0,
-            "right" => sw - ISLAND_W - 8.0,
-            _ => (sw - ISLAND_W) / 2.0,
+            "left" => mx + 8.0,
+            "right" => mx + sw - ISLAND_W - 8.0,
+            _ => mx + (sw - ISLAND_W) / 2.0,
         };
         (px, 8.0)
     };
@@ -104,6 +112,7 @@ pub fn hide(app: &AppHandle) {
 
 /// 材质切换需重建窗口（系统效果不能热切换）：关闭后按新设置重开
 pub fn rebuild(app: &AppHandle) {
+    eprintln!("[island] rebuild: 关闭旧窗口并按新材质重建");
     if let Some(win) = app.get_webview_window("island") {
         let _ = win.close();
         for _ in 0..60 {
@@ -171,16 +180,11 @@ pub fn set_state(app: &AppHandle, state: &str) {
         win.inner_size().ok().map(|s| s.height as f64 / sc).unwrap_or(ISLAND_H_COLLAPSED),
     );
     let pm = with_setting(app, |conn| pos_mode(conn)).unwrap_or_else(|| "center".into());
+    let (mx, _my, sw, _sh) = logical_screen(app);
     let (tx, ty) = match pm.as_str() {
-        "left" => (8.0, 8.0),
-        "right" => {
-            let (sw, _sh) = logical_screen(app);
-            (sw - tw - 8.0, 8.0)
-        }
-        "center" => {
-            let (sw, _sh) = logical_screen(app);
-            ((sw - tw) / 2.0, 8.0)
-        }
+        "left" => (mx + 8.0, 8.0),
+        "right" => (mx + sw - tw - 8.0, 8.0),
+        "center" => (mx + (sw - tw) / 2.0, 8.0),
         _ => (cx + (cw - tw) / 2.0, cy.min(8.0)), // custom：水平中心锚定，顶边不动
     };
     if (cw - tw).abs() < 0.5 && (ch - th).abs() < 0.5 {
@@ -190,7 +194,9 @@ pub fn set_state(app: &AppHandle, state: &str) {
     }
     let gen = ANIM_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     std::thread::spawn(move || {
-        let steps = 14;
+        // 8 步 × 16ms ≈ 128ms：步数多了窗口 resize IPC 反而卡（Tauri 官方文档：
+        // 透明/带效果窗口的 resize 在 Win10 1903+ / Win11 上开销大，尽量少动）
+        let steps = 8;
         for i in 1..=steps {
             if ANIM_GEN.load(std::sync::atomic::Ordering::Relaxed) != gen {
                 return; // 有新动画接管，本线程退出
@@ -199,7 +205,7 @@ pub fn set_state(app: &AppHandle, state: &str) {
             let e = 1.0 - (1.0 - t) * (1.0 - t); // easeOutQuad
             let _ = win.set_size(tauri::LogicalSize::new(cw + (tw - cw) * e, ch + (th - ch) * e));
             let _ = win.set_position(tauri::LogicalPosition::new(cx + (tx - cx) * e, cy + (ty - cy) * e));
-            std::thread::sleep(std::time::Duration::from_millis(12));
+            std::thread::sleep(std::time::Duration::from_millis(16));
         }
         let _ = win.set_size(tauri::LogicalSize::new(tw, th));
         let _ = win.set_position(tauri::LogicalPosition::new(tx, ty));
@@ -270,8 +276,8 @@ pub fn set_expanded(app: &AppHandle, expanded: bool) {
 
 /// 位置重置：回屏幕顶部居中
 pub fn reset_pos(app: &AppHandle) {
-    let (sw, _sh) = logical_screen(app);
-    let x = (sw - ISLAND_W) / 2.0;
+    let (mx, _my, sw, _sh) = logical_screen(app);
+    let x = mx + (sw - ISLAND_W) / 2.0;
     if let Some(win) = app.get_webview_window("island") {
         let _ = win.set_position(tauri::LogicalPosition::new(x, 8.0));
     }

@@ -7,6 +7,8 @@ import type { Task } from "../types";
 const props = defineProps<{ tasks: Task[] }>();
 const emit = defineEmits<{ (e: "reload"): void; (e: "jump", taskId: number): void }>();
 
+const showAllDone = ref(false);
+const DONE_PREVIEW = 12;
 const editingId = ref<number | null>(null);
 const editDraft = ref("");
 const editStyle = ref("");
@@ -30,6 +32,9 @@ const intervalLabel = (m: number) =>
 
 const open = computed(() => props.tasks.filter((t) => !t.done));
 const closed = computed(() => props.tasks.filter((t) => t.done));
+const closedShown = computed(() =>
+  showAllDone.value ? closed.value : closed.value.slice(0, DONE_PREVIEW)
+);
 
 const priorityLabel = (p: number) => (p === 2 ? "高" : p === 0 ? "低" : "中");
 const priorityClass = (p: number) => (p === 2 ? "high" : p === 0 ? "low" : "mid");
@@ -124,8 +129,8 @@ async function remove(t: Task) {
       <span
         v-else
         class="content clickable"
+        title="点击跳转详情"
         @click="emit('jump', t.templateId ?? t.id)"
-        @dblclick="startEdit(t)"
       >
         {{ t.content }}
       </span>
@@ -144,6 +149,7 @@ async function remove(t: Task) {
       <button v-if="!t.done" class="startbtn" :class="{ on: !!t.startTs }" :title="t.startTs ? '结束计时' : '开始做'" @click="toggleStart(t)">
         {{ t.startTs ? "计时中" : "开始" }}
       </button>
+      <button v-if="!t.done" class="startbtn editbtn" title="编辑内容与提醒" @click="startEdit(t)">编辑</button>
       <NPopconfirm @positive-click="remove(t)">
         <template #trigger>
           <NButton quaternary size="tiny" type="error">删除</NButton>
@@ -153,8 +159,17 @@ async function remove(t: Task) {
     </div>
     <p v-if="!open.length" class="empty">没有进行中的任务，上面加一条吧</p>
 
-    <p v-if="closed.length" class="done-head">已完成 · {{ closed.length }}</p>
-    <div v-for="t in closed" :key="'d' + t.id" class="row done">
+    <p v-if="closed.length" class="done-head">
+      已完成 · {{ closed.length }}（显示{{ showAllDone ? "全部" : `最近 ${DONE_PREVIEW} 条` }})
+      <button
+        v-if="closed.length > DONE_PREVIEW"
+        class="startbtn"
+        @click="showAllDone = !showAllDone"
+      >
+        {{ showAllDone ? "收起" : "展开全部" }}
+      </button>
+    </p>
+    <div v-for="t in closedShown" :key="'d' + t.id" class="row done">
       <NCheckbox
         size="small"
         :checked="t.done"
@@ -318,6 +333,11 @@ async function remove(t: Task) {
   padding: 1px 8px;
   cursor: pointer;
   flex: none;
+}
+
+.startbtn.editbtn {
+  color: var(--accent-text);
+  border-color: var(--accent-border);
 }
 
 .startbtn.on {

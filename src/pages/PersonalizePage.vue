@@ -419,7 +419,7 @@ onMounted(async () => {
       <div class="row col">
         <div class="rlabel">
           <p class="rt">材质</p>
-          <p class="rd">毛玻璃/云母为系统级效果（Win11），切换会短暂重建窗口；若出现黑底请换回纯色</p>
+          <p class="rd">毛玻璃/云母为系统级效果（Win11）；官方文档确认这类效果会显著拖慢窗口缩放（悬停动效可能变卡），若卡顿或黑底请换回纯色</p>
         </div>
         <div class="seg grid3">
           <button

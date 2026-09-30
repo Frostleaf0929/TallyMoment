@@ -272,6 +272,14 @@ const appColor = (a: AppUsage) => {
 
 const maxSeconds = computed(() => Math.max(1, ...(report.value?.apps ?? []).map((a) => a.seconds)));
 
+/** 统计卡数值防换行：内容长就降字号（单行优先） */
+function szClass(text: string): string {
+  const n = text.replace(/\s/g, "").length;
+  if (n > 10) return "longer";
+  if (n > 6) return "long";
+  return "";
+}
+
 const filteredApps = computed(() => {
   const k = keyword.value.trim().toLowerCase();
   const list = report.value?.apps ?? [];
@@ -484,7 +492,7 @@ watch(navIntent, (n) => {
             </button>
             <!-- 行内信息卡：紧跟选中应用，内容与底部完整卡一致；底部卡在它滚出视野前隐藏 -->
             <div v-if="selectedApp === a.name && info" v-show="inlineVisible" class="appinfo inline">
-              <p class="ai-name">{{ info.displayName }}</p>
+              <p class="ai-name" :title="info.displayName">{{ info.displayName }}</p>
               <p class="ai-line">{{ info.name }}</p>
               <p class="ai-line path" :title="info.exePath ?? ''">{{ info.exePath || "（无路径记录）" }}</p>
               <button class="ai-btn" :disabled="infoBusy" @click.stop="toggleIgnore">
@@ -502,7 +510,7 @@ watch(navIntent, (n) => {
 
         <!-- 底部完整信息卡：行内卡在视野里时隐藏，滚出后顶上 -->
         <div v-if="info && !inlineVisible" class="appinfo">
-          <p class="ai-name">{{ info.displayName }}</p>
+          <p class="ai-name" :title="info.displayName">{{ info.displayName }}</p>
           <p class="ai-line">{{ info.name }}</p>
           <p class="ai-line path" :title="info.exePath ?? ''">{{ info.exePath || "（无路径记录）" }}</p>
           <button class="ai-btn" :disabled="infoBusy" @click="toggleIgnore">
@@ -532,11 +540,11 @@ watch(navIntent, (n) => {
         <section class="cards">
           <div class="glass-card stat">
             <p class="label">{{ current ? `${appLabel(current)} · 总时长` : "全部应用 · 总时长" }}</p>
-            <p class="value accent">{{ fmtDuration(report?.totalSeconds ?? 0) }}</p>
+            <p class="value accent" :class="szClass(fmtDuration(report?.totalSeconds ?? 0))">{{ fmtDuration(report?.totalSeconds ?? 0) }}</p>
           </div>
           <div class="glass-card stat">
             <p class="label">平均每活跃日</p>
-            <p class="value">{{ fmtDuration(report?.avgPerDay ?? 0) }}</p>
+            <p class="value" :class="szClass(fmtDuration(report?.avgPerDay ?? 0))">{{ fmtDuration(report?.avgPerDay ?? 0) }}</p>
           </div>
           <div class="glass-card stat">
             <p class="label">活跃天数 / 应用数</p>
@@ -909,6 +917,16 @@ watch(navIntent, (n) => {
   font-weight: 700;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 内容长（如"15 小时 49 分"）时降字号，保证单行不换行 */
+.stat .value.long {
+  font-size: 16px;
+}
+
+.stat .value.longer {
+  font-size: 14px;
 }
 
 .stat .value.accent {
@@ -978,6 +996,9 @@ watch(navIntent, (n) => {
   font-size: 14px;
   font-weight: 700;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ai-line {
@@ -1049,7 +1070,7 @@ watch(navIntent, (n) => {
 .approw {
   display: grid;
   /* 序号位/图标位/名称/时长：图标列 22px，避免 16px 图标溢出压字 */
-  grid-template-columns: 22px 1fr auto;
+  grid-template-columns: 22px 1fr auto auto;
   grid-template-rows: auto auto;
   align-items: center;
   gap: 4px 10px;
@@ -1105,7 +1126,8 @@ watch(navIntent, (n) => {
 }
 
 .abg {
-  flex: none;
+  grid-column: 4;
+  white-space: nowrap;
   font-size: 10px;
   color: var(--text-faint);
   background: var(--surface);
@@ -1127,7 +1149,7 @@ watch(navIntent, (n) => {
 }
 
 .abar {
-  grid-column: 1 / 4;
+  grid-column: 1 / 5;
   display: block;
   height: 4px;
   border-radius: 2px;

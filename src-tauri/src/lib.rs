@@ -973,15 +973,12 @@ fn island_set_pos_mode(app: tauri::AppHandle, mode: String) -> Result<(), String
     }
     if let Some(win) = app.get_webview_window("island") {
         if mode != "custom" {
-            let (sw, _sh) = island::logical_screen(&app);
-            let w = match mode.as_str() {
-                "left" | "right" => island::ISLAND_W,
-                _ => island::ISLAND_W,
-            };
+            let (mx, _my, sw, _sh) = island::logical_screen(&app);
+            let w = island::ISLAND_W;
             let x = match mode.as_str() {
-                "left" => 8.0,
-                "right" => sw - w - 8.0,
-                _ => (sw - w) / 2.0,
+                "left" => mx + 8.0,
+                "right" => mx + sw - w - 8.0,
+                _ => mx + (sw - w) / 2.0,
             };
             let _ = win.set_position(tauri::LogicalPosition::new(x, 8.0));
         }
@@ -1017,6 +1014,27 @@ fn island_set_idle_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), S
         island::set_state(&app, "normal");
     }
     Ok(())
+}
+
+/// 是否记录拾刻自身的前台时间
+#[tauri::command]
+fn set_track_self(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+        storage::set_setting(&conn, "track.self", if on { "1" } else { "0" });
+    }
+    app.state::<TrackerShared>()
+        .track_self
+        .store(on, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_track_self(app: tauri::AppHandle) -> bool {
+    app.state::<TrackerShared>()
+        .track_self
+        .load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// 应用级"后台跟踪"开关（BongoCat 等挂后台的应用也累计时长）
@@ -1445,6 +1463,9 @@ pub fn run() {
         }
     };
     eprintln!("[tallymoment] 数据库: {}", db_path.display());
+    // "记录拾刻自身"初始值（默认排除，防提醒弹窗污染前台统计）
+    let track_self_init =
+        storage::get_setting(&db, "track.self").map(|v| v == "1").unwrap_or(false);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1457,6 +1478,7 @@ pub fn run() {
         .manage(TrackerShared {
             paused: AtomicBool::new(false),
             session: Mutex::new(None),
+            track_self: AtomicBool::new(track_self_init),
         })
         .manage(TrayMenu {
             today: OnceLock::new(),
@@ -1494,6 +1516,8 @@ pub fn run() {
             island_set_material,
             island_set_accent_mode,
             app_set_track_background,
+            set_track_self,
+            get_track_self,
             rule_list,
             rule_add,
             rule_update,
