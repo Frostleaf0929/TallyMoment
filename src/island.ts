@@ -20,6 +20,8 @@ interface IslandData {
   accentMode: string;
   hideDelaySec: number;
   idleWidth: number;
+  hideMode: string;
+  snapReveal: number;
 }
 
 // 主程序强调色（与 src/styles/theme.css 一致）
@@ -46,7 +48,7 @@ function applyAccent(mode: string) {
   root.style.setProperty("--acc-line", hexA(hex, 0.45));
 }
 
-let state: "idle" | "normal" | "expanded" = "normal";
+let state: "idle" | "normal" | "expanded" | "snap" = "normal";
 let idleEnabled = true;
 let modules: string[] = ["focus", "next", "done"];
 let data: IslandData | null = null;
@@ -74,9 +76,9 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function setState(s: "idle" | "normal" | "expanded") {
+function setState(s: "idle" | "normal" | "expanded" | "snap") {
   state = s;
-  document.body.classList.remove("idle", "normal", "expanded");
+  document.body.classList.remove("idle", "normal", "expanded", "snap");
   document.body.classList.add(s);
   applyData();
   invoke("island_set_state", { state: s }).catch(() => {});
@@ -181,13 +183,7 @@ function tickClock() {
 // ===== 点击 vs 拖动判别 =====
 let downX = 0, downY = 0, dragStarted = false, pressing = false;
 
-bar.addEventListener("contextmenu", (e) => e.preventDefault());
 bar.addEventListener("mousedown", (e) => {
-  // 右键长按直接拖动（WinIsland 的"右键长按移动"），左键留给点击展开
-  if (e.button === 2) {
-    invoke("island_start_drag").catch(() => {});
-    return;
-  }
   if (e.button !== 0) return;
   pressing = true;
   dragStarted = false;
@@ -215,7 +211,7 @@ document.addEventListener("mouseenter", () => {
     clearTimeout(hideTimer);
     hideTimer = undefined;
   }
-  if (state === "idle") setState("normal");
+  if (state === "idle" || state === "snap") setState("normal");
 });
 document.addEventListener("mouseleave", () => {
   if (state !== "normal" || !idleEnabled) return;
@@ -226,7 +222,8 @@ document.addEventListener("mouseleave", () => {
   }
   hideTimer = window.setTimeout(() => {
     hideTimer = undefined;
-    if (state === "normal") setState("idle");
+    if (state !== "normal") return;
+    setState(data?.hideMode === "snap" ? "snap" : "idle");
   }, delay);
 });
 

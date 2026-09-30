@@ -214,6 +214,12 @@ const islandIdle = ref(true);
 const islandMaterial = ref("solid");
 const islandHideDelay = ref(1);
 const islandIdleWidth = ref(240);
+const islandHideMode = ref("shrink");
+const islandSnapReveal = ref(8);
+const HIDE_MODE_DEFS: Record<string, string> = {
+  shrink: "缩小胶囊",
+  snap: "靠边吸附",
+};
 const islandAccentMode = ref("endfield");
 const POS_DEFS: Record<string, string> = {
   center: "顶部居中",
@@ -310,18 +316,34 @@ async function setIslandMaterial(m: string) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
 }
-async function setIslandBehavior(part: "delay" | "width", delta: number) {
+async function setIslandBehavior(
+  part: "delay" | "width" | "reveal",
+  delta: number
+) {
   try {
     if (part === "delay") {
       const v = Math.min(30, Math.max(0, islandHideDelay.value + delta));
       await invoke("island_set_behavior", { hideDelaySec: v });
       islandHideDelay.value = v;
-    } else {
+    } else if (part === "width") {
       const v = Math.min(360, Math.max(120, islandIdleWidth.value + delta));
       await invoke("island_set_behavior", { idleWidth: v });
       islandIdleWidth.value = v;
+    } else {
+      const v = Math.min(24, Math.max(4, islandSnapReveal.value + delta));
+      await invoke("island_set_behavior", { snapReveal: v });
+      islandSnapReveal.value = v;
     }
     msg.value = "原子岛行为已更新";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+async function setIslandHideMode(m: string) {
+  try {
+    await invoke("island_set_behavior", { hideMode: m });
+    islandHideMode.value = m;
+    msg.value = "隐藏形态已更新";
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
@@ -343,11 +365,13 @@ onMounted(async () => {
     if (mods.length) islandModules.value = mods;
     islandPos.value = await invoke<string>("island_get_pos_mode");
     islandIdle.value = await invoke<boolean>("island_get_idle_enabled");
-    const d = await invoke<{ material: string; accentMode: string; hideDelaySec: number; idleWidth: number }>("island_data");
+    const d = await invoke<{ material: string; accentMode: string; hideDelaySec: number; idleWidth: number; hideMode: string; snapReveal: number }>("island_data");
     islandMaterial.value = d.material;
     islandAccentMode.value = d.accentMode;
     islandHideDelay.value = d.hideDelaySec;
     islandIdleWidth.value = d.idleWidth;
+    islandHideMode.value = d.hideMode;
+    islandSnapReveal.value = d.snapReveal;
   } catch {
     islandOn.value = false;
   }
@@ -472,10 +496,38 @@ onMounted(async () => {
       </div>
       <div class="row">
         <div class="rlabel">
-          <p class="rt">自动隐藏（无悬停时缩小）</p>
-          <p class="rd">鼠标移开后收成小胶囊只留核心信息，悬停放大成完整胶囊；右键按住胶囊可直接拖动位置，左键点击展开</p>
+          <p class="rt">自动隐藏</p>
+          <p class="rd">鼠标移开后隐藏；按住左键拖动可挪位置，点击胶囊展开</p>
         </div>
         <NSwitch v-model:value="islandIdle" size="small" @update:value="setIslandIdle" />
+      </div>
+      <div class="row col">
+        <div class="rlabel">
+          <p class="rt">隐藏形态</p>
+          <p class="rd">缩小胶囊＝留在原位变小条；靠边吸附＝向上滑入屏幕顶部只露出一条边，鼠标碰到露出的边即滑回</p>
+        </div>
+        <div class="seg grid2">
+          <button
+            v-for="(label, key) in HIDE_MODE_DEFS"
+            :key="key"
+            class="seg-item"
+            :class="{ active: islandHideMode === key }"
+            @click="setIslandHideMode(key)"
+          >
+            {{ label }}
+          </button>
+        </div>
+      </div>
+      <div class="row" v-if="islandHideMode === 'snap'">
+        <div class="rlabel">
+          <p class="rt">吸附露出高度</p>
+          <p class="rd">吸附后露在屏幕顶部内的那条边的高度（4~24px）</p>
+        </div>
+        <div class="stepper">
+          <button class="mini" @click="setIslandBehavior('reveal', -2)">−</button>
+          <span class="sval">{{ islandSnapReveal }} px</span>
+          <button class="mini" @click="setIslandBehavior('reveal', 2)">+</button>
+        </div>
       </div>
       <div class="row">
         <div class="rlabel">

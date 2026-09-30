@@ -184,7 +184,7 @@ pub fn notify_modules(app: &AppHandle, modules: &[String]) {
 pub fn set_state(app: &AppHandle, state: &str) {
     let (tw, th) = match state {
         // idle 宽度可在个性化里调（WinIsland 的"隐藏后宽度"）
-        "idle" => (
+        "idle" | "snap" => (
             with_setting(app, |conn| idle_width(conn)).unwrap_or(ISLAND_W_IDLE),
             ISLAND_H_IDLE,
         ),
@@ -201,11 +201,22 @@ pub fn set_state(app: &AppHandle, state: &str) {
     );
     let pm = with_setting(app, |conn| pos_mode(conn)).unwrap_or_else(|| "center".into());
     let (mx, _my, sw, _sh) = logical_screen(app);
+    // snap：吸附屏幕顶部只露底部 reveal 像素；其余状态顶边贴 8px
+    let snap_y = 8.0 - ISLAND_H_IDLE + with_setting(app, |c| snap_reveal(c)).unwrap_or(8.0);
     let (tx, ty) = match pm.as_str() {
-        "left" => (mx + 8.0, 8.0),
-        "right" => (mx + sw - tw - 8.0, 8.0),
-        "center" => (mx + (sw - tw) / 2.0, 8.0),
-        _ => (cx + (cw - tw) / 2.0, cy.min(8.0)), // custom：水平中心锚定，顶边不动
+        "left" => (mx + 8.0, if state == "snap" { snap_y } else { 8.0 }),
+        "right" => (
+            mx + sw - tw - 8.0,
+            if state == "snap" { snap_y } else { 8.0 },
+        ),
+        "center" => (
+            mx + (sw - tw) / 2.0,
+            if state == "snap" { snap_y } else { 8.0 },
+        ),
+        _ => (
+            cx + (cw - tw) / 2.0,
+            if state == "snap" { snap_y } else { cy.min(8.0) },
+        ), // custom：水平中心锚定，顶边不动
     };
     if (cw - tw).abs() < 0.5 && (ch - th).abs() < 0.5 {
         let _ = win.set_size(tauri::LogicalSize::new(tw, th));
@@ -246,6 +257,27 @@ pub fn pos_mode(conn: &rusqlite::Connection) -> String {
 
 pub fn set_pos_mode(conn: &rusqlite::Connection, mode: &str) {
     let _ = crate::storage::set_setting(conn, "island.pos_mode", mode);
+}
+
+/// 自动隐藏形态：shrink（缩小胶囊）/ snap（靠边吸附只露一条）
+pub fn hide_mode(conn: &rusqlite::Connection) -> String {
+    crate::storage::get_setting(conn, "island.hide_mode").unwrap_or_else(|| "shrink".into())
+}
+
+pub fn set_hide_mode(conn: &rusqlite::Connection, mode: &str) {
+    let _ = crate::storage::set_setting(conn, "island.hide_mode", mode);
+}
+
+/// 吸附后露出的高度（px）
+pub fn snap_reveal(conn: &rusqlite::Connection) -> f64 {
+    crate::storage::get_setting(conn, "island.snap_reveal")
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(8.0)
+        .clamp(4.0, 24.0)
+}
+
+pub fn set_snap_reveal(conn: &rusqlite::Connection, px: f64) {
+    let _ = crate::storage::set_setting(conn, "island.snap_reveal", &format!("{px:.0}"));
 }
 
 /// 鼠标离开后延迟多久缩成 idle（秒，0=立即）

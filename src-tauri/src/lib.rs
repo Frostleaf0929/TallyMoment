@@ -815,6 +815,10 @@ struct IslandData {
     hide_delay_sec: i64,
     /// idle 态宽度
     idle_width: f64,
+    /// 隐藏形态：shrink / snap
+    hide_mode: String,
+    /// 吸附后露出高度 px
+    snap_reveal: f64,
 }
 
 #[tauri::command]
@@ -832,6 +836,8 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
         accent_mode: "endfield".into(),
         hide_delay_sec: 1,
         idle_width: 240.0,
+        hide_mode: "shrink".into(),
+        snap_reveal: 8.0,
     };
     let shared = app.state::<TrackerShared>();
     let paused = shared.paused.load(Ordering::Relaxed);
@@ -890,9 +896,13 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
     let accent_mode = island::accent_mode(&conn);
     let hide_delay_sec = island::hide_delay_sec(&conn);
     let idle_width = island::idle_width(&conn);
+    let hide_mode = island::hide_mode(&conn);
+    let snap_reveal = island::snap_reveal(&conn);
     IslandData {
         hide_delay_sec,
         idle_width,
+        hide_mode,
+        snap_reveal,
         focus_name,
         focus_sec,
         done_today,
@@ -1053,6 +1063,8 @@ fn island_set_behavior(
     app: tauri::AppHandle,
     hide_delay_sec: Option<i64>,
     idle_width: Option<f64>,
+    hide_mode: Option<String>,
+    snap_reveal: Option<f64>,
 ) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
@@ -1067,6 +1079,18 @@ fn island_set_behavior(
             return Err("隐藏后宽度需在 120~360".into());
         }
         island::set_idle_width(&conn, w);
+    }
+    if let Some(m) = hide_mode {
+        if !matches!(m.as_str(), "shrink" | "snap") {
+            return Err("隐藏形态非法".into());
+        }
+        island::set_hide_mode(&conn, &m);
+    }
+    if let Some(px) = snap_reveal {
+        if !(4.0..=24.0).contains(&px) {
+            return Err("吸附露出高度需在 4~24".into());
+        }
+        island::set_snap_reveal(&conn, px);
     }
     Ok(())
 }
