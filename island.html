@@ -14,24 +14,32 @@
     --acc-line: rgba(184, 227, 75, 0.45);
     --line: rgba(255, 255, 255, 0.08);
     --danger: #ff4d4f;
+    /* 方案 A：窗口固定 392x324（顶边=屏幕顶），胶囊是窗口内元素，四态形变全靠 CSS */
+    --island-w: 392px;
+    --idle-w: 240px;           /* idle/snap 态胶囊宽（后端 idle_width 设置写入） */
+    --reveal: 8px;             /* 吸附态露出高度（后端 snap_reveal 设置写入） */
   }
   * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
   html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; }
   body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--ink); }
-  #root { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: stretch; }
+  #root { width: 100%; height: 100%; padding-top: 8px; display: flex; flex-direction: column; align-items: stretch; }
 
-  /* 胶囊壳（顶部条） */
+  /* 胶囊壳（顶部条）：四态形变全在这一个元素上，宽/高/位移补间由浏览器合成器逐帧完成。
+     不用 box-shadow：窗口被 SetWindowRgn 裁成胶囊区域，区域外的阴影会被切掉，
+     过渡期（并集区域）还可能露出底色；描边已足够分层感 */
   #bar {
     flex: none;
     position: relative;
     display: flex; align-items: center; gap: 12px;
+    width: var(--island-w); align-self: center; overflow: hidden;
     height: 56px; padding: 0 14px 0 8px;
-    background: linear-gradient(180deg, #10131a 0%, var(--bg) 100%);
+    /* 透明度可调（--pill-a 由 island.ts 按"个性化→透明度"写入，1=不透明） */
+    background: rgba(13, 15, 20, var(--pill-a, 1));
     border: 1px solid rgba(255,255,255,0.10);
     border-radius: 999px;
-    box-shadow: 0 6px 24px rgba(0,0,0,0.55);
     cursor: default;
-    transition: height .22s cubic-bezier(.2,.9,.25,1.2), padding .22s ease, opacity .2s ease;
+    transition: width .18s cubic-bezier(.2,.9,.25,1.15), height .22s cubic-bezier(.2,.9,.25,1.2),
+                transform .24s cubic-bezier(.2,.9,.25,1.2), padding .22s ease, opacity .2s ease;
   }
   /* 终末地 HUD 四角 L 形角标（左上 + 右下） */
   #bar::before, #bar::after {
@@ -41,11 +49,7 @@
   #bar::before { left: 13px; top: 8px; border-left-width: 2px; border-top-width: 2px; border-top-left-radius: 6px; }
   #bar::after { right: 13px; bottom: 8px; border-right-width: 2px; border-bottom-width: 2px; border-bottom-right-radius: 6px; }
 
-  /* 材质：系统毛玻璃/云母时内容背景调透，让系统材质透出来 */
-  body.material-acrylic #bar,
-  body.material-acrylic #panel { background: rgba(11, 13, 16, 0.42); border-color: rgba(255,255,255,0.14); }
-  body.material-mica #bar,
-  body.material-mica #panel { background: rgba(11, 13, 16, 0.55); border-color: rgba(255,255,255,0.12); }
+  /* 材质改版：透明度统一由 --pill-a 控制（个性化里调节），不再区分材质档 */
 
   /* 电标圆环（标志） */
   .mark { flex: none; position: relative; width: 36px; height: 36px; display: grid; place-items: center; }
@@ -96,13 +100,12 @@
   #clock { font-size: 13px; font-weight: 600; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
   .divider { width: 1px; height: 22px; background: var(--line); }
 
-  /* expanded 展开区：始终渲染，随窗口拉高做淡入（配合窗口插值动画才丝滑） */
+  /* expanded 展开区：始终渲染，随状态淡入 */
   #panel {
     display: flex; flex: 1; min-height: 0; margin-top: 8px;
-    background: linear-gradient(180deg, #10131a 0%, var(--bg) 100%);
+    background: rgba(13, 15, 20, var(--pill-a, 1));
     border: 1px solid rgba(255,255,255,0.10);
     border-radius: 18px;
-    box-shadow: 0 10px 32px rgba(0,0,0,0.55);
     padding: 12px 14px;
     flex-direction: column; gap: 8px;
     opacity: 0; transform: translateY(-8px);
@@ -142,25 +145,36 @@
   }
   #setbtn:hover { color: var(--acc); border-color: var(--acc-line); }
 
-  /* idle 缩小态：无悬停时只留核心（WinIsland 式） */
+  /* idle 缩小态 / snap 吸附态：无悬停时只留核心（WinIsland 式） */
   #idle-main { display: none; flex: 1; min-width: 0; align-items: baseline; gap: 6px; }
   #idle-core { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #idle-core .l { font-size: 9px; font-weight: 600; color: var(--ink-dim); letter-spacing: 1px; margin-right: 3px; }
   #idle-done { flex: none; font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
   #idle-done b { color: var(--acc); font-weight: 700; }
 
-  body.idle #bar { height: 40px; padding: 0 12px 0 6px; opacity: 0.92; }
-  body.idle #bar::before, body.idle #bar::after { opacity: 0; }
-  body.idle .mark { width: 28px; height: 28px; }
-  body.idle .mark > svg { width: 28px; height: 28px; }
-  body.idle .mark .bolt svg { width: 11px; height: 11px; }
-  body.idle #main { display: none; }
-  body.idle #idle-main { display: flex; }
-  body.idle #side .side-item.done-item { display: none; }
-  body.idle #clock { display: none; }
+  body.idle #bar, body.snap #bar { width: var(--idle-w); height: 40px; padding: 0 12px 0 6px; opacity: 0.92; }
+  body.idle #bar::before, body.idle #bar::after,
+  body.snap #bar::before, body.snap #bar::after { opacity: 0; }
+  body.idle .mark, body.snap .mark { width: 28px; height: 28px; }
+  body.idle .mark > svg, body.snap .mark > svg { width: 28px; height: 28px; }
+  body.idle .mark .bolt svg, body.snap .mark .bolt svg { width: 11px; height: 11px; }
+  body.idle #main, body.snap #main { display: none; }
+  body.idle #idle-main, body.snap #idle-main { display: flex; }
+  body.idle #side .side-item.done-item, body.snap #side .side-item.done-item { display: none; }
+  body.idle #clock, body.snap #clock { display: none; }
+  /* 位置模式对齐 idle/snap 胶囊（与后端命中矩形同式） */
+  body.pos-left #bar { align-self: flex-start; }
+  body.pos-right #bar { align-self: flex-end; }
+  /* snap 四向：滑出只露 reveal 像素（贴哪条边由后端判定，经 island-snap 事件回填 snap-<边> 类） */
+  body.snap-top #bar { transform: translateY(calc(var(--reveal) - 48px)); }
+  body.snap-bottom #bar { transform: translateY(calc(56px - var(--reveal))); }
+  body.snap-left #bar { align-self: flex-start; transform: translateX(calc(var(--reveal) - var(--idle-w))); }
+  body.snap-right #bar { align-self: flex-end; transform: translateX(calc(var(--idle-w) - var(--reveal))); }
+  /* 入场：窗口显示后从屏幕上方滑入（只播一次，boot 类由 island.ts 在首帧后移除） */
+  body.boot #bar { transform: translateY(-64px); opacity: 0; }
 </style>
 </head>
-<body class="normal">
+<body class="normal boot">
   <div id="root">
     <div id="bar" title="点击展开 · 按住拖动">
       <div class="mark">

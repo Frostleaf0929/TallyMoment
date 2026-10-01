@@ -16,12 +16,17 @@ interface IslandData {
   nextTask: NextTask | null;
   tasks: NextTask[];
   idleEnabled: boolean;
-  material: string;
+  opacity: number;
   accentMode: string;
   hideDelaySec: number;
   idleWidth: number;
   hideMode: string;
   snapReveal: number;
+  posMode: string;
+  snapEnabled: boolean;
+  clickThrough: boolean;
+  alwaysTop: boolean;
+  snapWake: string;
 }
 
 // 主程序强调色（与 src/styles/theme.css 一致）
@@ -49,6 +54,7 @@ function applyAccent(mode: string) {
 }
 
 let state: "idle" | "normal" | "expanded" | "snap" = "normal";
+let snapEdge: "top" | "bottom" | "left" | "right" | null = null;
 let idleEnabled = true;
 let modules: string[] = ["focus", "next", "done"];
 let data: IslandData | null = null;
@@ -78,8 +84,13 @@ function esc(s: string): string {
 
 function setState(s: "idle" | "normal" | "expanded" | "snap") {
   state = s;
-  document.body.classList.remove("idle", "normal", "expanded", "snap");
+  if (s !== "snap") snapEdge = null;
+  document.body.classList.remove(
+    "idle", "normal", "expanded", "snap",
+    "snap-top", "snap-bottom", "snap-left", "snap-right"
+  );
   document.body.classList.add(s);
+  if (s === "snap" && snapEdge) document.body.classList.add(`snap-${snapEdge}`);
   applyData();
   invoke("island_set_state", { state: s }).catch(() => {});
 }
@@ -126,8 +137,20 @@ function applyData() {
   idleEnabled = data.idleEnabled;
   document.body.classList.toggle("paused", data.paused);
   document.body.classList.toggle("focusing", !!data.focusName && !data.paused);
-  document.body.classList.toggle("material-acrylic", data.material === "acrylic");
-  document.body.classList.toggle("material-mica", data.material === "mica");
+  // 透明度（40~100%）→ 胶囊底色 alpha
+  const rootStyle0 = document.documentElement.style;
+  rootStyle0.setProperty("--pill-a", (data.opacity / 100).toFixed(2));
+  // idle/snap 胶囊的对齐与尺寸（与后端光标命中矩形同式）
+  document.body.classList.toggle("pos-left", data.posMode === "left");
+  document.body.classList.toggle("pos-right", data.posMode === "right");
+  const rootStyle = document.documentElement.style;
+  rootStyle.setProperty("--idle-w", `${Math.round(data.idleWidth)}px`);
+  rootStyle.setProperty("--reveal", `${Math.round(data.snapReveal)}px`);
+  // 关闭"自动隐藏"时若正缩着，立刻回正常态
+  if (!idleEnabled && (state === "idle" || state === "snap")) {
+    setState("normal");
+    return;
+  }
   applyAccent(data.accentMode);
 
   const ring = document.querySelector<SVGCircleElement>(".ring-fg");
@@ -201,19 +224,27 @@ window.addEventListener("mousemove", (e) => {
 window.addEventListener("mouseup", () => {
   if (!pressing) return;
   pressing = false;
-  if (!dragStarted) setState(state === "expanded" ? "normal" : "expanded");
+  if (!dragStarted) {
+    // 吸附态点本体 = 唤回正常胶囊；其余 = 展开/收起
+    if (state === "snap") setState("normal");
+    else setState(state === "expanded" ? "normal" : "expanded");
+  }
 });
 
-// WinIsland 式悬停：进入放大、离开延迟缩小（展开态不缩回，点本体再收起）
+// WinIsland 式悬停：进入放大、离开延迟缩小（展开态不缩回，点本体再收起）。
+// 事件挂在胶囊本体（bar）上而不是 document：方案 A 里窗口比胶囊大，
+// 鼠标离开胶囊但仍在窗口内时也算"离开"；穿透态下事件由后端光标轮询兜底恢复。
 let hideTimer: number | undefined;
-document.addEventListener("mouseenter", () => {
+bar.addEventListener("mouseenter", () => {
   if (hideTimer !== undefined) {
     clearTimeout(hideTimer);
     hideTimer = undefined;
   }
+  // 吸附 + "点击弹出"模式：悬停不唤回，点一下才弹
+  if (state === "snap" && data?.snapWake === "click") return;
   if (state === "idle" || state === "snap") setState("normal");
 });
-document.addEventListener("mouseleave", () => {
+bar.addEventListener("mouseleave", () => {
   if (state !== "normal" || !idleEnabled) return;
   const delay = Math.max(0, data?.hideDelaySec ?? 1) * 1000;
   if (delay === 0) {
@@ -223,9 +254,29 @@ document.addEventListener("mouseleave", () => {
   hideTimer = window.setTimeout(() => {
     hideTimer = undefined;
     if (state !== "normal") return;
-    setState(data?.hideMode === "snap" ? "snap" : "idle");
+    // 靠边吸附开着就尝试吸附（后端判定贴哪条边/够不够近，不够近回退缩小）
+    setState(data?.snapEnabled ? "snap" : "idle");
   }, delay);
 });
+
+// 后端吸附判定结果：回填方向类（窗口已由后端贴边就位）；不靠边则回退缩小
+listen<string>("island-snap", (ev) => {
+  if (state !== "snap") return; // 用户已提前唤回
+  const edge = ev.payload;
+  if (edge === "none") {
+    setState("idle");
+    return;
+  }
+  if (edge === "top" || edge === "bottom" || edge === "left" || edge === "right") {
+    snapEdge = edge;
+    document.body.classList.add(`snap-${edge}`);
+  }
+}).catch(() => {});
+
+// 吸附态"靠近自动弹出"：光标靠近露出条，由后端轮询唤醒（区域裁剪后窗口很小，DOM 事件不可靠）
+listen("island-wake", () => {
+  if (state === "snap" && data?.snapWake !== "click") setState("normal");
+}).catch(() => {});
 
 // 任务完成 + 设置
 $("tasks").addEventListener("click", (e) => {
@@ -251,4 +302,9 @@ tickClock();
 setInterval(tickClock, 1000);
 refresh();
 setInterval(refresh, 1000);
-invoke("island_ready").catch(() => {});
+// 窗口显示后再揭掉 boot：入场滑入动画由 CSS 过渡播出（方案 A 里不再有窗口位移动画）
+invoke("island_ready")
+  .catch(() => {})
+  .then(() => {
+    requestAnimationFrame(() => document.body.classList.remove("boot"));
+  });

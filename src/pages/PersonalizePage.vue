@@ -211,25 +211,21 @@ void invoke<{ mime: string; data: string } | null>("reminder_bg_get")
 const islandOn = ref(false);
 const islandPos = ref("center");
 const islandIdle = ref(true);
-const islandMaterial = ref("solid");
+const islandOpacity = ref(100);
 const islandHideDelay = ref(1);
 const islandIdleWidth = ref(240);
 const islandHideMode = ref("shrink");
 const islandSnapReveal = ref(8);
-const HIDE_MODE_DEFS: Record<string, string> = {
-  shrink: "缩小胶囊",
-  snap: "靠边吸附",
-};
+const islandSnap = ref(false);
+const islandSnapWake = ref("hover");
+const islandClickThrough = ref(false);
+const islandAlwaysTop = ref(true);
+const islandCardOpen = ref(true);
 const islandAccentMode = ref("endfield");
 const POS_DEFS: Record<string, string> = {
   center: "顶部居中",
   left: "靠左",
   right: "靠右",
-};
-const MATERIAL_DEFS: Record<string, string> = {
-  solid: "纯色",
-  acrylic: "毛玻璃",
-  mica: "云母",
 };
 const ACCENT_MODE_DEFS: Record<string, string> = {
   endfield: "终末地",
@@ -307,11 +303,12 @@ async function setIslandIdle(v: boolean) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
 }
-async function setIslandMaterial(m: string) {
+async function setIslandOpacity(delta: number) {
   try {
-    await invoke("island_set_material", { mat: m });
-    islandMaterial.value = m;
-    msg.value = "原子岛材质已更新";
+    const v = Math.min(100, Math.max(40, islandOpacity.value + delta));
+    await invoke("island_set_opacity", { v });
+    islandOpacity.value = v;
+    msg.value = "原子岛透明度已更新";
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
@@ -339,11 +336,40 @@ async function setIslandBehavior(
     err.value = String(e).replace(/^.*Error: /, "");
   }
 }
-async function setIslandHideMode(m: string) {
+async function setIslandSnap(v: boolean) {
   try {
-    await invoke("island_set_behavior", { hideMode: m });
-    islandHideMode.value = m;
-    msg.value = "隐藏形态已更新";
+    await invoke("island_set_snap_enabled", { on: v });
+    islandSnap.value = v;
+    msg.value = v ? "靠边吸附已开启" : "靠边吸附已关闭";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+async function setIslandSnapWake(m: string) {
+  try {
+    await invoke("island_set_snap_wake", { mode: m });
+    islandSnapWake.value = m;
+    msg.value = m === "hover" ? "靠近露出条即自动弹出" : "点击露出条才弹出";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+async function setIslandClickThrough(v: boolean) {
+  try {
+    await invoke("island_set_click_through", { on: v });
+    islandClickThrough.value = v;
+    msg.value = v
+      ? "鼠标穿透已开启（岛为纯展示，回本页关闭）"
+      : "鼠标穿透已关闭";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+async function setIslandAlwaysTop(v: boolean) {
+  try {
+    await invoke("island_set_always_top", { on: v });
+    islandAlwaysTop.value = v;
+    msg.value = v ? "原子岛已置顶" : "原子岛已取消置顶";
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
@@ -365,13 +391,17 @@ onMounted(async () => {
     if (mods.length) islandModules.value = mods;
     islandPos.value = await invoke<string>("island_get_pos_mode");
     islandIdle.value = await invoke<boolean>("island_get_idle_enabled");
-    const d = await invoke<{ material: string; accentMode: string; hideDelaySec: number; idleWidth: number; hideMode: string; snapReveal: number }>("island_data");
-    islandMaterial.value = d.material;
+    const d = await invoke<{ opacity: number; accentMode: string; hideDelaySec: number; idleWidth: number; hideMode: string; snapReveal: number; snapEnabled: boolean; clickThrough: boolean; alwaysTop: boolean; snapWake: string }>("island_data");
+    islandOpacity.value = Math.round(d.opacity);
     islandAccentMode.value = d.accentMode;
     islandHideDelay.value = d.hideDelaySec;
     islandIdleWidth.value = d.idleWidth;
     islandHideMode.value = d.hideMode;
     islandSnapReveal.value = d.snapReveal;
+    islandSnap.value = d.snapEnabled;
+    islandClickThrough.value = d.clickThrough;
+    islandAlwaysTop.value = d.alwaysTop;
+    islandSnapWake.value = d.snapWake === "click" ? "click" : "hover";
   } catch {
     islandOn.value = false;
   }
@@ -438,7 +468,13 @@ onMounted(async () => {
 
     <!-- 原子岛（常驻胶囊） -->
     <div class="glass-card card">
-      <h2>原子岛</h2>
+      <h2 class="card-h">
+        原子岛
+        <button class="mini fold" @click="islandCardOpen = !islandCardOpen">
+          {{ islandCardOpen ? "收起 ▲" : "展开 ▼" }}
+        </button>
+      </h2>
+      <div v-show="islandCardOpen">
       <div class="row">
         <span>启用常驻胶囊</span>
         <NSwitch v-model:value="islandOn" size="small" @update:value="setIsland" />
@@ -460,21 +496,15 @@ onMounted(async () => {
           </button>
         </div>
       </div>
-      <div class="row col">
+      <div class="row">
         <div class="rlabel">
-          <p class="rt">材质</p>
-          <p class="rd">毛玻璃/云母为系统级效果（Win11）；官方文档确认这类效果会显著拖慢窗口缩放（悬停动效可能变卡），若卡顿或黑底请换回纯色</p>
+          <p class="rt">透明度</p>
+          <p class="rd">100 = 不透明深底；调低后岛变半透明（40~100）</p>
         </div>
-        <div class="seg grid3">
-          <button
-            v-for="(label, key) in MATERIAL_DEFS"
-            :key="key"
-            class="seg-item"
-            :class="{ active: islandMaterial === key }"
-            @click="setIslandMaterial(key)"
-          >
-            {{ label }}
-          </button>
+        <div class="stepper">
+          <button class="mini" @click="setIslandOpacity(-5)">−</button>
+          <span class="sval">{{ islandOpacity }} %</span>
+          <button class="mini" @click="setIslandOpacity(5)">+</button>
         </div>
       </div>
       <div class="row col">
@@ -501,27 +531,53 @@ onMounted(async () => {
         </div>
         <NSwitch v-model:value="islandIdle" size="small" @update:value="setIslandIdle" />
       </div>
-      <div class="row col">
+      <div class="row">
         <div class="rlabel">
-          <p class="rt">隐藏形态</p>
-          <p class="rd">缩小胶囊＝留在原位变小条；靠边吸附＝向上滑入屏幕顶部只露出一条边，鼠标碰到露出的边即滑回</p>
+          <p class="rt">窗口置顶</p>
+          <p class="rd">开＝岛始终浮在最上层；关＝可以被其他窗口挡住</p>
+        </div>
+        <NSwitch v-model:value="islandAlwaysTop" size="small" @update:value="setIslandAlwaysTop" />
+      </div>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">鼠标穿透</p>
+          <p class="rd">开＝岛变纯展示，点击全部穿到下层应用且不再响应悬停；需回本页关闭</p>
+        </div>
+        <NSwitch v-model:value="islandClickThrough" size="small" @update:value="setIslandClickThrough" />
+      </div>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">靠边吸附</p>
+          <p class="rd">开启后隐藏时自动贴向最近的屏幕边（上/下/左/右），只露一小条，碰到露出的边即滑回；离边太远则照常缩小胶囊</p>
+        </div>
+        <NSwitch v-model:value="islandSnap" size="small" @update:value="setIslandSnap" />
+      </div>
+      <div class="row col" v-if="islandSnap">
+        <div class="rlabel">
+          <p class="rt">唤回方式</p>
+          <p class="rd">靠近自动弹出＝光标靠近露出的边即滑回；点击弹出＝碰到不打扰，点一下露出的边才滑回</p>
         </div>
         <div class="seg grid2">
           <button
-            v-for="(label, key) in HIDE_MODE_DEFS"
-            :key="key"
             class="seg-item"
-            :class="{ active: islandHideMode === key }"
-            @click="setIslandHideMode(key)"
+            :class="{ active: islandSnapWake === 'hover' }"
+            @click="setIslandSnapWake('hover')"
           >
-            {{ label }}
+            靠近自动弹出
+          </button>
+          <button
+            class="seg-item"
+            :class="{ active: islandSnapWake === 'click' }"
+            @click="setIslandSnapWake('click')"
+          >
+            点击弹出
           </button>
         </div>
       </div>
-      <div class="row" v-if="islandHideMode === 'snap'">
+      <div class="row" v-if="islandSnap">
         <div class="rlabel">
           <p class="rt">吸附露出高度</p>
-          <p class="rd">吸附后露在屏幕顶部内的那条边的高度（4~24px）</p>
+          <p class="rd">吸附后露在屏幕边缘的那条边的宽度/高度（4~24px）</p>
         </div>
         <div class="stepper">
           <button class="mini" @click="setIslandBehavior('reveal', -2)">−</button>
@@ -573,6 +629,7 @@ onMounted(async () => {
         <button class="btn" @click="resetIslandPos">位置重置（回屏幕顶部居中）</button>
       </div>
       <p v-if="msg" class="ok">{{ msg }}</p>
+      </div>
     </div>
 
     <!-- 皮肤预设 -->
@@ -807,6 +864,28 @@ onMounted(async () => {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
+}
+
+/* 可折叠卡片标题：右上角收起/展开 */
+.card h2.card-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.card h2.card-h .fold {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.card h2.card-h .fold:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
 }
 
 /* 皮肤预设 */

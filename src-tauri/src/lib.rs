@@ -807,8 +807,8 @@ struct IslandData {
     tasks: Vec<IslandNextTask>,
     /// 无悬停时是否缩小（WinIsland 式 idle 态开关）
     idle_enabled: bool,
-    /// 材质：solid / acrylic / mica
-    material: String,
+    /// 透明度（40~100，%）
+    opacity: f64,
     /// 强调色模式：endfield / accent
     accent_mode: String,
     /// 鼠标离开后延迟缩小秒数
@@ -819,6 +819,16 @@ struct IslandData {
     hide_mode: String,
     /// 吸附后露出高度 px
     snap_reveal: f64,
+    /// 位置模式：center / left / right / custom（前端对齐 idle 胶囊用）
+    pos_mode: String,
+    /// 靠边吸附开关（独立于自动隐藏）
+    snap_enabled: bool,
+    /// 鼠标穿透：开=整窗点击穿透（纯展示）
+    click_through: bool,
+    /// 窗口置顶（默认开）
+    always_top: bool,
+    /// 吸附唤醒方式：hover / click
+    snap_wake: String,
 }
 
 #[tauri::command]
@@ -832,12 +842,17 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
         next_task: None,
         tasks: Vec::new(),
         idle_enabled: true,
-        material: "solid".into(),
+        opacity: 100.0,
         accent_mode: "endfield".into(),
         hide_delay_sec: 1,
         idle_width: 240.0,
         hide_mode: "shrink".into(),
         snap_reveal: 8.0,
+        pos_mode: "center".into(),
+        snap_enabled: false,
+        click_through: false,
+        always_top: true,
+        snap_wake: "hover".into(),
     };
     let shared = app.state::<TrackerShared>();
     let paused = shared.paused.load(Ordering::Relaxed);
@@ -892,12 +907,17 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
     }
     let next_task = tasks.first().cloned();
     let idle_enabled = island::idle_enabled(&conn);
-    let material = island::material(&conn);
+    let opacity = island::opacity(&conn);
     let accent_mode = island::accent_mode(&conn);
     let hide_delay_sec = island::hide_delay_sec(&conn);
     let idle_width = island::idle_width(&conn);
     let hide_mode = island::hide_mode(&conn);
     let snap_reveal = island::snap_reveal(&conn);
+    let pos_mode = island::pos_mode(&conn);
+    let snap_enabled = island::snap_enabled(&conn);
+    let click_through = island::click_through(&conn);
+    let always_top = island::always_top(&conn);
+    let snap_wake = island::snap_wake(&conn);
     IslandData {
         hide_delay_sec,
         idle_width,
@@ -910,8 +930,13 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
         next_task,
         tasks,
         idle_enabled,
-        material,
+        opacity,
         accent_mode,
+        pos_mode,
+        snap_enabled,
+        click_through,
+        always_top,
+        snap_wake,
     }
 }
 
@@ -1000,7 +1025,8 @@ fn island_set_pos_mode(app: tauri::AppHandle, mode: String) -> Result<(), String
                 "right" => mx + sw - w - 8.0,
                 _ => mx + (sw - w) / 2.0,
             };
-            let _ = win.set_position(tauri::LogicalPosition::new(x, 8.0));
+            // 方案 A：窗口顶边固定屏幕 y=0（胶囊顶=窗口顶+8，观感不变）
+            let _ = win.set_position(tauri::LogicalPosition::new(x, 0.0));
         }
     }
     Ok(())
@@ -1107,18 +1133,67 @@ fn app_set_track_background(
     storage::app_set_track_background(&conn, &name, on)
 }
 
-/// 材质（solid/acrylic/mica）：存设置并重建窗口生效
+/// 透明度（40~100，%）：岛前端每秒拉一次数据自动生效，无需重建窗口
 #[tauri::command]
-fn island_set_material(app: tauri::AppHandle, mat: String) -> Result<(), String> {
-    if !matches!(mat.as_str(), "solid" | "acrylic" | "mica") {
-        return Err("bad material".into());
+fn island_set_opacity(app: tauri::AppHandle, v: f64) -> Result<(), String> {
+    if !(40.0..=100.0).contains(&v) {
+        return Err("透明度需在 40~100".into());
     }
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    island::set_opacity(&conn, v);
+    Ok(())
+}
+
+/// 靠边吸附开关（独立于自动隐藏；开=隐藏时贴最近的屏幕边只露一条，离边太远则照常缩小）
+#[tauri::command]
+fn island_set_snap_enabled(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    island::set_snap_enabled(&conn, on);
+    Ok(())
+}
+
+/// 吸附唤醒方式：hover（靠近露出条自动弹出）/ click（点击露出条才弹出）
+#[tauri::command]
+fn island_set_snap_wake(app: tauri::AppHandle, mode: String) -> Result<(), String> {
+    if !matches!(mode.as_str(), "hover" | "click") {
+        return Err("bad wake mode".into());
+    }
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    island::set_snap_wake(&conn, &mode);
+    Ok(())
+}
+
+/// 鼠标穿透：开=整窗点击穿透（纯展示，不响应悬停；需回个性化关闭）
+#[tauri::command]
+fn island_set_click_through(app: tauri::AppHandle, on: bool) -> Result<(), String> {
     {
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-        island::set_material(&conn, &mat);
+        island::set_click_through(&conn, on);
     }
-    island::rebuild(&app);
+    if on {
+        if let Some(win) = app.get_webview_window("island") {
+            let _ = win.set_ignore_cursor_events(true);
+        }
+    }
+    // 关闭时不用手动恢复：轮询线程在设置缓存刷新后（≤1 秒）自动接管动态穿透
+    Ok(())
+}
+
+/// 窗口置顶开关（默认开；关=岛可被其他窗口遮挡）
+#[tauri::command]
+fn island_set_always_top(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+        island::set_always_top(&conn, on);
+    }
+    if let Some(win) = app.get_webview_window("island") {
+        let _ = win.set_always_on_top(on);
+    }
     Ok(())
 }
 
@@ -1571,7 +1646,11 @@ pub fn run() {
             island_set_idle_enabled,
             island_get_idle_enabled,
             island_start_drag,
-            island_set_material,
+            island_set_opacity,
+            island_set_snap_enabled,
+            island_set_snap_wake,
+            island_set_click_through,
+            island_set_always_top,
             island_set_accent_mode,
             app_set_track_background,
             set_track_self,
