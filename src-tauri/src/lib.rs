@@ -1190,6 +1190,42 @@ fn task_suggest_apps(app: tauri::AppHandle, id: i64) -> Result<Vec<(String, i64)
     storage::task_suggest_apps(&conn, id)
 }
 
+/// 心流判定参数（设置页读写）
+#[tauri::command]
+fn flow_get_params(app: tauri::AppHandle) -> insights::FlowParams {
+    let Some(db) = app.try_state::<Db>() else {
+        return Default::default();
+    };
+    let Ok(conn) = db.0.lock() else {
+        return Default::default();
+    };
+    insights::flow_params(&conn)
+}
+
+#[tauri::command]
+fn flow_set_params(
+    app: tauri::AppHandle,
+    blipSecs: i64,
+    switchBase: i64,
+    switchPer10min: i64,
+) -> Result<(), String> {
+    if !(0..=300).contains(&blipSecs) {
+        return Err("过场宽限需在 0~300 秒".into());
+    }
+    if !(1..=10).contains(&switchBase) {
+        return Err("切换基线需在 1~10 次".into());
+    }
+    if !(0..=5).contains(&switchPer10min) {
+        return Err("每 10 分钟放宽需在 0~5 次".into());
+    }
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    let _ = crate::storage::set_setting(&conn, "flow.blip_secs", &blipSecs.to_string());
+    let _ = crate::storage::set_setting(&conn, "flow.switch_base", &switchBase.to_string());
+    let _ = crate::storage::set_setting(&conn, "flow.switch_per_10min", &switchPer10min.to_string());
+    Ok(())
+}
+
 /// 鼠标穿透：开=整窗点击穿透（纯展示，不响应悬停；需回个性化关闭）
 #[tauri::command]
 fn island_set_click_through(app: tauri::AppHandle, on: bool) -> Result<(), String> {
@@ -1676,6 +1712,8 @@ pub fn run() {
             task_set_related_apps,
             task_link_apps,
             task_suggest_apps,
+            flow_get_params,
+            flow_set_params,
             island_set_click_through,
             island_set_always_top,
             island_set_accent_mode,

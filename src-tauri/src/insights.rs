@@ -59,22 +59,60 @@ pub struct InsightReport {
     pub insights: Vec<Insight>,
 }
 
+/// 心流判定参数（设置页可调；默认值=实测起点，见调研分册）
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowParams {
+    /// 过场宽限：块内 ≤该秒数的短段不计切换
+    pub blip_secs: i64,
+    /// 切换上限基线
+    pub switch_base: i64,
+    /// 每 10 分钟额外允许的切换次数
+    pub switch_per_10min: i64,
+}
+
+impl Default for FlowParams {
+    fn default() -> Self {
+        Self {
+            blip_secs: 45,
+            switch_base: 3,
+            switch_per_10min: 1,
+        }
+    }
+}
+
+/// 从设置读判定参数（键：flow.blip_secs / flow.switch_base / flow.switch_per_10min）
+pub fn flow_params(conn: &Connection) -> FlowParams {
+    let g = |k: &str, d: i64, lo: i64, hi: i64| {
+        crate::storage::get_setting(conn, k)
+            .and_then(|v| v.parse::<i64>().ok())
+            .map(|v| v.clamp(lo, hi))
+            .unwrap_or(d)
+    };
+    FlowParams {
+        blip_secs: g("flow.blip_secs", 45, 0, 300),
+        switch_base: g("flow.switch_base", 3, 1, 10),
+        switch_per_10min: g("flow.switch_per_10min", 1, 0, 5),
+    }
+}
+
 /// 把前台区间归并成专注块并推断状态（心流判定改造第一步：状态机式规则）。
 /// 相比旧版"整块切换≤3 次"：
-/// ① 切换只按"应用变化"计（同应用续段不算），≤45s 的过场短段不计打断
+/// ① 切换只按"应用变化"计（同应用续段不算），≤宽限秒数的过场短段不计打断
 ///    （≈"切走一小会儿就切回来"的冷却宽限，多应用协同不再被误杀）；
-/// ② 切换上限随块长放宽：3 次 + 每 10 分钟 1 次；
+/// ② 切换上限随块长放宽：基线 + 每 10 分钟 1 次；
 /// ③ 心流 = 跨度够长（自适应中位数，下限 15 分钟）+ 活跃占比 ≥85% + 切换未超限；
 /// ④ 碎片 = 跨度 <10 分钟或切换率 ≥0.4 次/分；其余 = 专注。
-/// （任务应用集合/宽限参数可配置化留给第二步任务绑定一起做）
 pub fn compute_blocks(segments: &[(i64, i64, String)]) -> Vec<BlockView> {
+    compute_blocks_with(segments, FlowParams::default())
+}
+
+pub fn compute_blocks_with(
+    segments: &[(i64, i64, String)],
+    p: FlowParams,
+) -> Vec<BlockView> {
     /// 块归并间隔：间隔 <5 分钟视为同一块
     const GAP: i64 = 300;
-    /// 过场宽限：块内 ≤45s 的短段不算切换（冷却近似）
-    const BLIP_SECS: i64 = 45;
-    /// 切换上限的基线与每 10 分钟放宽量
-    const SWITCH_BASE: i64 = 3;
-    const SWITCH_PER_10MIN: i64 = 1;
 
     struct Acc {
         start_ts: i64,
@@ -108,7 +146,7 @@ pub fn compute_blocks(segments: &[(i64, i64, String)]) -> Vec<BlockView> {
     for (s, e, app) in segs {
         match accs.last_mut() {
             Some(b) if s - b.end_ts < GAP => {
-                if b.last_app != app && e - s > BLIP_SECS {
+                if b.last_app != app && e - s > p.blip_secs {
                     b.switches += 1; // 应用变化且不是过场短段才算切换
                 }
                 if !b.apps.contains(&app) {
@@ -133,7 +171,7 @@ pub fn compute_blocks(segments: &[(i64, i64, String)]) -> Vec<BlockView> {
             let span = b.end_ts - b.start_ts;
             let ratio = if span > 0 { b.seconds as f64 / span as f64 } else { 1.0 };
             let rate = b.switches as f64 / (span as f64 / 60.0);
-            let switch_cap = (SWITCH_BASE + span / (10 * 60)) as usize;
+            let switch_cap = (p.switch_base + span / (10 * 60) * p.switch_per_10min) as usize;
             let state = if span >= flow_span_min && ratio >= 0.85 && b.switches <= switch_cap {
                 "flow"
             } else if span < 600 || rate >= 0.4 {
@@ -211,7 +249,7 @@ pub fn report(conn: &Connection, days: i64) -> Result<InsightReport, String> {
         .iter()
         .map(|s| (s.start_ts, s.end_ts, s.app_name.clone()))
         .collect();
-    let mut blocks = compute_blocks(&raw);
+    let mut blocks = compute_blocks_with(&raw, flow_params(conn));
     blocks.retain(|b| b.span >= 60); // 过滤 <1 分钟的碎屑块
 
     // 心流归属：块的应用集合与任务"相关应用"重叠 ≥50% 即归属到重叠最高的任务

@@ -168,7 +168,7 @@ html[data-mode="reminder"] body {
 
 .toast {
   display: flex;
-  /* 无圆角无阴影：窗口就是卡片，DWM 负责圆角与投影 */
+  /* 窗口就是卡片：圆角由后端 SetWindowRgn 按 14px 裁剪（DWM 圆角已关），投影贴合圆角 */
   border-radius: 0;
   overflow: hidden;
   background: #161a22;

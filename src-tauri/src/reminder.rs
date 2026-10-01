@@ -125,9 +125,10 @@ fn kill_border(win: &tauri::WebviewWindow) {
         DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
     };
     if let Ok(hwnd) = win.hwnd() {
-        // DWMWA_COLOR_NONE = 0xFFFFFFFE；圆角偏好 DWMWCP_ROUND = 2
+        // DWMWA_COLOR_NONE = 0xFFFFFFFE；圆角偏好 DWMWCP_DONOTROUND = 1
+        // （圆角改由 SetWindowRgn 按卡片半径裁剪，DWM 的 8px 圆角会跟 14px 区域打架取小）
         let none: u32 = 0xFFFF_FFFE;
-        let round: u32 = 2;
+        let no_round: u32 = 1;
         unsafe {
             let _ = DwmSetWindowAttribute(
                 HWND(hwnd.0),
@@ -138,12 +139,38 @@ fn kill_border(win: &tauri::WebviewWindow) {
             let _ = DwmSetWindowAttribute(
                 HWND(hwnd.0),
                 DWMWA_WINDOW_CORNER_PREFERENCE,
-                &round as *const _ as *const std::ffi::c_void,
+                &no_round as *const _ as *const std::ffi::c_void,
                 4,
             );
         }
+        round_region(win, CARD_RADIUS);
     }
 }
+
+/// 卡片圆角（逻辑 px），与 ToastStack 的窗口观感一致
+const CARD_RADIUS: f64 = 14.0;
+
+/// 窗口区域裁剪成圆角矩形（SetWindowRgn，同原子岛的灰框根治思路）：
+/// 形状之外不存在窗口——彻底杜绝角落残留底色，DWM 投影也会贴合圆角。
+#[cfg(windows)]
+fn round_region(win: &tauri::WebviewWindow, radius: f64) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        CreateRoundRectRgn, SetWindowRgn,
+    };
+    let Ok(hwnd) = win.hwnd() else { return };
+    let Ok(sc) = win.scale_factor() else { return };
+    let Ok(size) = win.inner_size() else { return };
+    let (w, h) = (size.width as i32, size.height as i32);
+    let e = (2.0 * radius * sc).round() as i32;
+    unsafe {
+        let rgn = CreateRoundRectRgn(0, 0, w, h, e.max(2), e.max(2));
+        let _ = SetWindowRgn(HWND(hwnd.0), Some(rgn), true);
+    }
+}
+
+#[cfg(not(windows))]
+fn round_region(_win: &tauri::WebviewWindow, _radius: f64) {}
 
 #[cfg(not(windows))]
 fn kill_border(_win: &tauri::WebviewWindow) {}
@@ -225,6 +252,8 @@ pub fn resize(app: &AppHandle, content_height: f64) {
         // 卡片铺满窗口：窗口高度 = 内容高度（不再留 24px 余量，那正是灰框的温床）
         let h = content_height.max(REMINDER_MIN_H);
         let _ = win.set_size(tauri::LogicalSize::new(REMINDER_W, h));
+        // 高度变了，圆角区域跟着重贴
+        round_region(&win, CARD_RADIUS);
         if let Ok(Some(m)) = app.primary_monitor() {
             let scale = m.scale_factor();
             let size = m.size();

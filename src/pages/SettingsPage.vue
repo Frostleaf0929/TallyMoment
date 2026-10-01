@@ -185,7 +185,38 @@ onMounted(async () => {
   } catch {
     /* 忽略 */
   }
+  try {
+    flow.value = await invoke<{ blipSecs: number; switchBase: number; switchPer10min: number }>(
+      "flow_get_params"
+    );
+  } catch {
+    /* 忽略 */
+  }
 });
+
+/** 心流判定参数（设置页步进，即刻落库，洞察页下次加载即生效） */
+const flow = ref({ blipSecs: 45, switchBase: 3, switchPer10min: 1 });
+const flowErr = ref("");
+async function bumpFlow(key: "blipSecs" | "switchBase" | "switchPer10min", delta: number) {
+  const limits: Record<string, [number, number, number]> = {
+    blipSecs: [5, 0, 300],
+    switchBase: [1, 1, 10],
+    switchPer10min: [1, 0, 5],
+  };
+  const [step, lo, hi] = limits[key];
+  const v = Math.min(hi, Math.max(lo, flow.value[key] + delta * step));
+  try {
+    await invoke("flow_set_params", {
+      blipSecs: key === "blipSecs" ? v : flow.value.blipSecs,
+      switchBase: key === "switchBase" ? v : flow.value.switchBase,
+      switchPer10min: key === "switchPer10min" ? v : flow.value.switchPer10min,
+    });
+    flow.value = { ...flow.value, [key]: v };
+    flowErr.value = "";
+  } catch (e) {
+    flowErr.value = String(e).replace(/^.*Error: /, "");
+  }
+}
 </script>
 
 <template>
@@ -222,6 +253,45 @@ onMounted(async () => {
           <p class="rd">记录开关在托盘右键菜单里（暂停记录 / 显示桌宠）</p>
         </div>
       </div>
+    </div>
+
+    <div class="glass-card card">
+      <h2>心流判定</h2>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">过场宽限</p>
+          <p class="rd">块内不超过该秒数的短段不算打断（"切走一小会儿就切回来"），0 = 关闭宽限</p>
+        </div>
+        <div class="stepper">
+          <button class="mini" @click="bumpFlow('blipSecs', -5)">−</button>
+          <span class="sval">{{ flow.blipSecs }} 秒</span>
+          <button class="mini" @click="bumpFlow('blipSecs', 5)">+</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">切换上限</p>
+          <p class="rd">基线次数 + 每 10 分钟放宽次数；超过则该段判为"专注"而非心流</p>
+        </div>
+        <div class="stepper">
+          <button class="mini" @click="bumpFlow('switchBase', -1)">−</button>
+          <span class="sval">{{ flow.switchBase }} 次</span>
+          <button class="mini" @click="bumpFlow('switchBase', 1)">+</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">每 10 分钟放宽</p>
+          <p class="rd">块每长 10 分钟，切换上限额外 +N（多应用协同调大些）</p>
+        </div>
+        <div class="stepper">
+          <button class="mini" @click="bumpFlow('switchPer10min', -1)">−</button>
+          <span class="sval">{{ flow.switchPer10min }} 次</span>
+          <button class="mini" @click="bumpFlow('switchPer10min', 1)">+</button>
+        </div>
+      </div>
+      <p class="rd more">改动即刻生效，洞察页的心流/专注划分会按新参数重新计算。</p>
+      <p v-if="flowErr" class="err">{{ flowErr }}</p>
     </div>
 
     <div class="glass-card card">
@@ -480,5 +550,34 @@ onMounted(async () => {
   margin: 8px 0 0;
   font-size: 12px;
   color: var(--danger);
+}
+
+/* 心流判定参数步进器 */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.mini {
+  width: 26px;
+  height: 24px;
+  font-size: 13px;
+  line-height: 1;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+  background: none;
+  color: var(--text, #ddd);
+  cursor: pointer;
+}
+.mini:hover {
+  border-color: var(--text, #ddd);
+}
+.sval {
+  min-width: 56px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text, #ddd);
 }
 </style>
