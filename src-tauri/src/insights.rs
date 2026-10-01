@@ -31,6 +31,9 @@ pub struct BlockView {
     pub switches: usize,
     /// flow | focused | fragmented（规则推断）
     pub state: String,
+    /// 归属任务：块的应用集合与任务"相关应用"重叠 ≥50% 时自动匹配
+    pub task_id: Option<i64>,
+    pub task_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -56,8 +59,44 @@ pub struct InsightReport {
     pub insights: Vec<Insight>,
 }
 
-/// 把前台区间归并成专注块：间隔 < 5 分钟视为同一块（纯函数，可测）
+/// 把前台区间归并成专注块并推断状态（心流判定改造第一步：状态机式规则）。
+/// 相比旧版"整块切换≤3 次"：
+/// ① 切换只按"应用变化"计（同应用续段不算），≤45s 的过场短段不计打断
+///    （≈"切走一小会儿就切回来"的冷却宽限，多应用协同不再被误杀）；
+/// ② 切换上限随块长放宽：3 次 + 每 10 分钟 1 次；
+/// ③ 心流 = 跨度够长（自适应中位数，下限 15 分钟）+ 活跃占比 ≥85% + 切换未超限；
+/// ④ 碎片 = 跨度 <10 分钟或切换率 ≥0.4 次/分；其余 = 专注。
+/// （任务应用集合/宽限参数可配置化留给第二步任务绑定一起做）
 pub fn compute_blocks(segments: &[(i64, i64, String)]) -> Vec<BlockView> {
+    /// 块归并间隔：间隔 <5 分钟视为同一块
+    const GAP: i64 = 300;
+    /// 过场宽限：块内 ≤45s 的短段不算切换（冷却近似）
+    const BLIP_SECS: i64 = 45;
+    /// 切换上限的基线与每 10 分钟放宽量
+    const SWITCH_BASE: i64 = 3;
+    const SWITCH_PER_10MIN: i64 = 1;
+
+    struct Acc {
+        start_ts: i64,
+        end_ts: i64,
+        seconds: i64,
+        apps: Vec<String>,
+        switches: usize,
+        last_app: String,
+    }
+    impl Acc {
+        fn new(start_ts: i64, end_ts: i64, app: &str) -> Self {
+            Self {
+                start_ts,
+                end_ts,
+                seconds: end_ts - start_ts,
+                apps: vec![app.to_string()],
+                switches: 0,
+                last_app: app.to_string(),
+            }
+        }
+    }
+
     let mut segs: Vec<(i64, i64, String)> = segments
         .iter()
         .filter(|(s, e, _)| e > s)
@@ -65,52 +104,56 @@ pub fn compute_blocks(segments: &[(i64, i64, String)]) -> Vec<BlockView> {
         .collect();
     segs.sort_by_key(|(s, _, _)| *s);
 
-    const GAP: i64 = 300;
-    let mut out: Vec<BlockView> = Vec::new();
+    let mut accs: Vec<Acc> = Vec::new();
     for (s, e, app) in segs {
-        match out.last_mut() {
+        match accs.last_mut() {
             Some(b) if s - b.end_ts < GAP => {
-                b.end_ts = b.end_ts.max(e);
-                b.span = b.end_ts - b.start_ts;
-                b.seconds += e - s;
-                b.switches += 1;
-                if !b.apps.contains(&app) {
-                    b.apps.push(app);
+                if b.last_app != app && e - s > BLIP_SECS {
+                    b.switches += 1; // 应用变化且不是过场短段才算切换
                 }
+                if !b.apps.contains(&app) {
+                    b.apps.push(app.to_string());
+                }
+                b.last_app = app;
+                b.end_ts = b.end_ts.max(e);
+                b.seconds += e - s;
             }
-            _ => out.push(BlockView {
-                start_ts: s,
-                end_ts: e,
-                seconds: e - s,
-                span: e - s,
-                apps: vec![app],
-                switches: 0,
-                state: String::new(),
-            }),
+            _ => accs.push(Acc::new(s, e, &app)),
         }
     }
-    // 心流推断（规则版，阈值随数据自适应）：
-    // 心流 = 跨度 ≥ 门槛 且 少切换 且 活跃占比 ≥85%（块内摸鱼不算心流）；
-    // 碎片 = 切换速率 ≥0.4 次/分 或跨度 <10 分钟；其余 = 专注。
-    // 门槛：样本多（≥6 块）时用本次范围里块跨度的中位数（下限 15 分钟）——
-    //       每个人工作节奏不同，写死的 25 分钟并不准。
-    let mut span_sorted: Vec<i64> = out.iter().map(|b| b.span).collect();
+
+    // 心流跨度门槛：样本多（≥6 块）时用本次范围里块跨度的中位数（下限 15 分钟）
+    let mut span_sorted: Vec<i64> = accs.iter().map(|b| b.end_ts - b.start_ts).collect();
     span_sorted.sort_unstable();
     let median_span = if span_sorted.len() >= 6 { span_sorted[span_sorted.len() / 2] } else { 0 };
     let flow_span_min = if median_span > 0 { median_span.max(900) } else { 1500 };
-    for b in &mut out {
-        let ratio = if b.span > 0 { b.seconds as f64 / b.span as f64 } else { 1.0 };
-        let rate = b.switches as f64 / (b.span as f64 / 60.0);
-        b.state = if b.span >= flow_span_min && b.switches <= 3 && ratio >= 0.85 {
-            "flow"
-        } else if b.span < 600 || rate >= 0.4 {
-            "fragmented"
-        } else {
-            "focused"
-        }
-        .into();
-    }
-    out
+
+    accs.iter()
+        .map(|b| {
+            let span = b.end_ts - b.start_ts;
+            let ratio = if span > 0 { b.seconds as f64 / span as f64 } else { 1.0 };
+            let rate = b.switches as f64 / (span as f64 / 60.0);
+            let switch_cap = (SWITCH_BASE + span / (10 * 60)) as usize;
+            let state = if span >= flow_span_min && ratio >= 0.85 && b.switches <= switch_cap {
+                "flow"
+            } else if span < 600 || rate >= 0.4 {
+                "fragmented"
+            } else {
+                "focused"
+            };
+            BlockView {
+                start_ts: b.start_ts,
+                end_ts: b.end_ts,
+                seconds: b.seconds,
+                span,
+                apps: b.apps.clone(),
+                switches: b.switches,
+                state: state.into(),
+                task_id: None,
+                task_name: None,
+            }
+        })
+        .collect()
 }
 
 fn fmt_hm(secs: i64) -> String {
@@ -170,6 +213,44 @@ pub fn report(conn: &Connection, days: i64) -> Result<InsightReport, String> {
         .collect();
     let mut blocks = compute_blocks(&raw);
     blocks.retain(|b| b.span >= 60); // 过滤 <1 分钟的碎屑块
+
+    // 心流归属：块的应用集合与任务"相关应用"重叠 ≥50% 即归属到重叠最高的任务
+    let candidates: Vec<(i64, String, Vec<String>)> = conn
+        .prepare("SELECT id, content, related_apps FROM tasks WHERE related_apps <> '[]'")
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                let apps: Option<String> = r.get(2)?;
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    apps.and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
+                        .unwrap_or_default(),
+                ))
+            })
+            .map(|rows| rows.filter_map(|x| x.ok()).collect::<Vec<_>>())
+        })
+        .unwrap_or_default();
+    for b in &mut blocks {
+        let mut best: Option<(f64, i64, String)> = None;
+        for (id, content, apps) in &candidates {
+            if apps.is_empty() {
+                continue;
+            }
+            let hit = b
+                .apps
+                .iter()
+                .filter(|a| apps.contains(&a.to_lowercase()))
+                .count();
+            let score = hit as f64 / b.apps.len() as f64;
+            if score >= 0.5 && best.as_ref().map(|(s, _, _)| score > *s).unwrap_or(true) {
+                best = Some((score, *id, content.clone()));
+            }
+        }
+        if let Some((_, id, name)) = best {
+            b.task_id = Some(id);
+            b.task_name = Some(name);
+        }
+    }
 
     let daily = storage::recent_daily(conn, n)?;
     let input_daily = storage::input_daily(conn, n)?;
@@ -481,5 +562,37 @@ mod tests {
         let b = compute_blocks(&segs);
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].state, "fragmented");
+    }
+
+    #[test]
+    fn multi_app_coordination_is_flow() {
+        // 40 分钟三应用协同：IDE 20min → 30s 过场查资料 → IDE 8min → 笔记 2min → IDE 10min
+        // 旧规则（整块切换≤3 且把过场也计切换）会误杀；新规则判为心流
+        let segs = vec![
+            (0, 1200, "ide.exe".to_string()),
+            (1201, 1231, "web.exe".to_string()),
+            (1232, 1712, "ide.exe".to_string()),
+            (1713, 1833, "note.exe".to_string()),
+            (1834, 2434, "ide.exe".to_string()),
+        ];
+        let b = compute_blocks(&segs);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].state, "flow");
+        assert_eq!(b[0].switches, 3);
+        assert_eq!(b[0].apps, vec!["ide.exe", "web.exe", "note.exe"]);
+    }
+
+    #[test]
+    fn short_detour_within_a_minute_does_not_break_flow() {
+        // "1 分钟内切回来不算打断"：a 15min → b 40s 过场 → a 15min，只计 1 次切换
+        let segs = vec![
+            (0, 900, "a.exe".to_string()),
+            (901, 941, "b.exe".to_string()),
+            (942, 1842, "a.exe".to_string()),
+        ];
+        let b = compute_blocks(&segs);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].state, "flow");
+        assert_eq!(b[0].switches, 1);
     }
 }

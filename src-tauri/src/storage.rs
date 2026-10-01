@@ -52,6 +52,8 @@ pub struct Task {
     pub remind_style: String,
     /// 进行中间隔提醒分钟数（0 = 不提醒）
     pub remind_interval_min: i64,
+    /// 相关应用（心流归属用）：exe 名列表，JSON 存储
+    pub related_apps: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -356,6 +358,8 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         "ALTER TABLE apps ADD COLUMN track_background INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE hourly_stats ADD COLUMN bg_seconds INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE daily_stats ADD COLUMN bg_seconds INTEGER NOT NULL DEFAULT 0",
+        // 心流任务绑定：任务的相关应用集合（JSON 数组，exe 名）
+        "ALTER TABLE tasks ADD COLUMN related_apps TEXT NOT NULL DEFAULT '[]'",
     ] {
         let _ = conn.execute(sql, []);
     }
@@ -595,6 +599,7 @@ fn valid_hhmm(s: &str) -> bool {
 }
 
 fn task_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
+    let related_apps: Option<String> = row.get(13)?;
     Ok(Task {
         id: row.get(0)?,
         content: row.get(1)?,
@@ -610,6 +615,9 @@ fn task_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         is_template: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
         remind_style: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
         remind_interval_min: row.get::<_, Option<i64>>(12)?.unwrap_or(0),
+        related_apps: related_apps
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -619,7 +627,7 @@ pub fn task_list(conn: &Connection) -> Result<Vec<Task>, String> {
             "SELECT id, content, priority, due_ts, done, done_ts, created_ts,
                     repeat_mode, template_id, start_ts,
                     CASE WHEN repeat_mode = '' THEN 0 ELSE 1 END,
-                    remind_style, remind_interval_min
+                    remind_style, remind_interval_min, related_apps
              FROM tasks
              ORDER BY done ASC,
                       CASE WHEN due_ts IS NULL THEN 1 ELSE 0 END ASC, due_ts ASC,
@@ -918,6 +926,73 @@ pub fn task_delete(conn: &Connection, id: i64) -> Result<(), String> {
     conn.execute("DELETE FROM tasks WHERE id = ?1", [id])
         .map_err(|e| format!("删除任务失败: {e}"))?;
     Ok(())
+}
+
+/// 任务的相关应用集合（心流归属用）：整体覆写（exe 名统一小写去空白）
+pub fn task_set_related_apps(conn: &Connection, id: i64, apps: &[String]) -> Result<(), String> {
+    let apps: Vec<String> = apps
+        .iter()
+        .map(|a| a.trim().to_lowercase())
+        .filter(|a| !a.is_empty())
+        .collect();
+    conn.execute(
+        "UPDATE tasks SET related_apps = ?2 WHERE id = ?1",
+        rusqlite::params![id, serde_json::to_string(&apps).unwrap_or_else(|_| "[]".into())],
+    )
+    .map_err(|e| format!("保存相关应用失败: {e}"))?;
+    Ok(())
+}
+
+/// 归并式追加（心流确认学习闭环：把这段的应用并入任务集合，已存在的不重复），返回合并结果
+pub fn task_link_apps(conn: &Connection, id: i64, apps: &[String]) -> Result<Vec<String>, String> {
+    let cur: Vec<String> = conn
+        .query_row("SELECT related_apps FROM tasks WHERE id = ?1", [id], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .map_err(|e| format!("读取任务失败: {e}"))?
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default();
+    let mut merged = cur;
+    for a in apps {
+        let a = a.trim().to_lowercase();
+        if !a.is_empty() && !merged.contains(&a) {
+            merged.push(a);
+        }
+    }
+    task_set_related_apps(conn, id, &merged)?;
+    Ok(merged)
+}
+
+/// 从任务的追踪时间窗（start_ts → done_ts/现在）推荐高频应用（前 8）
+pub fn task_suggest_apps(conn: &Connection, id: i64) -> Result<Vec<(String, i64)>, String> {
+    let (start_ts, done_ts): (Option<i64>, Option<i64>) = conn
+        .query_row("SELECT start_ts, done_ts FROM tasks WHERE id = ?1", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .map_err(|e| format!("读取任务失败: {e}"))?;
+    let Some(start) = start_ts else {
+        return Ok(Vec::new());
+    };
+    let end = done_ts.unwrap_or_else(|| chrono::Local::now().timestamp());
+    if end <= start {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.name, SUM(s.end_ts - s.start_ts) AS secs
+             FROM segments s JOIN apps a ON a.id = s.app_id
+             WHERE s.start_ts >= ?1 AND s.end_ts <= ?2 AND COALESCE(a.ignored, 0) = 0
+             GROUP BY a.name ORDER BY secs DESC LIMIT 8",
+        )
+        .map_err(|e| format!("查询推荐应用失败: {e}"))?;
+    let rows = stmt.query_map(rusqlite::params![start, end], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    });
+    let mut out = Vec::new();
+    for r in rows.map_err(|e| format!("查询推荐应用失败: {e}"))? {
+        out.push(r.map_err(|e| format!("查询推荐应用失败: {e}"))?);
+    }
+    Ok(out)
 }
 
 pub fn task_set_reminded(conn: &Connection, id: i64, key: &str) -> Result<(), String> {

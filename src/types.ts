@@ -133,6 +133,9 @@ export interface BlockView {
   apps: string[];
   switches: number;
   state: "flow" | "focused" | "fragmented";
+  /** 归属任务（应用集合重叠 ≥50% 自动匹配） */
+  taskId?: number | null;
+  taskName?: string | null;
 }
 
 export interface SpanDay {
@@ -190,6 +193,8 @@ export interface Task {
   remindIntervalMin: number;
   /** 该条本身是固定事项模板 */
   isTemplate: boolean;
+  /** 相关应用（心流归属用，exe 名列表） */
+  relatedApps: string[];
 }
 
 export interface ReminderRule {

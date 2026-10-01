@@ -2,7 +2,7 @@
 import * as echarts from "echarts";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import type { InsightReport } from "../types";
+import type { BlockView, InsightReport, Task } from "../types";
 import { fmtDuration } from "../lib/format";
 import { chartColors } from "../lib/chartColors";
 import { isLight } from "../lib/uiState";
@@ -10,6 +10,31 @@ import Icon from "../components/Icon.vue";
 import DayBars from "../components/DayBars.vue";
 
 const report = ref<InsightReport | null>(null);
+/** 心流归属：可归属的任务列表 + 每个未归属心流段的选中项 */
+const linkableTasks = ref<Task[]>([]);
+const assignPick = ref<Record<number, number>>({});
+const flowBlocks = computed(() => (report.value?.blocks ?? []).filter((b) => b.state === "flow"));
+
+const fmtHM = (ts: number) => {
+  const d = new Date(ts * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
+async function loadTasks() {
+  try {
+    linkableTasks.value = await invoke<Task[]>("task_list");
+  } catch {
+    linkableTasks.value = [];
+  }
+}
+
+async function confirmAssign(b: BlockView) {
+  const tid = assignPick.value[b.startTs];
+  if (!tid) return;
+  await invoke("task_link_apps", { id: tid, apps: b.apps });
+  assignPick.value = { ...assignPick.value, [b.startTs]: 0 };
+  await load();
+}
 /** 待办的完成用时分布（从待办页迁来；后续洞察会把待办数据一起纳入分析） */
 const todoStats = ref<{ buckets: number[] } | null>(null);
 const bucketLabels = ["<15分", "15~60分", "1~4时", "4~24时", "≥1天"];
@@ -90,6 +115,7 @@ async function load() {
       report.value = fakeReport();
     } else {
       report.value = await invoke<InsightReport>("insights_report", { days: range.value });
+      await loadTasks();
     }
     renderChart();
   } catch {
@@ -317,6 +343,36 @@ watch(isLight, renderChart);
       <DayBars :labels="stateBars.labels" :series="stateBars.series" />
       <p class="hint">
         块 = 间隔不足 5 分钟的使用归并；心流/专注/碎片为本地规则推断，不是精确值。
+      </p>
+    </section>
+
+    <!-- 心流时段与任务归属 -->
+    <section class="glass-card wide">
+      <h2>心流时段 · 归属任务</h2>
+      <div v-if="flowBlocks.length" class="flowlist">
+        <div v-for="b in flowBlocks" :key="b.startTs" class="flowrow">
+          <span class="ftime">{{ fmtHM(b.startTs) }}–{{ fmtHM(b.endTs) }}</span>
+          <span class="fdur">{{ fmtDuration(b.seconds) }}</span>
+          <span class="fapps" :title="b.apps.join(', ')">
+            {{ b.apps.map((x) => x.replace(".exe", "")).join(" · ") }}
+          </span>
+          <span v-if="b.taskId" class="ftask" title="按任务的相关应用自动归属">
+            {{ b.taskName }}
+          </span>
+          <span v-else class="funassigned">
+            <select v-model="assignPick[b.startTs]" class="fsel">
+              <option :value="0" disabled>归属到…</option>
+              <option v-for="t in linkableTasks" :key="t.id" :value="t.id">{{ t.content }}</option>
+            </select>
+            <button class="fbtn" :disabled="!assignPick[b.startTs]" @click="confirmAssign(b)">
+              确认
+            </button>
+          </span>
+        </div>
+      </div>
+      <p v-else class="hint">所选范围内还没有心流时段；去专注做一件事，这里会出现可归属的整块时间。</p>
+      <p class="hint">
+        确认后这段的应用会并入该任务的"相关应用"（在〈待办〉编辑任务可查看调整），以后类似时段自动归属。
       </p>
     </section>
 
@@ -607,6 +663,77 @@ watch(isLight, renderChart);
   margin: 8px 0 0;
   font-size: 11px;
   color: var(--text-faint);
+}
+
+/* 心流时段 · 归属任务 */
+.flowlist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.flowrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.ftime {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  flex: none;
+}
+.fdur {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.fapps {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.ftask {
+  flex: none;
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  color: var(--accent, #7b84ec);
+  border: 1px solid var(--accent, #7b84ec);
+  opacity: 0.9;
+}
+.funassigned {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.fsel {
+  font-size: 11px;
+  max-width: 200px;
+  background: none;
+  color: var(--text, #ddd);
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+  padding: 2px 4px;
+}
+.fbtn {
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  border: 1px solid var(--accent, #7b84ec);
+  color: var(--accent, #7b84ec);
+  background: none;
+}
+.fbtn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .legend {

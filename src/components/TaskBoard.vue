@@ -13,6 +13,9 @@ const editingId = ref<number | null>(null);
 const editDraft = ref("");
 const editStyle = ref("");
 const editInterval = ref(0);
+const editApps = ref<string[]>([]);
+const editAppInput = ref("");
+const suggestApps = ref<string[]>([]);
 
 const STYLE_OPTS = [
   { label: "到期提醒：默认卡片", value: "" },
@@ -72,6 +75,31 @@ function startEdit(t: Task) {
   editDraft.value = t.content;
   editStyle.value = t.remindStyle ?? "";
   editInterval.value = t.remindIntervalMin ?? 0;
+  editApps.value = [...(t.relatedApps ?? [])];
+  editAppInput.value = "";
+  suggestApps.value = [];
+  // 从任务追踪时间窗推荐高频应用（有开始时间才查）
+  if (t.startTs) {
+    invoke<[string, number][]>("task_suggest_apps", { id: t.id })
+      .then((r) => {
+        suggestApps.value = r
+          .map((x) => x[0])
+          .filter((x) => !editApps.value.includes(x))
+          .slice(0, 5);
+      })
+      .catch(() => {});
+  }
+}
+
+function removeApp(a: string) {
+  editApps.value = editApps.value.filter((x) => x !== a);
+}
+
+function addApp(a: string) {
+  const v = a.trim().toLowerCase();
+  if (v && !editApps.value.includes(v)) editApps.value.push(v);
+  suggestApps.value = suggestApps.value.filter((x) => x !== v);
+  editAppInput.value = "";
 }
 
 async function saveEdit(t: Task) {
@@ -86,6 +114,7 @@ async function saveEdit(t: Task) {
     remindStyle: editStyle.value,
     remindIntervalMin: editInterval.value,
   });
+  await invoke("task_set_related_apps", { id: t.id, apps: editApps.value });
   emit("reload");
 }
 
@@ -116,6 +145,29 @@ async function remove(t: Task) {
           autofocus
           @keyup.enter="saveEdit(t)"
         />
+        <div class="editrow appsrow">
+          <span class="apps-label" title="用于把心流时段自动归属到这个任务">相关应用</span>
+          <span
+            v-for="a in editApps"
+            :key="a"
+            class="appchip"
+            title="点击移除"
+            @click="removeApp(a)"
+          >{{ a.replace(".exe", "") }} ✕</span>
+          <button
+            v-for="a in suggestApps"
+            :key="'s' + a"
+            class="appchip sug"
+            :title="'追踪期高频应用，点击添加'"
+            @click="addApp(a)"
+          >+ {{ a.replace(".exe", "") }}</button>
+          <input
+            v-model="editAppInput"
+            class="eapp"
+            placeholder="手动加应用名"
+            @keyup.enter="addApp(editAppInput)"
+          />
+        </div>
         <div class="editrow">
           <select v-model="editStyle" class="esel">
             <option v-for="o in STYLE_OPTS" :key="o.value" :value="o.value">{{ o.label }}</option>
@@ -269,6 +321,41 @@ async function remove(t: Task) {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+/* 相关应用编辑器（心流归属） */
+.appsrow {
+  margin-top: 4px;
+}
+.apps-label {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+.appchip {
+  font-size: 11px;
+  padding: 1px 8px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--text, #ddd);
+  white-space: nowrap;
+}
+.appchip:hover {
+  border-color: var(--text, #ddd);
+}
+.appchip.sug {
+  border-style: dashed;
+  opacity: 0.75;
+}
+.eapp {
+  width: 110px;
+  font-size: 11px;
+  background: none;
+  border: 1px dashed rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+  color: var(--text, #ddd);
+  padding: 2px 6px;
 }
 
 .esel {

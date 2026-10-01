@@ -1166,6 +1166,30 @@ fn island_set_snap_wake(app: tauri::AppHandle, mode: String) -> Result<(), Strin
     Ok(())
 }
 
+/// 心流任务绑定：整体覆写任务的相关应用集合
+#[tauri::command]
+fn task_set_related_apps(app: tauri::AppHandle, id: i64, apps: Vec<String>) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::task_set_related_apps(&conn, id, &apps)
+}
+
+/// 心流确认学习闭环：把心流段的应用并入任务集合（不重复），返回合并结果
+#[tauri::command]
+fn task_link_apps(app: tauri::AppHandle, id: i64, apps: Vec<String>) -> Result<Vec<String>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::task_link_apps(&conn, id, &apps)
+}
+
+/// 从任务的追踪时间窗推荐高频应用（前 8，[应用名, 秒数]）
+#[tauri::command]
+fn task_suggest_apps(app: tauri::AppHandle, id: i64) -> Result<Vec<(String, i64)>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::task_suggest_apps(&conn, id)
+}
+
 /// 鼠标穿透：开=整窗点击穿透（纯展示，不响应悬停；需回个性化关闭）
 #[tauri::command]
 fn island_set_click_through(app: tauri::AppHandle, on: bool) -> Result<(), String> {
@@ -1649,6 +1673,9 @@ pub fn run() {
             island_set_opacity,
             island_set_snap_enabled,
             island_set_snap_wake,
+            task_set_related_apps,
+            task_link_apps,
+            task_suggest_apps,
             island_set_click_through,
             island_set_always_top,
             island_set_accent_mode,
