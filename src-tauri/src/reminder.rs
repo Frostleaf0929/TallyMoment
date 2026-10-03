@@ -85,7 +85,7 @@ pub fn show(app: &AppHandle, payload: Payload) {
     }
     if let Some(win) = app.get_webview_window("reminder") {
         eprintln!("[reminder] window exists, emit to webview");
-        let _ = win.show();
+        show_card(&win);
         let _ = app.emit_to("reminder", "reminder-show", payload);
         return;
     }
@@ -234,6 +234,18 @@ fn show_fullscreen(app: &AppHandle, payload: Payload) {
             });
         }
         Err(e) => eprintln!("[reminder] 全屏提醒窗创建失败: {e}"),
+    }
+}
+
+/// 显示卡片提醒窗：⚠️ 必须走这里——窗口 show 会触发 tao 样式重写
+/// （带 WS_CAPTION 的样式表被重新写回），所以去帽+圆角区域要在 show 之后再做一次，
+/// 否则用户会看到白色系统边框（实拍回归）。
+pub fn show_card(win: &tauri::WebviewWindow) {
+    let _ = win.show();
+    #[cfg(windows)]
+    {
+        crate::island::strip_caption(win);
+        round_region(win, CARD_RADIUS);
     }
 }
 

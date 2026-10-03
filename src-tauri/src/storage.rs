@@ -1,6 +1,6 @@
 use chrono::{Local, TimeZone, Timelike};
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Serialize)]
@@ -2786,7 +2786,105 @@ pub fn wallpaper_get(conn: &Connection) -> Result<Option<WallpaperFile>, String>
     }))
 }
 
-/// 全屏提醒的背景图（独立于桌面壁纸，存同一目录、前缀 rbg.）
+/// 全屏提醒背景图：组模型（每组最多 10 张；组数不限、组名可改、组间快速切换）。
+/// 播放方式：默认按顺序从左到右循环；开启"随机"后洗牌轮换（一轮内不重复，一轮结束重洗）。
+const BG_GROUP_MAX: usize = 10;
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BgGroup {
+    pub name: String,
+    pub files: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BgOverview {
+    pub groups: Vec<BgGroup>,
+    pub active: usize,
+    pub rotate: bool,
+}
+
+fn bg_groups(conn: &Connection) -> Vec<BgGroup> {
+    if let Some(v) = get_setting(conn, "ui.reminder_bg_groups") {
+        if let Ok(g) = serde_json::from_str::<Vec<BgGroup>>(&v) {
+            if !g.is_empty() {
+                return g;
+            }
+        }
+    }
+    // 迁移：旧版历史列表 / 旧版单张 → 单组"组一"
+    let mut files: Vec<String> = get_setting(conn, "ui.reminder_bg_list")
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default();
+    if let Some(p) = get_setting(conn, "ui.reminder_bg") {
+        if !p.is_empty() && PathBuf::from(&p).is_file() && !files.contains(&p) {
+            files.push(p);
+        }
+    }
+    let name = if files.is_empty() { "默认组" } else { "组一" };
+    vec![BgGroup { name: name.into(), files }]
+}
+
+fn bg_save_groups(conn: &Connection, groups: &[BgGroup]) {
+    let _ = set_setting(
+        conn,
+        "ui.reminder_bg_groups",
+        &serde_json::to_string(groups).unwrap_or_else(|_| "[]".into()),
+    );
+}
+
+fn bg_active_index(conn: &Connection, len: usize) -> usize {
+    let i = get_setting(conn, "ui.reminder_bg_active")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    if len == 0 { 0 } else { i.min(len - 1) }
+}
+
+/// 总览：组列表 + 当前组下标 + 播放方式
+pub fn reminder_bg_overview(conn: &Connection) -> BgOverview {
+    let groups = bg_groups(conn);
+    let active = bg_active_index(conn, groups.len());
+    BgOverview {
+        groups,
+        active,
+        rotate: reminder_bg_rotate_get(conn),
+    }
+}
+
+/// 缩略图条目（含路径，供前端移除）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BgThumb {
+    pub path: String,
+    pub mime: String,
+    pub data: String,
+}
+
+/// 当前组的缩略图（base64，与全屏背景同一套读取路径，避开资产协议的环境差异）
+pub fn reminder_bg_thumbs(conn: &Connection) -> Result<Vec<BgThumb>, String> {
+    let groups = bg_groups(conn);
+    let active = bg_active_index(conn, groups.len());
+    let mut out = Vec::new();
+    for p in groups
+        .get(active)
+        .map(|g| g.files.clone())
+        .unwrap_or_default()
+    {
+        if !PathBuf::from(&p).is_file() {
+            continue;
+        }
+        let data = std::fs::read(&p).map_err(|e| format!("读取图片失败: {e}"))?;
+        out.push(BgThumb {
+            path: p.clone(),
+            mime: bg_mime(&p),
+            data: crate::pet_settings::base64_encode(&data),
+        });
+    }
+    Ok(out)
+}
+
+/// 新增图片到当前组（队首，超过 10 张挤掉队尾；不再被任何组引用的文件从磁盘清理）
 pub fn reminder_bg_set(conn: &Connection, src_path: &str) -> Result<(), String> {
     let src = PathBuf::from(src_path);
     if !src.is_file() {
@@ -2804,50 +2902,103 @@ pub fn reminder_bg_set(conn: &Connection, src_path: &str) -> Result<(), String> 
         return Err("图片过大（超过 16MB）".into());
     }
     let dir = wallpaper_dir()?;
-    // 文件名带时间戳，避免同扩展名互相覆盖
+    // 文件名带纳秒时间戳，避免同扩展名互相覆盖
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos())
         .unwrap_or(0);
     let dst = dir.join(format!("rbg.{ts}.{ext}"));
     std::fs::copy(&src, &dst).map_err(|e| format!("保存图片失败: {e}"))?;
-    // 历史：新图插到队首，最多留 5 张；兼容迁移老版本的单张
-    let mut list: Vec<String> = get_setting(conn, "ui.reminder_bg_list")
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default();
-    list.insert(0, dst.to_string_lossy().to_string());
-    if let Some(old) = get_setting(conn, "ui.reminder_bg") {
-        if !old.is_empty() && PathBuf::from(&old).is_file() && !list.contains(&old) {
-            list.push(old);
-        }
+
+    let mut groups = bg_groups(conn);
+    let active = bg_active_index(conn, groups.len());
+    let dst_str = dst.to_string_lossy().to_string();
+    {
+        let g = &mut groups[active];
+        g.files.insert(0, dst_str.clone());
+        g.files.truncate(BG_GROUP_MAX);
     }
-    list.truncate(5);
-    // 清掉不在名单里的 rbg.* 遗留文件（含老版本的 rbg.<ext>）
-    if let Ok(entries) = std::fs::read_dir(&dir) {
+    bg_prune_files(&groups, &dir)?;
+    bg_save_groups(conn, &groups);
+    set_setting(conn, "ui.reminder_bg", &dst_str)?;
+    // 组内容变了：重置播放进度
+    set_setting(conn, "ui.reminder_bg_cursor", "0");
+    set_setting(conn, "ui.reminder_bg_hand", "[]");
+    Ok(())
+}
+
+/// 从当前组移除一张；若所有组都不再引用该文件则从磁盘删除
+pub fn reminder_bg_remove_file(conn: &Connection, path: &str) -> Result<(), String> {
+    let mut groups = bg_groups(conn);
+    let active = bg_active_index(conn, groups.len());
+    if let Some(g) = groups.get_mut(active) {
+        g.files.retain(|f| f != path);
+    }
+    let dir = wallpaper_dir()?;
+    bg_prune_files(&groups, &dir)?;
+    bg_save_groups(conn, &groups);
+    set_setting(conn, "ui.reminder_bg_cursor", "0");
+    set_setting(conn, "ui.reminder_bg_hand", "[]");
+    Ok(())
+}
+
+/// 清掉不被任何组引用的 rbg.* 文件
+fn bg_prune_files(groups: &[BgGroup], dir: &std::path::Path) -> Result<(), String> {
+    let referenced: Vec<&String> = groups.iter().flat_map(|g| g.files.iter()).collect();
+    if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.filter_map(|e| e.ok()) {
             let name = e.file_name().to_string_lossy().to_string();
             if name.starts_with("rbg.") {
                 let p = e.path().to_string_lossy().to_string();
-                if !list.contains(&p) {
+                if !referenced.contains(&&p) {
                     let _ = std::fs::remove_file(e.path());
                 }
             }
         }
     }
-    set_setting(
-        conn,
-        "ui.reminder_bg_list",
-        &serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()),
-    )?;
-    set_setting(conn, "ui.reminder_bg", &dst.to_string_lossy())
+    Ok(())
 }
 
-/// 历史记录条目（不含图片数据；预览走资产协议按路径取）
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WallpaperFileInfo {
-    pub path: String,
-    pub mime: String,
+/// 新建组，返回其下标
+pub fn bg_add_group(conn: &Connection, name: &str) -> Result<usize, String> {
+    let mut groups = bg_groups(conn);
+    let n = groups.len() + 1;
+    let name = if name.trim().is_empty() {
+        format!("组{n}")
+    } else {
+        name.trim().to_string()
+    };
+    groups.push(BgGroup { name, files: Vec::new() });
+    bg_save_groups(conn, &groups);
+    Ok(groups.len() - 1)
+}
+
+/// 重命名组
+pub fn bg_rename_group(conn: &Connection, index: usize, name: &str) -> Result<(), String> {
+    let mut groups = bg_groups(conn);
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 20 {
+        return Err("组名需为 1~20 个字符".into());
+    }
+    match groups.get_mut(index) {
+        Some(g) => g.name = name.into(),
+        None => return Err("组不存在".into()),
+    }
+    bg_save_groups(conn, &groups);
+    Ok(())
+}
+
+/// 切换当前组（播放进度随之重置）
+pub fn bg_set_active_group(conn: &Connection, index: usize) -> Result<(), String> {
+    let groups = bg_groups(conn);
+    if index >= groups.len() {
+        return Err("组不存在".into());
+    }
+    bg_save_groups(conn, &groups); // 顺带把迁移后的组结构落库
+    set_setting(conn, "ui.reminder_bg_active", &index.to_string());
+    set_setting(conn, "ui.reminder_bg_cursor", "0");
+    set_setting(conn, "ui.reminder_bg_hand", "[]");
+    Ok(())
 }
 
 fn bg_mime(path: &str) -> String {
@@ -2865,19 +3016,7 @@ fn bg_mime(path: &str) -> String {
     .into()
 }
 
-/// 历史列表（新→旧，最多 5 条，过滤已不存在的文件）
-pub fn reminder_bg_list(conn: &Connection) -> Result<Vec<WallpaperFileInfo>, String> {
-    let list: Vec<String> = get_setting(conn, "ui.reminder_bg_list")
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default();
-    Ok(list
-        .into_iter()
-        .filter(|p| PathBuf::from(p).is_file())
-        .map(|p| WallpaperFileInfo { mime: bg_mime(&p), path: p })
-        .collect())
-}
-
-/// 轮换开关（开=每次全屏提醒从历史里随机挑一张）
+/// 轮换方式：false = 顺序（从左到右循环，默认）；true = 随机洗牌（一轮内不重复）
 pub fn reminder_bg_rotate_get(conn: &Connection) -> bool {
     get_setting(conn, "ui.reminder_bg_rotate").map(|v| v == "1").unwrap_or(false)
 }
@@ -2886,23 +3025,69 @@ pub fn reminder_bg_set_rotate(conn: &Connection, on: bool) {
     let _ = set_setting(conn, "ui.reminder_bg_rotate", if on { "1" } else { "0" });
 }
 
-/// 取本次全屏提醒要用的背景图：轮换开=历史随机一张，否则最新一张
+/// 取本次全屏提醒要用的背景图（当前组）：
+/// 顺序 = 游标从左到右循环；随机 = 洗牌队列逐张出队，一轮结束自动重洗（轮内不重复）
 pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<WallpaperFile>, String> {
-    let list: Vec<String> = get_setting(conn, "ui.reminder_bg_list")
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default();
-    let list: Vec<&String> = list.iter().filter(|p| PathBuf::from(p).is_file()).collect();
-    let path = if reminder_bg_rotate_get(conn) && list.len() > 1 {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() as usize)
-            .unwrap_or(0);
-        list[nanos % list.len()].clone()
-    } else {
-        match list.first() {
-            Some(p) => (*p).clone(),
-            None => return Ok(None),
+    let groups = bg_groups(conn);
+    let active = bg_active_index(conn, groups.len());
+    let mut files: Vec<String> = groups
+        .get(active)
+        .map(|g| g.files.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| PathBuf::from(p).is_file())
+        .collect();
+    if files.is_empty() {
+        return Ok(None);
+    }
+    let path = if reminder_bg_rotate_get(conn) && files.len() > 1 {
+        // 随机洗牌：出队；队列空了重洗（时间戳做简易种子）
+        let mut hand: Vec<String> = get_setting(conn, "ui.reminder_bg_hand")
+            .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| files.contains(p))
+            .collect();
+        let last = get_setting(conn, "ui.reminder_bg_last");
+        if hand.is_empty() {
+            let mut seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos() as u64 ^ d.as_secs())
+                .unwrap_or(12345)
+                .max(1);
+            for i in (1..files.len()).rev() {
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let j = ((seed >> 33) as usize) % (i + 1);
+                files.swap(i, j);
+            }
+            hand = files.clone();
         }
+        // 跨轮衔接处避免与上一张相同
+        if hand.len() > 1 {
+            if let Some(l) = &last {
+                if hand[0] == *l {
+                    hand.swap(0, 1);
+                }
+            }
+        }
+        let picked = hand.remove(0);
+        set_setting(
+            conn,
+            "ui.reminder_bg_hand",
+            &serde_json::to_string(&hand).unwrap_or_else(|_| "[]".into()),
+        );
+        set_setting(conn, "ui.reminder_bg_last", &picked);
+        picked
+    } else {
+        // 顺序循环：游标从左到右
+        let len = files.len() as u64;
+        let cur = get_setting(conn, "ui.reminder_bg_cursor")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        set_setting(conn, "ui.reminder_bg_cursor", &(cur + 1).to_string());
+        files[(cur % len) as usize].clone()
     };
     let data = std::fs::read(&path).map_err(|e| format!("读取图片失败: {e}"))?;
     Ok(Some(WallpaperFile {
@@ -2946,6 +3131,11 @@ pub fn reminder_bg_clear(conn: &Connection) -> Result<(), String> {
     }
     set_setting(conn, "ui.reminder_bg", "")?;
     set_setting(conn, "ui.reminder_bg_list", "[]")?;
+    set_setting(conn, "ui.reminder_bg_groups", r#"[{"name":"默认组","files":[]}]"#)?;
+    set_setting(conn, "ui.reminder_bg_active", "0")?;
+    set_setting(conn, "ui.reminder_bg_cursor", "0")?;
+    set_setting(conn, "ui.reminder_bg_hand", "[]")?;
+    set_setting(conn, "ui.reminder_bg_last", "")?;
     set_setting(conn, "ui.reminder_bg_rotate", "0")
 }
 

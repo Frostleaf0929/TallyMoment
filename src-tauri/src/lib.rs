@@ -665,12 +665,52 @@ fn reminder_bg_clear(app: tauri::AppHandle) -> Result<(), String> {
     storage::reminder_bg_clear(&conn)
 }
 
-/// 全屏提醒背景图历史（新→旧，最多 5 条，预览走资产协议）
+/// 全屏提醒背景图总览（组列表/当前组/播放方式）
 #[tauri::command]
-fn reminder_bg_list(app: tauri::AppHandle) -> Result<Vec<storage::WallpaperFileInfo>, String> {
+fn reminder_bg_overview(app: tauri::AppHandle) -> Result<storage::BgOverview, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    storage::reminder_bg_list(&conn)
+    Ok(storage::reminder_bg_overview(&conn))
+}
+
+/// 当前组的缩略图（base64）
+#[tauri::command]
+fn reminder_bg_thumbs(app: tauri::AppHandle) -> Result<Vec<storage::BgThumb>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::reminder_bg_thumbs(&conn)
+}
+
+/// 切换当前组
+#[tauri::command]
+fn reminder_bg_group_set_active(app: tauri::AppHandle, index: usize) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::bg_set_active_group(&conn, index)
+}
+
+/// 新建组（组名可空，自动编号）
+#[tauri::command]
+fn reminder_bg_group_add(app: tauri::AppHandle, name: String) -> Result<usize, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::bg_add_group(&conn, &name)
+}
+
+/// 重命名组
+#[tauri::command]
+fn reminder_bg_group_rename(app: tauri::AppHandle, index: usize, name: String) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::bg_rename_group(&conn, index, &name)
+}
+
+/// 从当前组移除一张背景图
+#[tauri::command]
+fn reminder_bg_remove_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::reminder_bg_remove_file(&conn, &path)
 }
 
 /// 本次全屏提醒实际使用的背景图（轮换开=随机一张）
@@ -808,7 +848,8 @@ fn reminder_pending(app: tauri::AppHandle) -> Vec<reminder::Payload> {
 #[tauri::command]
 fn reminder_show_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("reminder") {
-        let _ = w.show();
+        // show 后再去帽+重贴圆角区域（show 会把 WS_CAPTION 样式重写回来）
+        reminder::show_card(&w);
     }
 }
 
@@ -1783,10 +1824,15 @@ pub fn run() {
             reminder_bg_set,
             reminder_bg_get,
             reminder_bg_clear,
-            reminder_bg_list,
             reminder_bg_pick,
             reminder_bg_rotate_get,
             reminder_bg_rotate_set,
+            reminder_bg_overview,
+            reminder_bg_thumbs,
+            reminder_bg_group_set_active,
+            reminder_bg_group_add,
+            reminder_bg_group_rename,
+            reminder_bg_remove_file,
             import_tai,
             export_json,
             restore_json,

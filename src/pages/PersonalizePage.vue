@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { NSwitch } from "naive-ui";
 import Icon from "../components/Icon.vue";
@@ -204,28 +204,74 @@ async function clearReminderBg() {
   }
 }
 
-/** 背景图历史（新→旧，最多 5 张）与轮换开关 */
-const reminderBgThumbs = ref<{ path: string; mime: string }[]>([]);
-const reminderBgRotate = ref(false);
+/** 背景图组：每组最多 10 张；组名可改；轮换默认按顺序从左到右，开启后随机洗牌（轮内不重复） */
+const bgOverview = ref<{ groups: { name: string; files: string[] }[]; active: number; rotate: boolean }>({
+  groups: [],
+  active: 0,
+  rotate: false,
+});
+const bgThumbs = ref<{ path: string; mime: string; data: string }[]>([]);
+const renameValue = ref("");
 
 async function loadReminderBg() {
   try {
-    reminderBgThumbs.value = await invoke<{ path: string; mime: string }[]>("reminder_bg_list");
-    reminderBgSet.value = reminderBgThumbs.value.length > 0;
+    bgOverview.value = await invoke("reminder_bg_overview");
+    bgThumbs.value = await invoke<{ path: string; mime: string; data: string }[]>("reminder_bg_thumbs");
+    reminderBgSet.value = bgThumbs.value.length > 0;
   } catch {
-    reminderBgThumbs.value = [];
+    bgThumbs.value = [];
   }
+}
+
+async function switchBgGroup(i: number) {
+  if (i === bgOverview.value.active) return;
   try {
-    reminderBgRotate.value = await invoke<boolean>("reminder_bg_rotate_get");
-  } catch {
-    reminderBgRotate.value = false;
+    await invoke("reminder_bg_group_set_active", { index: i });
+    await loadReminderBg();
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+async function addBgGroup() {
+  try {
+    await invoke("reminder_bg_group_add", { name: "" });
+    await loadReminderBg();
+    await switchBgGroup(bgOverview.value.groups.length - 1);
+    msg.value = "已新建组，选择图片即可往里添加";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+async function renameBgGroup() {
+  if (!renameValue.value.trim()) return;
+  try {
+    await invoke("reminder_bg_group_rename", {
+      index: bgOverview.value.active,
+      name: renameValue.value,
+    });
+    renameValue.value = "";
+    await loadReminderBg();
+    msg.value = "组名已更新";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+async function removeBg(path: string) {
+  try {
+    await invoke("reminder_bg_remove_file", { path: path });
+    await loadReminderBg();
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
   }
 }
 
 async function setReminderBgRotate(v: boolean) {
   try {
     await invoke("reminder_bg_rotate_set", { on: v });
-    reminderBgRotate.value = v;
+    bgOverview.value.rotate = v;
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
@@ -821,25 +867,47 @@ onMounted(async () => {
           <button class="ghost danger" @click="clearReminderBg">移除</button>
         </div>
       </div>
-      <div v-if="reminderBgThumbs.length" class="bgthumbs">
-        <div
-          v-for="(t, i) in reminderBgThumbs"
-          :key="t.path"
-          class="bgthumb"
-          :class="{ cur: i === 0 }"
-          :title="i === 0 ? '当前使用' : '历史图（轮换开启时随机使用）'"
-        >
-          <img :src="convertFileSrc(t.path)" alt="" />
-          <span v-if="i === 0" class="tag">当前</span>
-        </div>
-      </div>
       <div class="row">
         <div class="rlabel">
-          <p class="rt">轮换播放</p>
-          <p class="rd">开启后每次全屏提醒从历史里随机挑一张（至少 2 张才有效果）</p>
+          <p class="rt">图片组</p>
+          <p class="rd">点击切换组（当前组高亮）；每组最多 10 张，互相独立</p>
+        </div>
+      </div>
+      <div class="bggroups">
+        <button
+          v-for="(g, i) in bgOverview.groups"
+          :key="i"
+          class="bggroup"
+          :class="{ on: i === bgOverview.active }"
+          @click="switchBgGroup(i)"
+        >
+          {{ g.name }}
+        </button>
+        <button class="bggroup add" @click="addBgGroup">＋ 新组</button>
+      </div>
+      <div class="bgrename">
+        <input
+          v-model="renameValue"
+          class="rnin"
+          placeholder="给当前组改个名字（可选）"
+          @keyup.enter="renameBgGroup"
+        />
+        <button class="ghost" @click="renameBgGroup">改组名</button>
+      </div>
+      <div v-if="bgThumbs.length" class="bgthumbs">
+        <div v-for="(t, i) in bgThumbs" :key="i" class="bgthumb" :class="{ cur: i === 0 }">
+          <img :src="`data:${t.mime};base64,${t.data}`" alt="" />
+          <button class="tremove" title="从本组移除" @click="removeBg(t.path)">✕</button>
+        </div>
+      </div>
+      <p v-else class="rd more">当前组还没有图片，点上面「选择图片」添加。</p>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">轮换方式</p>
+          <p class="rd">关＝按顺序从左到右循环（默认）；开＝随机洗牌，一轮内不重复，一轮结束自动重洗</p>
         </div>
         <NSwitch
-          :value="reminderBgRotate"
+          :value="bgOverview.rotate"
           size="small"
           @update:value="(v: boolean) => setReminderBgRotate(v)"
         />
@@ -1068,6 +1136,60 @@ onMounted(async () => {
 .cur {
   font-size: 11.5px;
   color: var(--text-faint);
+}
+
+/* 全屏提醒背景：图片组 */
+.bggroups {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 10px;
+}
+.bggroup {
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  background: none;
+  color: var(--text, #ddd);
+  cursor: pointer;
+}
+.bggroup.on {
+  border-color: var(--accent, #7b84ec);
+  color: var(--accent, #7b84ec);
+}
+.bggroup.add {
+  border-style: dashed;
+  opacity: 0.8;
+}
+.bgrename {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 10px;
+}
+.rnin {
+  font-size: 12px;
+  padding: 4px 8px;
+  width: 200px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+  background: none;
+  color: var(--text, #ddd);
+}
+.bgthumb .tremove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  font-size: 10px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
 }
 
 /* 全屏提醒背景：历史缩略图 */
