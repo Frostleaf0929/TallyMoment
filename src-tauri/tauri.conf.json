@@ -36,7 +36,9 @@
         "enable": true,
         "scope": [
           "$EXE/Data/models/**",
-          "$APPDATA/TallyMoment/Data/models/**"
+          "$APPDATA/TallyMoment/Data/models/**",
+          "$EXE/Data/wallpapers/**",
+          "$APPDATA/TallyMoment/Data/wallpapers/**"
         ]
       }
     }

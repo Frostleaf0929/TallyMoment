@@ -30,7 +30,7 @@ function apply(p: Payload) {
 }
 
 onMounted(async () => {
-  void invoke<{ mime: string; data: string } | null>("reminder_bg_get")
+  void invoke<{ mime: string; data: string } | null>("reminder_bg_pick")
     .then((w) => {
       if (w) bg.value = `data:${w.mime};base64,${w.data}`;
     })

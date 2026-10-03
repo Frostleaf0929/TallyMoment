@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { NSwitch } from "naive-ui";
 import Icon from "../components/Icon.vue";
@@ -184,6 +184,7 @@ async function pickReminderBg() {
     if (!picked || Array.isArray(picked)) return;
     await invoke("reminder_bg_set", { path: picked });
     reminderBgSet.value = true;
+    await loadReminderBg();
     msg.value = "全屏提醒背景已设置";
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
@@ -196,15 +197,41 @@ async function clearReminderBg() {
   try {
     await invoke("reminder_bg_clear");
     reminderBgSet.value = false;
+    await loadReminderBg();
     msg.value = "已移除，回到默认柔光背景";
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
 }
 
-void invoke<{ mime: string; data: string } | null>("reminder_bg_get")
-  .then((w) => (reminderBgSet.value = !!w))
-  .catch(() => (reminderBgSet.value = false));
+/** 背景图历史（新→旧，最多 5 张）与轮换开关 */
+const reminderBgThumbs = ref<{ path: string; mime: string }[]>([]);
+const reminderBgRotate = ref(false);
+
+async function loadReminderBg() {
+  try {
+    reminderBgThumbs.value = await invoke<{ path: string; mime: string }[]>("reminder_bg_list");
+    reminderBgSet.value = reminderBgThumbs.value.length > 0;
+  } catch {
+    reminderBgThumbs.value = [];
+  }
+  try {
+    reminderBgRotate.value = await invoke<boolean>("reminder_bg_rotate_get");
+  } catch {
+    reminderBgRotate.value = false;
+  }
+}
+
+async function setReminderBgRotate(v: boolean) {
+  try {
+    await invoke("reminder_bg_rotate_set", { on: v });
+    reminderBgRotate.value = v;
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+void loadReminderBg();
 
 
 /* ---------- 原子岛 ---------- */
@@ -787,12 +814,35 @@ onMounted(async () => {
       <div class="row">
         <div class="rlabel">
           <p class="rt">自定义图片</p>
-          <p class="rd">全屏休息提醒时铺满屏幕；不设则用默认的柔光背景</p>
+          <p class="rd">全屏休息提醒时铺满屏幕；不设则用默认的柔光背景。最近 5 张自动留作历史</p>
         </div>
         <div class="acts">
           <button class="ghost" @click="pickReminderBg">选择图片</button>
           <button class="ghost danger" @click="clearReminderBg">移除</button>
         </div>
+      </div>
+      <div v-if="reminderBgThumbs.length" class="bgthumbs">
+        <div
+          v-for="(t, i) in reminderBgThumbs"
+          :key="t.path"
+          class="bgthumb"
+          :class="{ cur: i === 0 }"
+          :title="i === 0 ? '当前使用' : '历史图（轮换开启时随机使用）'"
+        >
+          <img :src="convertFileSrc(t.path)" alt="" />
+          <span v-if="i === 0" class="tag">当前</span>
+        </div>
+      </div>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">轮换播放</p>
+          <p class="rd">开启后每次全屏提醒从历史里随机挑一张（至少 2 张才有效果）</p>
+        </div>
+        <NSwitch
+          :value="reminderBgRotate"
+          size="small"
+          @update:value="(v: boolean) => setReminderBgRotate(v)"
+        />
       </div>
       <p v-if="reminderBgSet" class="ok">已设置（存本机数据目录，不上传）</p>
     </div>
@@ -1018,6 +1068,41 @@ onMounted(async () => {
 .cur {
   font-size: 11.5px;
   color: var(--text-faint);
+}
+
+/* 全屏提醒背景：历史缩略图 */
+.bgthumbs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 10px;
+}
+.bgthumb {
+  position: relative;
+  width: 96px;
+  height: 60px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid rgba(128, 128, 128, 0.35);
+}
+.bgthumb.cur {
+  border-color: var(--accent, #7b84ec);
+}
+.bgthumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.bgthumb .tag {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
 }
 
 .ghost {

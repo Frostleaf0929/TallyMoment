@@ -665,6 +665,37 @@ fn reminder_bg_clear(app: tauri::AppHandle) -> Result<(), String> {
     storage::reminder_bg_clear(&conn)
 }
 
+/// 全屏提醒背景图历史（新→旧，最多 5 条，预览走资产协议）
+#[tauri::command]
+fn reminder_bg_list(app: tauri::AppHandle) -> Result<Vec<storage::WallpaperFileInfo>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::reminder_bg_list(&conn)
+}
+
+/// 本次全屏提醒实际使用的背景图（轮换开=随机一张）
+#[tauri::command]
+fn reminder_bg_pick(app: tauri::AppHandle) -> Result<Option<storage::WallpaperFile>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::reminder_bg_pick(&conn)
+}
+
+#[tauri::command]
+fn reminder_bg_rotate_get(app: tauri::AppHandle) -> bool {
+    let Some(db) = app.try_state::<Db>() else { return false };
+    let Ok(conn) = db.0.lock() else { return false };
+    storage::reminder_bg_rotate_get(&conn)
+}
+
+#[tauri::command]
+fn reminder_bg_rotate_set(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::reminder_bg_set_rotate(&conn, on);
+    Ok(())
+}
+
 /// 关闭全屏提醒窗
 #[tauri::command]
 fn close_reminder_full(app: tauri::AppHandle) {
@@ -891,7 +922,7 @@ fn island_data(app: tauri::AppHandle) -> IslandData {
         .unwrap_or(0);
     let mut tasks: Vec<IslandNextTask> = Vec::new();
     if let Ok(mut stmt) =
-        conn.prepare("SELECT id, content, due_ts FROM tasks WHERE done = 0 AND due_ts IS NOT NULL AND due_ts >= ?1 ORDER BY due_ts LIMIT 6")
+        conn.prepare("SELECT id, content, due_ts FROM tasks WHERE done = 0 AND deleted = 0 AND due_ts IS NOT NULL AND due_ts >= ?1 ORDER BY due_ts LIMIT 6")
     {
         if let Ok(rows) = stmt.query_map([now], |r| {
             Ok(IslandNextTask {
@@ -1752,6 +1783,10 @@ pub fn run() {
             reminder_bg_set,
             reminder_bg_get,
             reminder_bg_clear,
+            reminder_bg_list,
+            reminder_bg_pick,
+            reminder_bg_rotate_get,
+            reminder_bg_rotate_set,
             import_tai,
             export_json,
             restore_json,

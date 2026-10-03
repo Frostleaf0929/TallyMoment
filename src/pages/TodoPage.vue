@@ -671,16 +671,22 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   display: flex;
   gap: 14px;
   align-items: stretch;
+  position: relative;
 }
 
-/* 月历 3 : 今日待办 2，两卡等高 */
+/* 月历卡自然高度 = 整行高度（今日卡绝对贴合它，多出的待办在卡内滚动） */
 .calcard {
   flex: 3 1 0;
   min-width: 0;
 }
 
 .todaycard {
-  flex: 2 1 0;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  /* 右侧 2/5：内容宽的 40%（3:2 比例），再扣掉两卡之间的 14px 间距 */
+  width: calc((100% - 14px) * 0.4);
   min-width: 0;
 }
 
@@ -688,6 +694,10 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 @media (max-width: 900px) {
   .toprow {
     flex-direction: column;
+  }
+  .todaycard {
+    position: static;
+    width: auto;
   }
 }
 

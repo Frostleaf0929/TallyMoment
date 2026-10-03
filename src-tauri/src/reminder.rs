@@ -111,7 +111,11 @@ pub fn show(app: &AppHandle, payload: Payload) {
         .visible(false);
 
     match build.build() {
-        Ok(win) => kill_border(&win),
+        Ok(win) => {
+            kill_border(&win);
+            // 圆角区域只贴卡片窗；全屏窗走 show_fullscreen 自己的路径，不贴区域
+            round_region(&win, CARD_RADIUS);
+        }
         Err(e) => eprintln!("[reminder] 创建提醒窗口失败: {e}"),
     }
 }
@@ -126,7 +130,8 @@ fn kill_border(win: &tauri::WebviewWindow) {
     };
     if let Ok(hwnd) = win.hwnd() {
         // DWMWA_COLOR_NONE = 0xFFFFFFFE；圆角偏好 DWMWCP_DONOTROUND = 1
-        // （圆角改由 SetWindowRgn 按卡片半径裁剪，DWM 的 8px 圆角会跟 14px 区域打架取小）
+        // （卡片窗的圆角由 SetWindowRgn 按 14px 裁剪，DWM 的 8px 圆角会跟区域取小打架；
+        //   注意这里只管去边框，区域裁剪只在卡片窗路径里做，全屏窗不贴区域）
         let none: u32 = 0xFFFF_FFFE;
         let no_round: u32 = 1;
         unsafe {
@@ -143,7 +148,6 @@ fn kill_border(win: &tauri::WebviewWindow) {
                 4,
             );
         }
-        round_region(win, CARD_RADIUS);
     }
 }
 
@@ -152,13 +156,17 @@ const CARD_RADIUS: f64 = 14.0;
 
 /// 窗口区域裁剪成圆角矩形（SetWindowRgn，同原子岛的灰框根治思路）：
 /// 形状之外不存在窗口——彻底杜绝角落残留底色，DWM 投影也会贴合圆角。
+/// ⚠️ 岛的教训必须先做：tao 顶层无边框窗口样式表里保留 WS_CAPTION，
+/// SetWindowRgn(bRedraw) 会触发非客户区重绘把它画出来（=用户实拍的白色边框），
+/// 所以贴区域前必须先 strip_caption。
 #[cfg(windows)]
 fn round_region(win: &tauri::WebviewWindow, radius: f64) {
+    let Ok(hwnd) = win.hwnd() else { return };
+    crate::island::strip_caption(win);
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Gdi::{
         CreateRoundRectRgn, SetWindowRgn,
     };
-    let Ok(hwnd) = win.hwnd() else { return };
     let Ok(sc) = win.scale_factor() else { return };
     let Ok(size) = win.inner_size() else { return };
     let (w, h) = (size.width as i32, size.height as i32);

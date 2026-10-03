@@ -360,6 +360,8 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         "ALTER TABLE daily_stats ADD COLUMN bg_seconds INTEGER NOT NULL DEFAULT 0",
         // 心流任务绑定：任务的相关应用集合（JSON 数组，exe 名）
         "ALTER TABLE tasks ADD COLUMN related_apps TEXT NOT NULL DEFAULT '[]'",
+        // 软删除：删除只从活动列表隐藏，完成记录/统计保留
+        "ALTER TABLE tasks ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = conn.execute(sql, []);
     }
@@ -629,6 +631,7 @@ pub fn task_list(conn: &Connection) -> Result<Vec<Task>, String> {
                     CASE WHEN repeat_mode = '' THEN 0 ELSE 1 END,
                     remind_style, remind_interval_min, related_apps
              FROM tasks
+             WHERE deleted = 0
              ORDER BY done ASC,
                       CASE WHEN due_ts IS NULL THEN 1 ELSE 0 END ASC, due_ts ASC,
                       priority DESC, created_ts DESC",
@@ -729,7 +732,7 @@ pub fn materialize_repeats(conn: &Connection, today: &str) -> Result<usize, Stri
     };
     let templates: Vec<(i64, String, i32, String)> = {
         let mut stmt = conn
-            .prepare("SELECT id, content, priority, repeat_mode FROM tasks WHERE repeat_mode != ''")
+            .prepare("SELECT id, content, priority, repeat_mode FROM tasks WHERE repeat_mode != '' AND deleted = 0")
             .map_err(|e| format!("查询固定事项失败: {e}"))?;
         let rows = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
@@ -815,7 +818,7 @@ pub fn habit_grid(conn: &Connection, days: i32) -> Result<Vec<HabitRow>, String>
 
     let templates: Vec<(i64, String, String)> = {
         let mut stmt = conn
-            .prepare("SELECT id, content, repeat_mode FROM tasks WHERE repeat_mode != '' AND template_id IS NULL ORDER BY id")
+            .prepare("SELECT id, content, repeat_mode FROM tasks WHERE repeat_mode != '' AND template_id IS NULL AND deleted = 0 ORDER BY id")
             .map_err(|e| format!("查询固定事项失败: {e}"))?;
         let rows = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
@@ -922,8 +925,10 @@ pub fn task_set_done(conn: &Connection, id: i64, done: bool) -> Result<(), Strin
     Ok(())
 }
 
+/// 删除任务：**软删除**——只从活动列表隐藏，完成记录与统计保留
+/// （过去的任务删除只代表某个阶段结束了，不应从完成记录里消失）
 pub fn task_delete(conn: &Connection, id: i64) -> Result<(), String> {
-    conn.execute("DELETE FROM tasks WHERE id = ?1", [id])
+    conn.execute("UPDATE tasks SET deleted = 1 WHERE id = ?1", [id])
         .map_err(|e| format!("删除任务失败: {e}"))?;
     Ok(())
 }
@@ -1026,7 +1031,7 @@ pub fn due_tasks(conn: &Connection, now: i64) -> Result<Vec<DueTask>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, content, due_ts, remind_style FROM tasks
-             WHERE done = 0 AND due_ts IS NOT NULL AND due_ts <= ?1
+             WHERE done = 0 AND deleted = 0 AND due_ts IS NOT NULL AND due_ts <= ?1
                AND COALESCE(reminded_key, '') <> CAST(due_ts AS TEXT)",
         )
         .map_err(|e| format!("查询到期任务失败: {e}"))?;
@@ -1060,7 +1065,7 @@ pub fn interval_tasks(conn: &Connection) -> Result<Vec<IntervalTask>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, content, start_ts, remind_interval_min, COALESCE(reminded_key, '') FROM tasks
-             WHERE done = 0 AND start_ts IS NOT NULL AND remind_interval_min > 0",
+             WHERE deleted = 0 AND done = 0 AND start_ts IS NOT NULL AND remind_interval_min > 0",
         )
         .map_err(|e| format!("查询间隔提醒任务失败: {e}"))?;
     let rows = stmt
@@ -2799,17 +2804,111 @@ pub fn reminder_bg_set(conn: &Connection, src_path: &str) -> Result<(), String> 
         return Err("图片过大（超过 16MB）".into());
     }
     let dir = wallpaper_dir()?;
+    // 文件名带时间戳，避免同扩展名互相覆盖
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dst = dir.join(format!("rbg.{ts}.{ext}"));
+    std::fs::copy(&src, &dst).map_err(|e| format!("保存图片失败: {e}"))?;
+    // 历史：新图插到队首，最多留 5 张；兼容迁移老版本的单张
+    let mut list: Vec<String> = get_setting(conn, "ui.reminder_bg_list")
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default();
+    list.insert(0, dst.to_string_lossy().to_string());
+    if let Some(old) = get_setting(conn, "ui.reminder_bg") {
+        if !old.is_empty() && PathBuf::from(&old).is_file() && !list.contains(&old) {
+            list.push(old);
+        }
+    }
+    list.truncate(5);
+    // 清掉不在名单里的 rbg.* 遗留文件（含老版本的 rbg.<ext>）
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.filter_map(|e| e.ok()) {
             let name = e.file_name().to_string_lossy().to_string();
             if name.starts_with("rbg.") {
-                let _ = std::fs::remove_file(e.path());
+                let p = e.path().to_string_lossy().to_string();
+                if !list.contains(&p) {
+                    let _ = std::fs::remove_file(e.path());
+                }
             }
         }
     }
-    let dst = dir.join(format!("rbg.{ext}"));
-    std::fs::copy(&src, &dst).map_err(|e| format!("保存图片失败: {e}"))?;
+    set_setting(
+        conn,
+        "ui.reminder_bg_list",
+        &serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()),
+    )?;
     set_setting(conn, "ui.reminder_bg", &dst.to_string_lossy())
+}
+
+/// 历史记录条目（不含图片数据；预览走资产协议按路径取）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WallpaperFileInfo {
+    pub path: String,
+    pub mime: String,
+}
+
+fn bg_mime(path: &str) -> String {
+    let ext = PathBuf::from(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        _ => "image/png",
+    }
+    .into()
+}
+
+/// 历史列表（新→旧，最多 5 条，过滤已不存在的文件）
+pub fn reminder_bg_list(conn: &Connection) -> Result<Vec<WallpaperFileInfo>, String> {
+    let list: Vec<String> = get_setting(conn, "ui.reminder_bg_list")
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default();
+    Ok(list
+        .into_iter()
+        .filter(|p| PathBuf::from(p).is_file())
+        .map(|p| WallpaperFileInfo { mime: bg_mime(&p), path: p })
+        .collect())
+}
+
+/// 轮换开关（开=每次全屏提醒从历史里随机挑一张）
+pub fn reminder_bg_rotate_get(conn: &Connection) -> bool {
+    get_setting(conn, "ui.reminder_bg_rotate").map(|v| v == "1").unwrap_or(false)
+}
+
+pub fn reminder_bg_set_rotate(conn: &Connection, on: bool) {
+    let _ = set_setting(conn, "ui.reminder_bg_rotate", if on { "1" } else { "0" });
+}
+
+/// 取本次全屏提醒要用的背景图：轮换开=历史随机一张，否则最新一张
+pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<WallpaperFile>, String> {
+    let list: Vec<String> = get_setting(conn, "ui.reminder_bg_list")
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default();
+    let list: Vec<&String> = list.iter().filter(|p| PathBuf::from(p).is_file()).collect();
+    let path = if reminder_bg_rotate_get(conn) && list.len() > 1 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as usize)
+            .unwrap_or(0);
+        list[nanos % list.len()].clone()
+    } else {
+        match list.first() {
+            Some(p) => (*p).clone(),
+            None => return Ok(None),
+        }
+    };
+    let data = std::fs::read(&path).map_err(|e| format!("读取图片失败: {e}"))?;
+    Ok(Some(WallpaperFile {
+        mime: bg_mime(&path),
+        data: crate::pet_settings::base64_encode(&data),
+    }))
 }
 
 pub fn reminder_bg_get(conn: &Connection) -> Result<Option<WallpaperFile>, String> {
@@ -2845,7 +2944,9 @@ pub fn reminder_bg_clear(conn: &Connection) -> Result<(), String> {
             }
         }
     }
-    set_setting(conn, "ui.reminder_bg", "")
+    set_setting(conn, "ui.reminder_bg", "")?;
+    set_setting(conn, "ui.reminder_bg_list", "[]")?;
+    set_setting(conn, "ui.reminder_bg_rotate", "0")
 }
 
 pub fn wallpaper_clear(conn: &Connection) -> Result<(), String> {
