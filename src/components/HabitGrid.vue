@@ -45,6 +45,10 @@ const axis = computed(() => {
   return out;
 });
 
+/** 时间轴的日期标注抽稀：30 天时隔天标注，避免标签互相重叠 */
+const labelStep = computed(() => (spanDays.value > 20 ? 2 : 1));
+const axisLabeled = computed(() => axis.value.filter((_, i) => i % labelStep.value === 0));
+
 /** taskId -> { date -> cell }，避免每格重建映射 */
 const maps = computed(() => {
   const m = new Map<number, Record<string, { done: boolean; spentMin: number | null }>>();
@@ -166,7 +170,7 @@ function dotStyle(date: string) {
         <div class="hg-row head">
           <span class="hg-name"></span>
           <span class="tl-axis">
-            <i v-for="a in axis" :key="a.date" :style="{ left: `${((idxOf.get(a.date)! + 0.5) / spanDays) * 100}%` }">{{ a.md }}</i>
+            <i v-for="a in axisLabeled" :key="a.date" :style="{ left: `${((idxOf.get(a.date)! + 0.5) / spanDays) * 100}%` }">{{ a.md }}</i>
           </span>
         </div>
         <div

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NButton, NInput, NSelect } from "naive-ui";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -356,11 +356,23 @@ async function addTask() {
   }
 }
 
+/** 今日待办卡的高度以月历卡为准：量月历卡边框盒高度，多出的待办在卡内滚动 */
+const calcardEl = ref<HTMLElement | null>(null);
+const calcardH = ref(0);
+let calRO: ResizeObserver | null = null;
+const todayCardStyle = computed(() =>
+  calcardH.value > 0 ? { maxHeight: `${Math.round(calcardH.value)}px` } : {}
+);
 onMounted(async () => {
   await load();
   void loadNoteSummary();
   void loadHabit();
+  calRO = new ResizeObserver(() => {
+    calcardH.value = calcardEl.value?.getBoundingClientRect().height ?? 0;
+  });
+  if (calcardEl.value) calRO.observe(calcardEl.value);
 });
+onUnmounted(() => calRO?.disconnect());
 const rateLabel = (v: number) => (v < 0 ? "—" : `${v}%`);
 const bucketLabels = ["<15分", "15~60分", "1~4时", "4~24时", "≥1天"];
 const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
@@ -379,7 +391,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 
     <!-- 顶部：左月历 + 右今日待办（约 3:2，等高对齐） -->
     <section class="toprow">
-      <div class="glass-card calcard">
+      <div ref="calcardEl" class="glass-card calcard">
         <h2>日程 · 月历</h2>
         <CalendarHeat
           compact
@@ -389,7 +401,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
         />
         <p class="hint">点某一天进入那天的详情；颜色越深表示那天用得越久</p>
       </div>
-      <div class="glass-card todaycard">
+      <div class="glass-card todaycard" :style="todayCardStyle">
         <div class="modhead">
           <h2>今日待办</h2>
           <span class="cnt">{{ todayTasks.length }} 项</span>
@@ -666,38 +678,31 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   color: var(--text-faint);
 }
 
-/* 顶部两列：月历 3 : 今日待办 2，等高对齐 */
+/* 顶部两列：月历 3 : 今日待办 2，等高对齐
+   今日待办卡的高度由月历卡决定（脚本量月历卡实际高度后设为今日卡的 max-height），
+   多出的待办在卡内滚动，不再把整行撑高 */
 .toprow {
   display: flex;
   gap: 14px;
   align-items: stretch;
-  position: relative;
 }
 
-/* 月历卡自然高度 = 整行高度（今日卡绝对贴合它，多出的待办在卡内滚动） */
+/* 月历 3 : 今日待办 2，两卡等高 */
 .calcard {
   flex: 3 1 0;
   min-width: 0;
 }
 
 .todaycard {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: 0;
-  /* 右侧 2/5：内容宽的 40%（3:2 比例），再扣掉两卡之间的 14px 间距 */
-  width: calc((100% - 14px) * 0.4);
+  flex: 2 1 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 /* 窗口太窄时改为上下堆叠，避免挤成一团 */
 @media (max-width: 900px) {
   .toprow {
     flex-direction: column;
-  }
-  .todaycard {
-    position: static;
-    width: auto;
   }
 }
 
