@@ -33,3 +33,6 @@ src-tauri/target
 logs/
 WORKLOG.md
 .dev-data-backup-*/
+
+# 本地发布归档（安装包副本，绝不上传）
+release/

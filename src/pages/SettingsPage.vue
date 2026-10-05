@@ -388,7 +388,7 @@ async function bumpFlow(key: "contextApps" | "contextMin" | "activeMin", delta: 
       <h2>关于</h2>
       <div class="rows">
         <p class="kv"><span>名称</span><b>拾刻 · TallyMoment</b></p>
-        <p class="kv"><span>版本</span><b>0.2.0</b></p>
+        <p class="kv"><span>版本</span><b>0.3.0</b></p>
         <p class="kv"><span>数据</span><b>本地优先，不联网、不上传</b></p>
       </div>
       <p class="rd more">
