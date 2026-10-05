@@ -100,7 +100,17 @@
 - 吸附遗留问题的优先次序
 - 洞察升级从哪一级开始做
 
-## 九、记录位置
+## 九、发布现状（0.3.0，2026-10-05）
+
+| 项 | 值 |
+|---|---|
+| Release | https://github.com/Frostleaf0929/TallyMoment/releases/tag/v0.3.0 |
+| 安装包 | `TallyMoment_0.3.0_x64-setup.exe`（3,948,550 B，sha256 `e8cfcf55…1eadbb`） |
+| 免安装 | `TallyMoment_0.3.0_x64-portable.exe`（9,480,192 B，sha256 `f0b965e0…38b047a`） |
+| 本地归档 | `release/0.3.0/`（仓库根，**已 gitignore，绝不上传**）——与 Release 内容一致（两资产 + RELEASE_NOTES） |
+| 打包命令 | `pnpm tauri build --bundles nsis`（**本机必须限定 nsis**；打包前若报 plugin permissions 路径错误，先清 `target/release/build/`） |
+
+## 十、记录位置
 
 - 索引：`E:\04_Archives\01_Personal\# ZCode\拾刻 - TallyMoment\WORKLOG.md`
 - 本轮分册：`logs/2026-10-01-调研-原子岛流畅度与洞察心流/`、`logs/2026-10-01-原子岛方案A-固定窗口与DOM动画/`、`logs/2026-10-01-心流判定改造-第一步无任务版/`、`logs/2026-10-03-反馈修复-白边与待办记录/`
