@@ -735,22 +735,28 @@ fn reminder_bg_test_show(app: tauri::AppHandle, path: String) -> Result<(), Stri
         let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
         storage::reminder_bg_test_pick(&conn, &path)?;
     }
-    reminder::show_fullscreen(
-        &app,
-        reminder::Payload {
-            id: "bg-test".into(),
-            kind: "test".into(),
-            ref_id: 0,
-            title: "test".into(),
-            body: "站起来走走、看看远处，给眼睛一点时间。".into(),
-            sticky: false,
-            duration_ms: 0,
-            accent: None,
-            actions: vec![reminder::ActionDef::new("ack", "知道了")],
-            style: "fullscreen".into(),
-        },
-    );
-    eprintln!("[diag] test_show 完成（窗口已请求显示）");
+    // ⚠️ 窗口创建必须由后台线程发起：命令跑在主线程，而 tao/tauri 的窗口创建
+    // 需要事件循环线程执行——在主线程里同步 build 会"等待自己"而永久卡死整个应用
+    // （2026-10-05 由看门狗实测坐实：[diag] 主线程 2.5s 无响应 ｜ Db锁 空闲）。
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        reminder::show_fullscreen(
+            &app2,
+            reminder::Payload {
+                id: "bg-test".into(),
+                kind: "test".into(),
+                ref_id: 0,
+                title: "test".into(),
+                body: "站起来走走、看看远处，给眼睛一点时间。".into(),
+                sticky: false,
+                duration_ms: 0,
+                accent: None,
+                actions: vec![reminder::ActionDef::new("ack", "知道了")],
+                style: "fullscreen".into(),
+            },
+        );
+        eprintln!("[diag] test_show 完成（窗口已请求显示）");
+    });
     Ok(())
 }
 
@@ -1121,7 +1127,10 @@ fn island_set_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String
         let _ = storage::set_setting(&conn, "island.enabled", if enabled { "1" } else { "0" });
     }
     if enabled {
-        island::show(&app);
+        // 同 test_show：窗口首次创建必须在后台线程发起（主线程同步 build 会自等待卡死）；
+        // 已存在的窗口走 show() 分支，放线程里也没有副作用
+        let app2 = app.clone();
+        std::thread::spawn(move || island::show(&app2));
     } else {
         island::hide(&app);
     }
