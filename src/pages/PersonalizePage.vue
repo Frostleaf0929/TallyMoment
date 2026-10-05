@@ -1093,10 +1093,10 @@ onMounted(async () => {
 
     <p v-if="msg" class="ok">{{ msg }}</p>
     <p v-if="err" class="err">{{ err }}</p>
-  </div>
-  <!-- 全图编辑层：双击缩略图进入，拖动调位置，实时预览蒙版。
-       stage = 与显示器等比的"虚拟屏幕"，保证窗口模式下的预览与真实全屏一致 -->
-  <Teleport to="body">
+    <!-- 全图编辑层：双击缩略图进入，拖动调位置，实时预览蒙版。
+         stage = 与显示器等比的"虚拟屏幕"，保证窗口模式下的预览与真实全屏一致。
+         （Teleport 渲染到 body，但节点必须留在根 div 内保持单根，否则页面的 v-show 隐藏失效） -->
+    <Teleport to="body">
     <div v-if="fullEdit" class="fulledit">
       <div
         class="fe-stage"
@@ -1137,6 +1137,7 @@ onMounted(async () => {
       </div>
     </div>
   </Teleport>
+  </div>
 </template>
 
 <style scoped>
