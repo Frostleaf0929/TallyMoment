@@ -105,10 +105,6 @@ pub fn flow_params(conn: &Connection) -> FlowParams {
 ///        且 上下文一致度 ≥ context_min%（按时间占比取前 context_apps 个应用，其覆盖占比）；
 /// ③ 碎片 = 跨度 <10 分钟或活跃占比 <60%（大量空档/浅尝辄止）；
 /// ④ 其余 = 专注。切换次数仅作展示，不再一票否决。
-pub fn compute_blocks(segments: &[(i64, i64, String)]) -> Vec<BlockView> {
-    compute_blocks_with(segments, FlowParams::default())
-}
-
 pub fn compute_blocks_with(
     segments: &[(i64, i64, String)],
     p: FlowParams,
@@ -546,7 +542,8 @@ fn fragmented_share(blocks: &[BlockView]) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::compute_blocks;
+    use super::compute_blocks_with;
+    use super::FlowParams;
 
     #[test]
     fn report_respects_days_range() {
@@ -586,7 +583,7 @@ mod tests {
             (5520, 6000, "b.exe".to_string()),
             (7200, 7500, "a.exe".to_string()),
         ];
-        let b = compute_blocks(&segs);
+        let b = compute_blocks_with(&segs, FlowParams::default());
         assert_eq!(b.len(), 2);
         assert_eq!(b[0].state, "flow");
         assert_eq!(b[0].seconds, 2280);
@@ -601,7 +598,7 @@ mod tests {
         // 跨度 5 分钟的独立块：span < 600 秒 → 碎片；此处验证占比逻辑不误伤正常块
         // 更长的稀释块在 report 层被 retain(span>=60) 与占比条件拦住
         let segs = vec![(3600, 3900, "a.exe".to_string())];
-        let b = compute_blocks(&segs);
+        let b = compute_blocks_with(&segs, FlowParams::default());
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].state, "fragmented");
     }
@@ -615,7 +612,7 @@ mod tests {
             segs.push((t, t + 60, format!("app{}.exe", i % 3)));
             t += 120;
         }
-        let b = compute_blocks(&segs);
+        let b = compute_blocks_with(&segs, FlowParams::default());
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].state, "fragmented");
     }
@@ -631,7 +628,7 @@ mod tests {
             (1713, 1833, "note.exe".to_string()),
             (1834, 2434, "ide.exe".to_string()),
         ];
-        let b = compute_blocks(&segs);
+        let b = compute_blocks_with(&segs, FlowParams::default());
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].state, "flow");
         assert_eq!(b[0].switches, 3);
@@ -647,7 +644,7 @@ mod tests {
             segs.push((t, t + 300, format!("app{}.exe", i)));
             t += 300;
         }
-        let b = compute_blocks(&segs);
+        let b = compute_blocks_with(&segs, FlowParams::default());
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].state, "focused");
     }
@@ -660,7 +657,7 @@ mod tests {
             (901, 941, "b.exe".to_string()),
             (942, 1842, "a.exe".to_string()),
         ];
-        let b = compute_blocks(&segs);
+        let b = compute_blocks_with(&segs, FlowParams::default());
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].state, "flow");
         assert_eq!(b[0].switches, 1);

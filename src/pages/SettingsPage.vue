@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { NSwitch } from "naive-ui";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import DataCard from "../components/DataCard.vue";
 
 interface DataInfo {
@@ -193,6 +194,15 @@ onMounted(async () => {
     /* 忽略 */
   }
 });
+
+/** 作者主页：走系统浏览器（opener 插件），不经过 webview 导航 */
+async function openAuthorHome() {
+  try {
+    await openUrl("https://github.com/Frostleaf0929");
+  } catch (e) {
+    flowErr.value = String(e).replace(/^.*Error: /, "");
+  }
+}
 
 /** 心流判定参数（设置页步进，即刻落库，洞察页下次加载即生效） */
 const flow = ref({ contextApps: 4, contextMin: 60, activeMin: 80 });
@@ -391,6 +401,22 @@ async function bumpFlow(key: "contextApps" | "contextMin" | "activeMin", delta: 
         改名需要重新打包，属于打包批次的工作。
       </p>
     </div>
+
+    <div class="glass-card card">
+      <h2>作者</h2>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">Frostleaf0929</p>
+          <p class="rd">GitHub 主页 · 问题反馈与版本发布都在这里</p>
+        </div>
+        <button class="ghbtn" title="打开 GitHub 主页" @click="openAuthorHome">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.42 7.42 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+          </svg>
+          Frostleaf0929
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -550,6 +576,30 @@ async function bumpFlow(key: "contextApps" | "contextMin" | "activeMin", delta: 
   margin: 8px 0 0;
   font-size: 12px;
   color: var(--danger);
+}
+
+/* 作者卡：GitHub 按钮 */
+.ghbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--accent, #7b84ec);
+  color: var(--accent, #7b84ec);
+  background: none;
+  cursor: pointer;
+  text-decoration: none;
+}
+.ghbtn svg {
+  width: 16px;
+  height: 16px;
+}
+.ghbtn:hover {
+  background: var(--accent, #7b84ec);
+  color: #fff;
 }
 
 /* 心流判定参数步进器 */

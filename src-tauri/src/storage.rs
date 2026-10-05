@@ -3239,29 +3239,7 @@ pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<BgPick>, String> {
     }))
 }
 
-pub fn reminder_bg_get(conn: &Connection) -> Result<Option<WallpaperFile>, String> {
-    let Some(path) = get_setting(conn, "ui.reminder_bg") else {
-        return Ok(None);
-    };
-    let p = PathBuf::from(&path);
-    if !p.is_file() {
-        return Ok(None);
-    }
-    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let mime = match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "gif" => "image/gif",
-        "bmp" => "image/bmp",
-        _ => "image/png",
-    };
-    let data = std::fs::read(&p).map_err(|e| format!("读取图片失败: {e}"))?;
-    Ok(Some(WallpaperFile {
-        mime: mime.into(),
-        data: crate::pet_settings::base64_encode(&data),
-    }))
-}
-
+#[allow(dead_code)]
 pub fn reminder_bg_clear(conn: &Connection) -> Result<(), String> {
     if let Ok(dir) = wallpaper_dir() {
         if let Ok(entries) = std::fs::read_dir(&dir) {

@@ -421,7 +421,6 @@ const islandIdle = ref(true);
 const islandOpacity = ref(100);
 const islandHideDelay = ref(1);
 const islandIdleWidth = ref(240);
-const islandHideMode = ref("shrink");
 const islandSnapReveal = ref(8);
 const islandSnap = ref(false);
 const islandSnapWake = ref("hover");
@@ -603,7 +602,6 @@ onMounted(async () => {
     islandAccentMode.value = d.accentMode;
     islandHideDelay.value = d.hideDelaySec;
     islandIdleWidth.value = d.idleWidth;
-    islandHideMode.value = d.hideMode;
     islandSnapReveal.value = d.snapReveal;
     islandSnap.value = d.snapEnabled;
     islandClickThrough.value = d.clickThrough;
@@ -1386,30 +1384,6 @@ onMounted(async () => {
   border-radius: 6px;
   background: none;
   color: var(--text, #ddd);
-}
-.bgedit {
-  margin: 8px 0 4px;
-  padding: 10px 12px;
-  border: 1px solid rgba(128, 128, 128, 0.25);
-  border-radius: 10px;
-}
-.bgedit-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.bgedit-row .l {
-  font-size: 11px;
-  color: var(--text-muted, #888);
-}
-.esel2 {
-  font-size: 12px;
-  background: none;
-  color: var(--text, #ddd);
-  border: 1px solid rgba(128, 128, 128, 0.35);
-  border-radius: 6px;
-  padding: 3px 6px;
 }
 .bgthumb.sel {
   border-color: var(--accent, #7b84ec);

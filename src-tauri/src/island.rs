@@ -762,13 +762,6 @@ pub fn set_accent_mode(conn: &rusqlite::Connection, mode: &str) {
     let _ = crate::storage::set_setting(conn, "island.accent_mode", mode);
 }
 
-/// 记住展开状态（仅落库；形变由前端 CSS 状态机负责）
-pub fn set_expanded(app: &AppHandle, expanded: bool) {
-    with_setting(app, |conn| {
-        crate::storage::set_setting(conn, "island.expanded", if expanded { "1" } else { "0" })
-    });
-}
-
 /// 位置重置：回屏幕顶部居中（窗口顶=屏幕顶 y=0）
 pub fn reset_pos(app: &AppHandle) {
     let (mx, _my, sw, _sh) = logical_screen(app);

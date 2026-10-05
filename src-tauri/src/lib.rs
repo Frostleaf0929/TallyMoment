@@ -652,13 +652,6 @@ fn reminder_bg_set(app: tauri::AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn reminder_bg_get(app: tauri::AppHandle) -> Result<Option<storage::WallpaperFile>, String> {
-    let db = app.state::<Db>();
-    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    storage::reminder_bg_get(&conn)
-}
-
-#[tauri::command]
 fn reminder_bg_clear(app: tauri::AppHandle) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
@@ -864,7 +857,7 @@ fn reminder_resize(app: tauri::AppHandle, height: f64) {
 
 /// 提醒窗前端就绪后拉取积压的提醒（显示由前端确认内容后调 reminder_show_window）
 #[tauri::command]
-fn reminder_pending(app: tauri::AppHandle) -> Vec<reminder::Payload> {
+fn reminder_pending(_app: tauri::AppHandle) -> Vec<reminder::Payload> {
     eprintln!("[reminder] frontend fetched pending queue");
     // 注意：这里不能顺手 show —— 全屏提醒窗的前端也会拉队列，
     // 那会把藏着的卡片窗一起弹出来
@@ -1063,12 +1056,6 @@ fn island_get_enabled(app: tauri::AppHandle) -> bool {
     conn.map(|c| island::enabled(&c)).unwrap_or(false)
 }
 
-/// 原子岛展开/收起（保持顶边），状态持久化
-#[tauri::command]
-fn island_set_expanded(app: tauri::AppHandle, expanded: bool) {
-    island::set_expanded(&app, expanded);
-}
-
 /// 原子岛前端就绪：由 Rust 侧显示窗口（防首帧黑底）
 #[tauri::command]
 fn island_ready(app: tauri::AppHandle) {
@@ -1153,7 +1140,7 @@ fn island_set_idle_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), S
     {
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-        crate::storage::set_setting(&conn, "island.idle_enabled", if enabled { "1" } else { "0" });
+        let _ = crate::storage::set_setting(&conn, "island.idle_enabled", if enabled { "1" } else { "0" });
     }
     if !enabled {
         island::set_state(&app, "normal");
@@ -1167,7 +1154,7 @@ fn set_track_self(app: tauri::AppHandle, on: bool) -> Result<(), String> {
     {
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-        storage::set_setting(&conn, "track.self", if on { "1" } else { "0" });
+        let _ = storage::set_setting(&conn, "track.self", if on { "1" } else { "0" });
     }
     app.state::<TrackerShared>()
         .track_self
@@ -1792,7 +1779,6 @@ pub fn run() {
             app_set_ignored,
             island_data,
             island_set_enabled,
-            island_set_expanded,
             island_ready,
             island_reset_pos,
             island_get_enabled,
@@ -1849,7 +1835,6 @@ pub fn run() {
             close_reminder,
             close_reminder_full,
             reminder_bg_set,
-            reminder_bg_get,
             reminder_bg_clear,
             reminder_bg_pick,
             reminder_bg_rotate_get,
