@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { currentMonitor } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { NSwitch } from "naive-ui";
 import Icon from "../components/Icon.vue";
@@ -233,19 +234,35 @@ function parseAlignPct(a: string): [number, number] {
   return [50, 50];
 }
 
+/** 显示器宽高比：编辑层用等比"虚拟屏幕"预览，保证与真实全屏所见一致 */
+const monitorAR = ref(16 / 9);
+
+async function loadMonitorAR() {
+  try {
+    const m = await currentMonitor();
+    if (m && m.size.height > 0) monitorAR.value = m.size.width / m.size.height;
+  } catch {
+    /* 保底 16:9 */
+  }
+}
+
 function openFullEdit(t: { path: string; mime: string; data: string; fit: string; align: string; zoom: number; scrim: number }) {
   const [x, y] = parseAlignPct(t.align);
+  void loadMonitorAR();
   fullEdit.value = { path: t.path, mime: t.mime, data: t.data, fit: t.fit, posX: x, posY: y, zoom: t.zoom, scrim: t.scrim };
 }
+
+/** 拖拽基准：按下时的指针位置与位置基准值（拖多少、图动多少） */
+const feDragBase = ref({ x: 0, y: 0, px: 50, py: 50 });
 
 function feDown(e: MouseEvent) {
   if (e.button !== 0) return; // 只认左键：按住才拖
   e.preventDefault();
   feDragging = true;
+  feDragBase.value = { x: e.clientX, y: e.clientY, px: fullEdit.value!.posX, py: fullEdit.value!.posY };
   // window 级监听：拖出预览区也照常跟踪
   window.addEventListener("mousemove", feMove);
   window.addEventListener("mouseup", feUp);
-  feMove(e);
 }
 
 function feMove(e: MouseEvent) {
@@ -253,8 +270,10 @@ function feMove(e: MouseEvent) {
   const el = feEl.value;
   if (!el || !fullEdit.value) return;
   const rect = el.getBoundingClientRect();
-  fullEdit.value.posX = Math.min(100, Math.max(0, Math.round(((e.clientX - rect.left) / rect.width) * 100)));
-  fullEdit.value.posY = Math.min(100, Math.max(0, Math.round(((e.clientY - rect.top) / rect.height) * 100)));
+  const dx = ((e.clientX - feDragBase.value.x) / rect.width) * 100;
+  const dy = ((e.clientY - feDragBase.value.y) / rect.height) * 100;
+  fullEdit.value.posX = Math.min(100, Math.max(0, Math.round(feDragBase.value.px + dx)));
+  fullEdit.value.posY = Math.min(100, Math.max(0, Math.round(feDragBase.value.py + dy)));
 }
 
 function feUp() {
@@ -1075,24 +1094,31 @@ onMounted(async () => {
     <p v-if="msg" class="ok">{{ msg }}</p>
     <p v-if="err" class="err">{{ err }}</p>
   </div>
-  <!-- 全图编辑层：双击缩略图进入，拖动调位置，实时预览蒙版 -->
+  <!-- 全图编辑层：双击缩略图进入，拖动调位置，实时预览蒙版。
+       stage = 与显示器等比的"虚拟屏幕"，保证窗口模式下的预览与真实全屏一致 -->
   <Teleport to="body">
     <div v-if="fullEdit" class="fulledit">
-      <img
-        ref="feEl"
-        class="fe-img"
-        :src="`data:${fullEdit.mime};base64,${fullEdit.data}`"
-        alt=""
-        :style="{
-          objectFit: fullEdit.fit === 'contain' ? 'contain' : 'cover',
-          objectPosition: `${fullEdit.posX}% ${fullEdit.posY}%`,
-          transform: `scale(${fullEdit.zoom / 100})`,
-        }"
-        draggable="false"
-        @mousedown="feDown"
-        @wheel.prevent="feWheel"
-      />
-      <div class="fe-scrim" :style="{ opacity: String(fullEdit.scrim / 100) }"></div>
+      <div
+        class="fe-stage"
+        :style="{ aspectRatio: String(monitorAR), width: `min(96vw, ${88 * monitorAR}vh)` }"
+      >
+        <img
+          ref="feEl"
+          class="fe-img"
+          :src="`data:${fullEdit.mime};base64,${fullEdit.data}`"
+          alt=""
+          :style="{
+            objectFit: fullEdit.fit === 'contain' ? 'contain' : 'cover',
+            objectPosition: `${fullEdit.posX}% ${fullEdit.posY}%`,
+            transform: `scale(${fullEdit.zoom / 100})`,
+          }"
+          draggable="false"
+          @mousedown="feDown"
+          @wheel.prevent="feWheel"
+        />
+        <div class="fe-scrim" :style="{ opacity: String(fullEdit.scrim / 100) }"></div>
+        <p class="fe-tip">左键按住拖动调位置 · 滚轮缩放 · 蒙版实时预览</p>
+      </div>
       <div class="fe-bar">
         <button class="febtn" @click="fullEdit.fit = fullEdit.fit === 'cover' ? 'contain' : 'cover'">
           {{ fullEdit.fit === "cover" ? "铺满裁剪" : "完整显示" }}
@@ -1109,7 +1135,6 @@ onMounted(async () => {
         <button class="febtn primary" @click="closeFullEdit(true)">保存并退出</button>
         <button class="febtn" @click="closeFullEdit(false)">取消</button>
       </div>
-      <p class="fe-tip">左键按住拖动调位置 · 滚轮缩放 · 蒙版实时预览</p>
     </div>
   </Teleport>
 </template>
@@ -1396,11 +1421,24 @@ onMounted(async () => {
   inset: 0;
   z-index: 1000;
   background: #080a10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* 虚拟屏幕：与显示器等比，预览即所得 */
+.fe-stage {
+  position: relative;
+  width: min(96vw, calc(88vh * var(--ar, 1.7778)));
+  max-height: 88vh;
+  overflow: hidden;
+  border-radius: 6px;
+  box-shadow: 0 12px 60px rgba(0, 0, 0, 0.6);
 }
 .fe-img {
   position: absolute;
   inset: 0;
-  background-repeat: no-repeat;
+  width: 100%;
+  height: 100%;
   cursor: grab;
   touch-action: none;
 }

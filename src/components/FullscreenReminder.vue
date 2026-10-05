@@ -173,7 +173,7 @@ async function dismiss(action: string) {
 }
 
 .full.hasbg .glow {
-  opacity: 0.25;
+  display: none;
 }
 
 .glow {
