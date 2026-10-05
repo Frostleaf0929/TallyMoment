@@ -1,6 +1,6 @@
 [package]
 name = "tallymoment"
-version = "0.3.1"
+version = "0.3.2"
 description = "拾刻 TallyMoment - 本地优先的 Windows 时间记录与效率回顾工具"
 authors = ["TallyMoment"]
 edition = "2021"
