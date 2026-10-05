@@ -154,7 +154,7 @@ fn kill_border(_win: &tauri::WebviewWindow) {}
 /// 全屏提醒：铺满主屏的置顶无边框窗口（"该休息了"那一类）
 /// 窗口先隐藏、等前端就绪再显示：睡眠唤醒后 WebView 首帧可能迟迟不渲染，
 /// 立即显示会露出默认底色（半夜"全黑一片+滚动条"的来源）
-fn show_fullscreen(app: &AppHandle, payload: Payload) {
+pub fn show_fullscreen(app: &AppHandle, payload: Payload) {
     if let Some(win) = app.get_webview_window("reminder_full") {
         FULL_SHOWN.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = win.show();

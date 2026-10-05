@@ -674,6 +674,32 @@ fn reminder_bg_thumbs(app: tauri::AppHandle) -> Result<Vec<storage::BgThumb>, St
     storage::reminder_bg_thumbs(&conn)
 }
 
+/// 全屏试看：立即以真实全屏提醒弹出当前编辑的这张图
+#[tauri::command]
+fn reminder_bg_test_show(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+        storage::reminder_bg_test_pick(&conn, &path)?;
+    }
+    reminder::show_fullscreen(
+        &app,
+        reminder::Payload {
+            id: "bg-test".into(),
+            kind: "test".into(),
+            ref_id: 0,
+            title: "test".into(),
+            body: "站起来走走、看看远处，给眼睛一点时间。".into(),
+            sticky: false,
+            duration_ms: 0,
+            accent: None,
+            actions: vec![reminder::ActionDef::new("ack", "知道了")],
+            style: "fullscreen".into(),
+        },
+    );
+    Ok(())
+}
+
 /// 保存某张背景图的显示配置（位置/缩放/蒙版）
 #[tauri::command]
 fn reminder_bg_imgcfg_set(
@@ -1847,6 +1873,7 @@ pub fn run() {
             reminder_bg_group_rename,
             reminder_bg_remove_file,
             reminder_bg_imgcfg_set,
+            reminder_bg_test_show,
             import_tai,
             export_json,
             restore_json,

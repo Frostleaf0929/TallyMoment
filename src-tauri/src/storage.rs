@@ -3163,6 +3163,25 @@ pub fn reminder_bg_set_rotate(conn: &Connection, on: bool) {
     let _ = set_setting(conn, "ui.reminder_bg_rotate", if on { "1" } else { "0" });
 }
 
+/// 试看：强制下一次全屏提醒使用指定图片（轮换开=塞进洗牌队列队首；关=把游标拨到它）
+pub fn reminder_bg_test_pick(conn: &Connection, path: &str) -> Result<(), String> {
+    let groups = bg_groups(conn);
+    let active = bg_active_index(conn, groups.len());
+    let files: Vec<String> = groups
+        .get(active)
+        .map(|g| g.files.clone())
+        .unwrap_or_default();
+    if !files.iter().any(|f| f == path) {
+        return Err("这张图不在当前组里".into());
+    }
+    if reminder_bg_rotate_get(conn) {
+        set_setting(conn, "ui.reminder_bg_hand", &serde_json::to_string(&vec![path.to_string()]).unwrap_or_else(|_| "[]".into()));
+    } else if let Some(i) = files.iter().position(|f| f == path) {
+        set_setting(conn, "ui.reminder_bg_cursor", &i.to_string());
+    }
+    Ok(())
+}
+
 /// 取本次全屏提醒要用的背景图（当前组）：
 /// 顺序 = 游标从左到右循环；随机 = 洗牌队列逐张出队，一轮结束自动重洗（轮内不重复）
 pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<BgPick>, String> {

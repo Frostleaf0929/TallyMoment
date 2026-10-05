@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { currentMonitor } from "@tauri-apps/api/window";
+import { primaryMonitor } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { NSwitch } from "naive-ui";
 import Icon from "../components/Icon.vue";
@@ -239,7 +239,9 @@ const monitorAR = ref(16 / 9);
 
 async function loadMonitorAR() {
   try {
-    const m = await currentMonitor();
+    // 必须用主显示器：真实全屏提醒固定渲染在主屏（position 0,0、尺寸取主屏），
+    // 双屏用户两块屏分辨率不同，取主窗口所在屏的宽高比会导致编辑裁切与实际不符
+    const m = await primaryMonitor();
     if (m && m.size.height > 0) monitorAR.value = m.size.width / m.size.height;
   } catch {
     /* 保底 16:9 */
@@ -302,6 +304,13 @@ function feWheel(e: WheelEvent) {
   const delta = e.deltaY < 0 ? 10 : -10;
   fullEdit.value.zoom = Math.min(300, Math.max(50, fullEdit.value.zoom + delta));
   feSave();
+}
+
+function feTestShow() {
+  const fe = fullEdit.value;
+  if (!fe) return;
+  feSave();
+  invoke("reminder_bg_test_show", { path: fe.path }).catch((e) => (err.value = String(e).replace(/^.*Error: /, "")));
 }
 
 function feReset() {
@@ -1142,6 +1151,7 @@ onMounted(async () => {
         <button class="febtn" @click="bumpFeScrim(-10)">−</button>
         <span class="fnum acc">{{ fullEdit.scrim }}%</span>
         <button class="febtn" @click="bumpFeScrim(10)">+</button>
+        <button class="febtn" title="以真实全屏提醒弹出这张图（所见即所得）" @click="feTestShow">全屏试看</button>
         <button class="febtn" title="恢复默认（铺满 / 居中 / 100% / 蒙版100）" @click="feReset">恢复默认</button>
         <span class="fsep"></span>
         <button class="febtn primary" @click="closeFullEdit(true)">保存并退出</button>
