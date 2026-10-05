@@ -52,6 +52,13 @@
 - **① 主线程自死锁**：sync 命令跑在主线程，而**窗口创建必须由事件循环线程执行**——在命令里同步 `build()` = 等自己 → 全应用假死（表现为所有按钮无反应、洞察卡"分析中"）。由**看门狗**（`[diag]` 行）实测坐实。修复：`reminder_bg_test_show` 与 `island_set_enabled` 的窗口创建移入 `std::thread::spawn`
 - **② 实机取景错误**：实机 `.bgimg`（img）**缺显式宽高** → 浏览器按**原始像素尺寸**渲染（原图大只见左上角、"缩放随机但固定"、原图小露黑区）。修复：`.bgbox`（overflow:hidden）+ `.bgimg { width/height:100% }`
 
+### 7. 发布后再发现的构建期缺陷：release 版毛玻璃整体失效（0.3.1 修复）
+- **现象**：release 版所有二级界面卡片"发透、背后不模糊"，且调材质/模糊/不透明度**滑杆完全无反应**；dev 版正常。
+- **根因（构建期，非代码逻辑）**：源码里 CSS 前缀**手写双份**（标准 `backdrop-filter` + `-webkit-backdrop-filter`）→ **Vite 8（Rolldown）压缩时做前缀去重，丢弃标准属性、只留 `-webkit-`** → 而 **WebView2（Chromium）不认 `-webkit-backdrop-filter`（Safari 专属）** → 模糊整体失效。dev 用开发服务器不压缩，故正常。
+- **定位证据**：`dist/assets/*.css` 里标准属性仅 2 处（且为硬编码）/ 前缀 12 处；裸 esbuild 对照试验证明它不删双写 → 锁定 Vite 8 压缩环节。
+- **修复**：删除手写的 9 处前缀，**只写标准属性**（构建器会自动补前缀）→ dist 标准属性 2 → 11 处 ✓
+- **教训入坑清单第 15 条**；连带影响：v0.3.0 发布版带此缺陷 → **0.3.1 重发**
+
 ## 三、关键文件与新增
 
 **新增**：`src-tauri/src/island.rs` 大改（方案 A）、`src/lib/bgStyle.ts`（渲染口径唯一）、`island.html` / `src/island.ts`（四态 CSS）、`release/`（本地发布归档，gitignore）
@@ -79,6 +86,9 @@
 12. **dev 环境**：改 Rust 后手动重启 `pnpm tauri dev`；大批量改动后热重载会进入坏状态（现象类似假死，**重启即好**——但本轮①是真死锁，区别看 `[diag]`）
 13. **写文件**：bash heredoc 单次别超 ~10KB（会静默截断）；优先用 Write/Edit 工具
 14. **多屏/缩放**：本机 2560×1440 @175%（逻辑 1463×823）；编辑层虚拟屏幕取 **primaryMonitor** 宽高比（与全屏提醒同源）
+15. **CSS 前缀绝不手写双份**：Vite 8（Rolldown）压缩会做前缀去重，**"标准 + `-webkit-`"双写会丢标准属性、只留 Safari 前缀** → WebView2 不认 → 效果（毛玻璃等）在 release 里整体失效，而 **dev 正常**（不压缩）。**只写标准属性**，让构建器自动补前缀。排查法：`dist/assets/*.css` 里标准属性数量 vs 源码数量（`main-*.css` 里 `(?<!-)backdrop-filter` 计数）
+16. **dev 与 release 的 localStorage 按 origin 隔离**：dev=`http://localhost:1420`、release=`http://tauri.localhost`，**外观设置互不相通**（同一 WebView 数据目录但键空间不同）——"dev 调好的外观在 release 不生效"先查这里；但**若滑杆调了完全无视觉变化，则是渲染链路问题（见第 15 条）而非设置问题**
+17. **发布检查清单（打包前逐项过）**：① 版本号四处同步；② 清 `target/release/build/`（若报 plugin permissions 路径错）；③ `pnpm build` 后抽查 `dist` 关键属性数量（前缀类问题只在此暴露）；④ 用 `out=$(cmd 2>&1); rc=$?` 判成败；⑤ 资产 sha256 与本地归档一致
 
 ## 六、安全红线（公开仓库）
 
