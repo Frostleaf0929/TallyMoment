@@ -332,7 +332,13 @@ function closeFullEdit(save: boolean) {
       zoom: fe.zoom,
       scrim: fe.scrim,
     })
-      .then(() => loadReminderBg())
+      .then(() => {
+        loadReminderBg();
+        // 轮换开启时提醒会随机选图，避免"编辑了 A 却弹出 B"的误解
+        if (bgOverview.value.rotate && bgOverview.value.groups[bgOverview.value.active]?.files.length > 1) {
+          msg.value = "已保存这张图的显示方式；随机轮换开启中，提醒时组内图片都会按各自的编辑渲染";
+        }
+      })
       .catch((e) => (err.value = String(e).replace(/^.*Error: /, "")));
   }
 }
@@ -1038,7 +1044,15 @@ onMounted(async () => {
           :title="i === 0 ? '当前使用 · 双击进入全图编辑' : '双击进入全图编辑'"
           @dblclick="openFullEdit(t)"
         >
-          <img :src="`data:${t.mime};base64,${t.data}`" alt="" />
+          <img
+            :src="`data:${t.mime};base64,${t.data}`"
+            alt=""
+            :style="{
+              objectFit: t.fit === 'contain' ? 'contain' : 'cover',
+              objectPosition: t.align,
+              transform: `scale(${t.zoom / 100})`,
+            }"
+          />
           <button class="tremove" title="从本组移除" @click.stop="removeBg(t.path)">✕</button>
           <span v-if="i === 0" class="tag">当前</span>
         </div>
