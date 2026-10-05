@@ -118,6 +118,9 @@ function onBrandDown(e: MouseEvent) {
   if (e.buttons !== 1 || e.detail > 1) return;
   const t = e.target as HTMLElement | null;
   if (t?.closest("button, input, a, .collapse-btn, .logo-btn")) return;
+  // 外框拖动（@mousedown.self）：只有点到 16px 边框本体才会走到这里
+  // 双击外框 = 最大化/还原，与品牌区一致
+  void t;
   pressFrom = { x: e.clientX, y: e.clientY };
   window.addEventListener("mousemove", onBrandMove);
   window.addEventListener("mouseup", onBrandUp, { once: true });
@@ -232,7 +235,7 @@ onUnmounted(() => {
     <FullscreenReminder v-if="mode === 'reminder_full'" />
     <ToastStack v-else-if="mode === 'reminder'" />
     <PetView v-else-if="mode === 'pet'" />
-    <div v-else class="shell shell-frame" :class="{ 'glass-off': !glass }">
+    <div v-else class="shell shell-frame" :class="{ 'glass-off': !glass }" @mousedown.self="onBrandDown" @dblclick.self="toggleMaxWin">
       <div class="wall" aria-hidden="true"></div>
 
       <!-- 窗口控制：悬浮在右上角，不占一整条标题栏，避免多出一道"割裂面" -->
