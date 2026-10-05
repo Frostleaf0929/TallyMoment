@@ -210,14 +210,50 @@ const bgOverview = ref<{ groups: { name: string; files: string[] }[]; active: nu
   active: 0,
   rotate: false,
 });
-const bgThumbs = ref<{ path: string; mime: string; data: string }[]>([]);
+const bgThumbs = ref<{ path: string; mime: string; data: string; fit: string; align: string; scrim: number }[]>([]);
 const renameValue = ref("");
+/** 点选中的缩略图下标（-1 = 未选中）；编辑行改这张图的填充/位置/蒙版 */
+const selThumb = ref(-1);
+const editFit = ref("cover");
+const editAlign = ref("center");
+const editScrim = ref(100);
+
+function selectThumb(i: number) {
+  selThumb.value = selThumb.value === i ? -1 : i;
+  if (selThumb.value >= 0 && bgThumbs.value[selThumb.value]) {
+    const t = bgThumbs.value[selThumb.value];
+    editFit.value = t.fit;
+    editAlign.value = t.align;
+    editScrim.value = t.scrim;
+  }
+}
+
+async function saveImgCfg() {
+  const t = bgThumbs.value[selThumb.value];
+  if (!t) return;
+  try {
+    await invoke("reminder_bg_imgcfg_set", {
+      path: t.path,
+      fit: editFit.value,
+      align: editAlign.value,
+      scrim: editScrim.value,
+    });
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+async function bumpScrim(delta: number) {
+  editScrim.value = Math.min(100, Math.max(0, editScrim.value + delta));
+  await saveImgCfg();
+}
 
 async function loadReminderBg() {
   try {
     bgOverview.value = await invoke("reminder_bg_overview");
-    bgThumbs.value = await invoke<{ path: string; mime: string; data: string }[]>("reminder_bg_thumbs");
+    bgThumbs.value = await invoke<{ path: string; mime: string; data: string; fit: string; align: string; scrim: number }[]>("reminder_bg_thumbs");
     reminderBgSet.value = bgThumbs.value.length > 0;
+    if (selThumb.value >= bgThumbs.value.length) selThumb.value = -1;
   } catch {
     bgThumbs.value = [];
   }
@@ -254,6 +290,16 @@ async function renameBgGroup() {
     renameValue.value = "";
     await loadReminderBg();
     msg.value = "组名已更新";
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+async function removeBgGroup(i: number) {
+  try {
+    await invoke("reminder_bg_group_remove", { index: i });
+    await loadReminderBg();
+    msg.value = "组已删除（不再被引用的图片已清理）";
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   }
@@ -870,37 +916,74 @@ onMounted(async () => {
       <div class="row">
         <div class="rlabel">
           <p class="rt">图片组</p>
-          <p class="rd">点击切换组（当前组高亮）；每组最多 10 张，互相独立</p>
+          <p class="rd">点击切换组（当前组高亮）；每组最多 10 张，互相独立；组旁 ✕ 删除该组</p>
         </div>
       </div>
       <div class="bggroups">
-        <button
+        <span
           v-for="(g, i) in bgOverview.groups"
           :key="i"
           class="bggroup"
           :class="{ on: i === bgOverview.active }"
-          @click="switchBgGroup(i)"
         >
-          {{ g.name }}
-        </button>
+          <button class="gname" @click="switchBgGroup(i)">{{ g.name }}</button>
+          <button
+            v-if="bgOverview.groups.length > 1"
+            class="gdel"
+            title="删除该组（组内图片一并清理）"
+            @click="removeBgGroup(i)"
+          >✕</button>
+        </span>
         <button class="bggroup add" @click="addBgGroup">＋ 新组</button>
-      </div>
-      <div class="bgrename">
         <input
           v-model="renameValue"
           class="rnin"
-          placeholder="给当前组改个名字（可选）"
+          placeholder="改当前组名"
           @keyup.enter="renameBgGroup"
         />
-        <button class="ghost" @click="renameBgGroup">改组名</button>
+        <button class="mini" title="应用改名" @click="renameBgGroup">改</button>
       </div>
       <div v-if="bgThumbs.length" class="bgthumbs">
-        <div v-for="(t, i) in bgThumbs" :key="i" class="bgthumb" :class="{ cur: i === 0 }">
+        <div
+          v-for="(t, i) in bgThumbs"
+          :key="t.path"
+          class="bgthumb"
+          :class="{ cur: i === 0, sel: i === selThumb }"
+          :title="i === 0 ? '当前使用 · 点击编辑显示效果' : '点击编辑显示效果'"
+          @click="selectThumb(i)"
+        >
           <img :src="`data:${t.mime};base64,${t.data}`" alt="" />
-          <button class="tremove" title="从本组移除" @click="removeBg(t.path)">✕</button>
+          <button class="tremove" title="从本组移除" @click.stop="removeBg(t.path)">✕</button>
+          <span v-if="i === 0" class="tag">当前</span>
         </div>
       </div>
       <p v-else class="rd more">当前组还没有图片，点上面「选择图片」添加。</p>
+      <div v-if="selThumb >= 0 && bgThumbs[selThumb]" class="bgedit">
+        <div class="bgedit-row">
+          <span class="l">填充</span>
+          <select v-model="editFit" class="esel2" @change="saveImgCfg">
+            <option value="cover">铺满裁剪</option>
+            <option value="contain">完整显示</option>
+          </select>
+          <span class="l">位置</span>
+          <select v-model="editAlign" class="esel2" @change="saveImgCfg">
+            <option value="center">居中</option>
+            <option value="top">顶部</option>
+            <option value="bottom">底部</option>
+            <option value="left">左侧</option>
+            <option value="right">右侧</option>
+            <option value="left top">左上</option>
+            <option value="right top">右上</option>
+            <option value="left bottom">左下</option>
+            <option value="right bottom">右下</option>
+          </select>
+          <span class="l">蒙版</span>
+          <button class="mini" @click="bumpScrim(-10)">−</button>
+          <span class="sval">{{ editScrim }} %</span>
+          <button class="mini" @click="bumpScrim(10)">+</button>
+        </div>
+        <p class="rd more">改动即刻保存到这张图；蒙版 = 提醒文字背后的暗色压层浓度。</p>
+      </div>
       <div class="row">
         <div class="rlabel">
           <p class="rt">轮换方式</p>
@@ -1146,36 +1229,83 @@ onMounted(async () => {
   margin: 4px 0 10px;
 }
 .bggroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
-  padding: 3px 12px;
+  padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid rgba(128, 128, 128, 0.35);
   background: none;
   color: var(--text, #ddd);
-  cursor: pointer;
 }
 .bggroup.on {
   border-color: var(--accent, #7b84ec);
+}
+.bggroup .gname {
+  border: 0;
+  background: none;
+  font-size: 12px;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.bggroup.on .gname {
   color: var(--accent, #7b84ec);
+  font-weight: 600;
+}
+.bggroup .gdel {
+  border: 0;
+  background: none;
+  font-size: 10px;
+  color: var(--text-faint, #999);
+  cursor: pointer;
+  padding: 0 2px;
+}
+.bggroup .gdel:hover {
+  color: var(--danger, #e5484d);
 }
 .bggroup.add {
   border-style: dashed;
   opacity: 0.8;
-}
-.bgrename {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin: 0 0 10px;
+  cursor: pointer;
 }
 .rnin {
-  font-size: 12px;
-  padding: 4px 8px;
-  width: 200px;
-  border: 1px solid rgba(128, 128, 128, 0.35);
+  font-size: 11px;
+  padding: 3px 8px;
+  width: 130px;
+  border: 1px dashed rgba(128, 128, 128, 0.35);
   border-radius: 6px;
   background: none;
   color: var(--text, #ddd);
+}
+.bgedit {
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  border-radius: 10px;
+}
+.bgedit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.bgedit-row .l {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+.esel2 {
+  font-size: 12px;
+  background: none;
+  color: var(--text, #ddd);
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+.bgthumb.sel {
+  border-color: var(--accent, #7b84ec);
+  box-shadow: 0 0 0 1px var(--accent, #7b84ec);
 }
 .bgthumb .tremove {
   position: absolute;

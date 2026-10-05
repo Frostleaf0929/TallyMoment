@@ -59,29 +59,29 @@ pub struct InsightReport {
     pub insights: Vec<Insight>,
 }
 
-/// 心流判定参数（设置页可调；默认值=实测起点，见调研分册）
+/// 心流判定参数（设置页可调；阈值起点来自真实使用数据回算，见 2026-10-03 分册）
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FlowParams {
-    /// 过场宽限：块内 ≤该秒数的短段不计切换
-    pub blip_secs: i64,
-    /// 切换上限基线
-    pub switch_base: i64,
-    /// 每 10 分钟额外允许的切换次数
-    pub switch_per_10min: i64,
+    /// 上下文应用数 K：按时间占比取前 K 个应用当作"这件事的上下文"
+    pub context_apps: i64,
+    /// 上下文一致度门槛（%）：前 K 个应用覆盖的活跃时间占比 ≥ 此值才算心流
+    pub context_min: i64,
+    /// 活跃占比门槛（%）：活跃时间 / 块跨度 ≥ 此值才算心流
+    pub active_min: i64,
 }
 
 impl Default for FlowParams {
     fn default() -> Self {
         Self {
-            blip_secs: 45,
-            switch_base: 3,
-            switch_per_10min: 1,
+            context_apps: 4,
+            context_min: 60,
+            active_min: 80,
         }
     }
 }
 
-/// 从设置读判定参数（键：flow.blip_secs / flow.switch_base / flow.switch_per_10min）
+/// 从设置读判定参数（键：flow.context_apps / flow.context_min / flow.active_min）
 pub fn flow_params(conn: &Connection) -> FlowParams {
     let g = |k: &str, d: i64, lo: i64, hi: i64| {
         crate::storage::get_setting(conn, k)
@@ -90,19 +90,21 @@ pub fn flow_params(conn: &Connection) -> FlowParams {
             .unwrap_or(d)
     };
     FlowParams {
-        blip_secs: g("flow.blip_secs", 45, 0, 300),
-        switch_base: g("flow.switch_base", 3, 1, 10),
-        switch_per_10min: g("flow.switch_per_10min", 1, 0, 5),
+        context_apps: g("flow.context_apps", 4, 2, 6),
+        context_min: g("flow.context_min", 60, 50, 90),
+        active_min: g("flow.active_min", 80, 70, 95),
     }
 }
 
-/// 把前台区间归并成专注块并推断状态（心流判定改造第一步：状态机式规则）。
-/// 相比旧版"整块切换≤3 次"：
-/// ① 切换只按"应用变化"计（同应用续段不算），≤宽限秒数的过场短段不计打断
-///    （≈"切走一小会儿就切回来"的冷却宽限，多应用协同不再被误杀）；
-/// ② 切换上限随块长放宽：基线 + 每 10 分钟 1 次；
-/// ③ 心流 = 跨度够长（自适应中位数，下限 15 分钟）+ 活跃占比 ≥85% + 切换未超限；
-/// ④ 碎片 = 跨度 <10 分钟或切换率 ≥0.4 次/分；其余 = 专注。
+/// 把前台区间归并成专注块并推断状态（真实数据回算后的上下文一致度版）。
+/// 旧版按"切换次数/切换率"判定会把开发者式的多应用高频协同误判成碎片
+/// （实测：4 小时真实工作段切换 389 次、占比 88%，被错杀）。现行规则：
+/// ① 块 = 间隔 <5 分钟的使用归并（沿用）；
+/// ② 心流 = 跨度 ≥ 门槛（自适应中位数，下限 15 分钟）
+///        且 活跃占比 ≥ active_min%
+///        且 上下文一致度 ≥ context_min%（按时间占比取前 context_apps 个应用，其覆盖占比）；
+/// ③ 碎片 = 跨度 <10 分钟或活跃占比 <60%（大量空档/浅尝辄止）；
+/// ④ 其余 = 专注。切换次数仅作展示，不再一票否决。
 pub fn compute_blocks(segments: &[(i64, i64, String)]) -> Vec<BlockView> {
     compute_blocks_with(segments, FlowParams::default())
 }
@@ -113,12 +115,16 @@ pub fn compute_blocks_with(
 ) -> Vec<BlockView> {
     /// 块归并间隔：间隔 <5 分钟视为同一块
     const GAP: i64 = 300;
+    /// 过场宽限：块内 ≤45s 的短段不计入切换展示
+    const BLIP_SECS: i64 = 45;
 
     struct Acc {
         start_ts: i64,
         end_ts: i64,
         seconds: i64,
         apps: Vec<String>,
+        /// 应用 → 活跃秒数（上下文一致度用）
+        app_secs: Vec<(String, i64)>,
         switches: usize,
         last_app: String,
     }
@@ -129,6 +135,7 @@ pub fn compute_blocks_with(
                 end_ts,
                 seconds: end_ts - start_ts,
                 apps: vec![app.to_string()],
+                app_secs: vec![(app.to_string(), end_ts - start_ts)],
                 switches: 0,
                 last_app: app.to_string(),
             }
@@ -146,11 +153,15 @@ pub fn compute_blocks_with(
     for (s, e, app) in segs {
         match accs.last_mut() {
             Some(b) if s - b.end_ts < GAP => {
-                if b.last_app != app && e - s > p.blip_secs {
-                    b.switches += 1; // 应用变化且不是过场短段才算切换
+                if b.last_app != app && e - s > BLIP_SECS {
+                    b.switches += 1; // 仅展示用
                 }
                 if !b.apps.contains(&app) {
                     b.apps.push(app.to_string());
+                }
+                match b.app_secs.iter_mut().find(|(a, _)| a == &app) {
+                    Some(entry) => entry.1 += e - s,
+                    None => b.app_secs.push((app.to_string(), e - s)),
                 }
                 b.last_app = app;
                 b.end_ts = b.end_ts.max(e);
@@ -170,11 +181,18 @@ pub fn compute_blocks_with(
         .map(|b| {
             let span = b.end_ts - b.start_ts;
             let ratio = if span > 0 { b.seconds as f64 / span as f64 } else { 1.0 };
-            let rate = b.switches as f64 / (span as f64 / 60.0);
-            let switch_cap = (p.switch_base + span / (10 * 60) * p.switch_per_10min) as usize;
-            let state = if span >= flow_span_min && ratio >= 0.85 && b.switches <= switch_cap {
+            // 上下文一致度：按活跃时间取前 K 个应用，其覆盖占比
+            let mut secs: Vec<i64> = b.app_secs.iter().map(|(_, s)| *s).collect();
+            secs.sort_unstable_by(|a, b| b.cmp(a));
+            let k = (p.context_apps.max(1) as usize).min(secs.len());
+            let top: i64 = secs[..k].iter().sum();
+            let coverage = if b.seconds > 0 { top as f64 / b.seconds as f64 } else { 0.0 };
+            let state = if span >= flow_span_min
+                && ratio >= p.active_min as f64 / 100.0
+                && coverage >= p.context_min as f64 / 100.0
+            {
                 "flow"
-            } else if span < 600 || rate >= 0.4 {
+            } else if span < 600 || ratio < 0.6 {
                 "fragmented"
             } else {
                 "focused"
@@ -618,6 +636,20 @@ mod tests {
         assert_eq!(b[0].state, "flow");
         assert_eq!(b[0].switches, 3);
         assert_eq!(b[0].apps, vec!["ide.exe", "web.exe", "note.exe"]);
+    }
+
+    #[test]
+    fn low_context_coverage_is_not_flow() {
+        // 40 分钟、8 个应用均分 → top4 覆盖 50% < 门槛 → 专注（高频乱切不等于心流）
+        let mut segs = Vec::new();
+        let mut t = 0i64;
+        for i in 0..8 {
+            segs.push((t, t + 300, format!("app{}.exe", i)));
+            t += 300;
+        }
+        let b = compute_blocks(&segs);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].state, "focused");
     }
 
     #[test]

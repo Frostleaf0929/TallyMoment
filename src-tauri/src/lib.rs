@@ -681,6 +681,32 @@ fn reminder_bg_thumbs(app: tauri::AppHandle) -> Result<Vec<storage::BgThumb>, St
     storage::reminder_bg_thumbs(&conn)
 }
 
+/// 保存某张背景图的显示配置（位置/缩放/蒙版）
+#[tauri::command]
+fn reminder_bg_imgcfg_set(
+    app: tauri::AppHandle,
+    path: String,
+    fit: String,
+    align: String,
+    scrim: i64,
+) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::reminder_bg_imgcfg_set(
+        &conn,
+        &path,
+        &storage::BgImgCfg { fit, align, scrim },
+    )
+}
+
+/// 删除组（至少保留一组；不再被引用的图片自动清理）
+#[tauri::command]
+fn reminder_bg_group_remove(app: tauri::AppHandle, index: usize) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::bg_remove_group(&conn, index)
+}
+
 /// 切换当前组
 #[tauri::command]
 fn reminder_bg_group_set_active(app: tauri::AppHandle, index: usize) -> Result<(), String> {
@@ -715,7 +741,7 @@ fn reminder_bg_remove_file(app: tauri::AppHandle, path: String) -> Result<(), St
 
 /// 本次全屏提醒实际使用的背景图（轮换开=随机一张）
 #[tauri::command]
-fn reminder_bg_pick(app: tauri::AppHandle) -> Result<Option<storage::WallpaperFile>, String> {
+fn reminder_bg_pick(app: tauri::AppHandle) -> Result<Option<storage::BgPick>, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
     storage::reminder_bg_pick(&conn)
@@ -1277,24 +1303,24 @@ fn flow_get_params(app: tauri::AppHandle) -> insights::FlowParams {
 #[tauri::command]
 fn flow_set_params(
     app: tauri::AppHandle,
-    blipSecs: i64,
-    switchBase: i64,
-    switchPer10min: i64,
+    contextApps: i64,
+    contextMin: i64,
+    activeMin: i64,
 ) -> Result<(), String> {
-    if !(0..=300).contains(&blipSecs) {
-        return Err("过场宽限需在 0~300 秒".into());
+    if !(2..=6).contains(&contextApps) {
+        return Err("上下文应用数需在 2~6".into());
     }
-    if !(1..=10).contains(&switchBase) {
-        return Err("切换基线需在 1~10 次".into());
+    if !(50..=90).contains(&contextMin) {
+        return Err("一致度门槛需在 50~90%".into());
     }
-    if !(0..=5).contains(&switchPer10min) {
-        return Err("每 10 分钟放宽需在 0~5 次".into());
+    if !(70..=95).contains(&activeMin) {
+        return Err("活跃占比门槛需在 70~95%".into());
     }
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    let _ = crate::storage::set_setting(&conn, "flow.blip_secs", &blipSecs.to_string());
-    let _ = crate::storage::set_setting(&conn, "flow.switch_base", &switchBase.to_string());
-    let _ = crate::storage::set_setting(&conn, "flow.switch_per_10min", &switchPer10min.to_string());
+    let _ = crate::storage::set_setting(&conn, "flow.context_apps", &contextApps.to_string());
+    let _ = crate::storage::set_setting(&conn, "flow.context_min", &contextMin.to_string());
+    let _ = crate::storage::set_setting(&conn, "flow.active_min", &activeMin.to_string());
     Ok(())
 }
 
@@ -1830,9 +1856,11 @@ pub fn run() {
             reminder_bg_overview,
             reminder_bg_thumbs,
             reminder_bg_group_set_active,
+            reminder_bg_group_remove,
             reminder_bg_group_add,
             reminder_bg_group_rename,
             reminder_bg_remove_file,
+            reminder_bg_imgcfg_set,
             import_tai,
             export_json,
             restore_json,

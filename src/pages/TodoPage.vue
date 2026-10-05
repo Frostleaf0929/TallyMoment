@@ -691,6 +691,8 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 .calcard {
   flex: 3 1 0;
   min-width: 0;
+  /* 关键：月历卡不参与拉伸，高度=自身内容；脚本量到的才是"月历本来的高度" */
+  align-self: flex-start;
 }
 
 .todaycard {

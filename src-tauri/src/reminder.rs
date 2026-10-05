@@ -111,11 +111,9 @@ pub fn show(app: &AppHandle, payload: Payload) {
         .visible(false);
 
     match build.build() {
-        Ok(win) => {
-            kill_border(&win);
-            // 圆角区域只贴卡片窗；全屏窗走 show_fullscreen 自己的路径，不贴区域
-            round_region(&win, CARD_RADIUS);
-        }
+        // 圆角回到 DWM 默认（用户已验收的观感）：SetWindowRgn 在提醒窗上会反复
+        // 带出系统白色边框（NC 重绘与样式重写的组合拳），得不偿失，撤。
+        Ok(win) => kill_border(&win),
         Err(e) => eprintln!("[reminder] 创建提醒窗口失败: {e}"),
     }
 }
@@ -129,11 +127,9 @@ fn kill_border(win: &tauri::WebviewWindow) {
         DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
     };
     if let Ok(hwnd) = win.hwnd() {
-        // DWMWA_COLOR_NONE = 0xFFFFFFFE；圆角偏好 DWMWCP_DONOTROUND = 1
-        // （卡片窗的圆角由 SetWindowRgn 按 14px 裁剪，DWM 的 8px 圆角会跟区域取小打架；
-        //   注意这里只管去边框，区域裁剪只在卡片窗路径里做，全屏窗不贴区域）
+        // DWMWA_COLOR_NONE = 0xFFFFFFFE；圆角偏好 DWMWCP_ROUND = 2
         let none: u32 = 0xFFFF_FFFE;
-        let no_round: u32 = 1;
+        let round: u32 = 2;
         unsafe {
             let _ = DwmSetWindowAttribute(
                 HWND(hwnd.0),
@@ -144,41 +140,13 @@ fn kill_border(win: &tauri::WebviewWindow) {
             let _ = DwmSetWindowAttribute(
                 HWND(hwnd.0),
                 DWMWA_WINDOW_CORNER_PREFERENCE,
-                &no_round as *const _ as *const std::ffi::c_void,
+                &round as *const _ as *const std::ffi::c_void,
                 4,
             );
         }
     }
 }
 
-/// 卡片圆角（逻辑 px），与 ToastStack 的窗口观感一致
-const CARD_RADIUS: f64 = 14.0;
-
-/// 窗口区域裁剪成圆角矩形（SetWindowRgn，同原子岛的灰框根治思路）：
-/// 形状之外不存在窗口——彻底杜绝角落残留底色，DWM 投影也会贴合圆角。
-/// ⚠️ 岛的教训必须先做：tao 顶层无边框窗口样式表里保留 WS_CAPTION，
-/// SetWindowRgn(bRedraw) 会触发非客户区重绘把它画出来（=用户实拍的白色边框），
-/// 所以贴区域前必须先 strip_caption。
-#[cfg(windows)]
-fn round_region(win: &tauri::WebviewWindow, radius: f64) {
-    let Ok(hwnd) = win.hwnd() else { return };
-    crate::island::strip_caption(win);
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Gdi::{
-        CreateRoundRectRgn, SetWindowRgn,
-    };
-    let Ok(sc) = win.scale_factor() else { return };
-    let Ok(size) = win.inner_size() else { return };
-    let (w, h) = (size.width as i32, size.height as i32);
-    let e = (2.0 * radius * sc).round() as i32;
-    unsafe {
-        let rgn = CreateRoundRectRgn(0, 0, w, h, e.max(2), e.max(2));
-        let _ = SetWindowRgn(HWND(hwnd.0), Some(rgn), true);
-    }
-}
-
-#[cfg(not(windows))]
-fn round_region(_win: &tauri::WebviewWindow, _radius: f64) {}
 
 #[cfg(not(windows))]
 fn kill_border(_win: &tauri::WebviewWindow) {}
@@ -237,16 +205,9 @@ fn show_fullscreen(app: &AppHandle, payload: Payload) {
     }
 }
 
-/// 显示卡片提醒窗：⚠️ 必须走这里——窗口 show 会触发 tao 样式重写
-/// （带 WS_CAPTION 的样式表被重新写回），所以去帽+圆角区域要在 show 之后再做一次，
-/// 否则用户会看到白色系统边框（实拍回归）。
+/// 显示卡片提醒窗
 pub fn show_card(win: &tauri::WebviewWindow) {
     let _ = win.show();
-    #[cfg(windows)]
-    {
-        crate::island::strip_caption(win);
-        round_region(win, CARD_RADIUS);
-    }
 }
 
 /// 全屏提醒窗前端就绪后由 Rust 侧显示
@@ -272,8 +233,6 @@ pub fn resize(app: &AppHandle, content_height: f64) {
         // 卡片铺满窗口：窗口高度 = 内容高度（不再留 24px 余量，那正是灰框的温床）
         let h = content_height.max(REMINDER_MIN_H);
         let _ = win.set_size(tauri::LogicalSize::new(REMINDER_W, h));
-        // 高度变了，圆角区域跟着重贴
-        round_region(&win, CARD_RADIUS);
         if let Ok(Some(m)) = app.primary_monitor() {
             let scale = m.scale_factor();
             let size = m.size();

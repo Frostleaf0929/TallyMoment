@@ -16,25 +16,38 @@ interface Payload {
 }
 
 const item = ref<Payload | null>(null);
-/** 自定义背景图（个性化里设置；没有则用默认分层柔光） */
-const bg = ref("");
+/** 自定义背景图（个性化里设置；没有则用默认分层柔光）。
+ *  ⚠️ 全屏窗口是复用的：每次 reminder-show 都要重新挑图（顺序/随机轮换才生效） */
+const bg = ref<{ url: string; fit: string; align: string; scrim: number } | null>(null);
 const leaving = ref(false);
 let unlisten: UnlistenFn | undefined;
 let autoClose: number | undefined;
 
+async function refreshBg() {
+  try {
+    const w = await invoke<{
+      mime: string;
+      data: string;
+      fit: string;
+      align: string;
+      scrim: number;
+    } | null>("reminder_bg_pick");
+    bg.value = w ? { url: `data:${w.mime};base64,${w.data}`, fit: w.fit, align: w.align, scrim: w.scrim } : null;
+  } catch {
+    bg.value = null;
+  }
+}
+
 function apply(p: Payload) {
   item.value = p;
+  void refreshBg();
   if (autoClose) clearTimeout(autoClose);
   // 全屏页给足停留时间，但不无限挂着
   autoClose = window.setTimeout(() => void dismiss("ack"), 60_000);
 }
 
 onMounted(async () => {
-  void invoke<{ mime: string; data: string } | null>("reminder_bg_pick")
-    .then((w) => {
-      if (w) bg.value = `data:${w.mime};base64,${w.data}`;
-    })
-    .catch(() => (bg.value = ""));
+  void refreshBg();
   try {
     const pending = await invoke<Payload[]>("reminder_pending");
     if (pending.length) apply(pending[pending.length - 1]);
@@ -76,8 +89,12 @@ async function dismiss(action: string) {
 
 <template>
   <div class="full" :class="{ leaving, hasbg: !!bg }">
-    <div v-if="bg" class="bgimg" :style="{ backgroundImage: `url(${bg})` }"></div>
-    <div v-if="bg" class="scrim"></div>
+    <div
+      v-if="bg"
+      class="bgimg"
+      :style="{ backgroundImage: `url(${bg.url})`, backgroundSize: bg.fit === 'contain' ? 'contain' : 'cover', backgroundPosition: bg.align }"
+    ></div>
+    <div v-if="bg" class="scrim" :style="{ opacity: String(bg.scrim / 100) }"></div>
     <div class="glow g1"></div>
     <div class="glow g2"></div>
     <div class="glow g3"></div>

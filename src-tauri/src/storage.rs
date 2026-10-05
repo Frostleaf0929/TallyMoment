@@ -2852,13 +2852,27 @@ pub fn reminder_bg_overview(conn: &Connection) -> BgOverview {
     }
 }
 
-/// 缩略图条目（含路径，供前端移除）
+/// 缩略图条目（含路径与显示配置，供前端移除/编辑）
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BgThumb {
     pub path: String,
     pub mime: String,
     pub data: String,
+    pub fit: String,
+    pub align: String,
+    pub scrim: i64,
+}
+
+/// 全屏背景的单次取用（含显示配置）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BgPick {
+    pub mime: String,
+    pub data: String,
+    pub fit: String,
+    pub align: String,
+    pub scrim: i64,
 }
 
 /// 当前组的缩略图（base64，与全屏背景同一套读取路径，避开资产协议的环境差异）
@@ -2875,10 +2889,14 @@ pub fn reminder_bg_thumbs(conn: &Connection) -> Result<Vec<BgThumb>, String> {
             continue;
         }
         let data = std::fs::read(&p).map_err(|e| format!("读取图片失败: {e}"))?;
+        let cfg = bg_img_cfg_of(conn, &p);
         out.push(BgThumb {
             path: p.clone(),
             mime: bg_mime(&p),
             data: crate::pet_settings::base64_encode(&data),
+            fit: cfg.fit,
+            align: cfg.align,
+            scrim: cfg.scrim,
         });
     }
     Ok(out)
@@ -2988,6 +3006,29 @@ pub fn bg_rename_group(conn: &Connection, index: usize, name: &str) -> Result<()
     Ok(())
 }
 
+/// 删除组（至少保留一组）；被删组的图片若无其他组引用则从磁盘清理
+pub fn bg_remove_group(conn: &Connection, index: usize) -> Result<(), String> {
+    let mut groups = bg_groups(conn);
+    if groups.len() <= 1 {
+        return Err("至少要保留一个组".into());
+    }
+    if index >= groups.len() {
+        return Err("组不存在".into());
+    }
+    groups.remove(index);
+    bg_prune_files(&groups, &wallpaper_dir()?);
+    bg_save_groups(conn, &groups);
+    // 活动组下标收敛
+    let mut active = bg_active_index(conn, groups.len() + 1);
+    if active >= groups.len() {
+        active = 0;
+    }
+    set_setting(conn, "ui.reminder_bg_active", &active.to_string());
+    set_setting(conn, "ui.reminder_bg_cursor", "0");
+    set_setting(conn, "ui.reminder_bg_hand", "[]");
+    Ok(())
+}
+
 /// 切换当前组（播放进度随之重置）
 pub fn bg_set_active_group(conn: &Connection, index: usize) -> Result<(), String> {
     let groups = bg_groups(conn);
@@ -2999,6 +3040,60 @@ pub fn bg_set_active_group(conn: &Connection, index: usize) -> Result<(), String
     set_setting(conn, "ui.reminder_bg_cursor", "0");
     set_setting(conn, "ui.reminder_bg_hand", "[]");
     Ok(())
+}
+
+/// 每张背景图的显示配置：fit = cover(铺满裁剪)/contain(完整显示)；
+/// align = center/top/bottom/left/right/... 九宫格；scrim = 蒙版浓度 0~90(%)
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BgImgCfg {
+    pub fit: String,
+    pub align: String,
+    pub scrim: i64,
+}
+
+impl Default for BgImgCfg {
+    fn default() -> Self {
+        // 100 = 原始渐变浓度（与未加可调蒙版前的观感一致）
+        Self { fit: "cover".into(), align: "center".into(), scrim: 100 }
+    }
+}
+
+const BG_IMGCFG_KEY: &str = "ui.reminder_bg_imgcfg";
+
+fn bg_imgcfg_all(conn: &Connection) -> std::collections::HashMap<String, BgImgCfg> {
+    get_setting(conn, BG_IMGCFG_KEY)
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default()
+}
+
+fn bg_img_cfg_of(conn: &Connection, path: &str) -> BgImgCfg {
+    let all = bg_imgcfg_all(conn);
+    let mut cfg = all.get(path).cloned().unwrap_or_default();
+    if !["cover", "contain"].contains(&cfg.fit.as_str()) {
+        cfg.fit = "cover".into();
+    }
+    let ok_align = [
+        "center", "top", "bottom", "left", "right", "left top", "right top",
+        "left bottom", "right bottom",
+    ];
+    if !ok_align.contains(&cfg.align.as_str()) {
+        cfg.align = "center".into();
+    }
+    cfg.scrim = cfg.scrim.clamp(0, 100);
+    cfg
+}
+
+/// 保存某张背景图的显示配置
+pub fn reminder_bg_imgcfg_set(conn: &Connection, path: &str, cfg: &BgImgCfg) -> Result<(), String> {
+    let mut all = bg_imgcfg_all(conn);
+    let mut c = cfg.clone();
+    if !["cover", "contain"].contains(&c.fit.as_str()) {
+        return Err("填充方式非法".into());
+    }
+    c.scrim = c.scrim.clamp(0, 100);
+    all.insert(path.to_string(), c);
+    set_setting(conn, BG_IMGCFG_KEY, &serde_json::to_string(&all).unwrap_or_else(|_| "{}".into()))
 }
 
 fn bg_mime(path: &str) -> String {
@@ -3027,7 +3122,7 @@ pub fn reminder_bg_set_rotate(conn: &Connection, on: bool) {
 
 /// 取本次全屏提醒要用的背景图（当前组）：
 /// 顺序 = 游标从左到右循环；随机 = 洗牌队列逐张出队，一轮结束自动重洗（轮内不重复）
-pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<WallpaperFile>, String> {
+pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<BgPick>, String> {
     let groups = bg_groups(conn);
     let active = bg_active_index(conn, groups.len());
     let mut files: Vec<String> = groups
@@ -3090,9 +3185,13 @@ pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<WallpaperFile>, Stri
         files[(cur % len) as usize].clone()
     };
     let data = std::fs::read(&path).map_err(|e| format!("读取图片失败: {e}"))?;
-    Ok(Some(WallpaperFile {
+    let cfg = bg_img_cfg_of(conn, &path);
+    Ok(Some(BgPick {
         mime: bg_mime(&path),
         data: crate::pet_settings::base64_encode(&data),
+        fit: cfg.fit,
+        align: cfg.align,
+        scrim: cfg.scrim,
     }))
 }
 
