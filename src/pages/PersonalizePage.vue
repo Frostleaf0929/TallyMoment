@@ -210,7 +210,7 @@ const bgOverview = ref<{ groups: { name: string; files: string[] }[]; active: nu
   active: 0,
   rotate: false,
 });
-const bgThumbs = ref<{ path: string; mime: string; data: string; fit: string; align: string; scrim: number }[]>([]);
+const bgThumbs = ref<{ path: string; mime: string; data: string; fit: string; align: string; zoom: number; scrim: number }[]>([]);
 const renameValue = ref("");
 /** 点选中的缩略图下标（-1 = 未选中）；编辑行改这张图的填充/位置/蒙版 */
 const selThumb = ref(-1);
@@ -219,8 +219,10 @@ const editAlign = ref("center");
 const editScrim = ref(100);
 
 /** 双击缩略图进入全图编辑：全屏预览里拖动调位置、实时看蒙版 */
-const fullEdit = ref<null | { path: string; mime: string; data: string; fit: string; posX: number; posY: number; scrim: number }>(null);
+const fullEdit = ref<null | { path: string; mime: string; data: string; fit: string; posX: number; posY: number; zoom: number; scrim: number }>(null);
 const feEl = ref<HTMLElement | null>(null);
+/** 仅左键按住时才跟随拖动（此前指针一移动图就跟着跑，没法用） */
+let feDragging = false;
 
 function parseAlignPct(a: string): [number, number] {
   const kw: Record<string, [number, number]> = {
@@ -237,17 +239,20 @@ function parseAlignPct(a: string): [number, number] {
   return [50, 50];
 }
 
-function openFullEdit(t: { path: string; mime: string; data: string; fit: string; align: string; scrim: number }) {
+function openFullEdit(t: { path: string; mime: string; data: string; fit: string; align: string; zoom: number; scrim: number }) {
   const [x, y] = parseAlignPct(t.align);
-  fullEdit.value = { path: t.path, mime: t.mime, data: t.data, fit: t.fit, posX: x, posY: y, scrim: t.scrim };
+  fullEdit.value = { path: t.path, mime: t.mime, data: t.data, fit: t.fit, posX: x, posY: y, zoom: t.zoom, scrim: t.scrim };
 }
 
 function feDown(e: PointerEvent) {
+  if (e.button !== 0) return; // 只认左键：按住才拖
   (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  feDragging = true;
   feMove(e);
 }
 
 function feMove(e: PointerEvent) {
+  if (!feDragging) return; // 松开/未按下：图不跟手
   const el = feEl.value;
   if (!el || !fullEdit.value) return;
   const rect = el.getBoundingClientRect();
@@ -256,20 +261,44 @@ function feMove(e: PointerEvent) {
 }
 
 function feUp() {
+  feDragging = false;
+  feSave();
+}
+
+function feSave() {
   const fe = fullEdit.value;
   if (!fe) return;
   invoke("reminder_bg_imgcfg_set", {
     path: fe.path,
     fit: fe.fit,
     align: `${fe.posX}% ${fe.posY}%`,
+    zoom: fe.zoom,
     scrim: fe.scrim,
   }).catch((e) => (err.value = String(e).replace(/^.*Error: /, "")));
+}
+
+function feWheel(e: WheelEvent) {
+  if (!fullEdit.value) return;
+  e.preventDefault();
+  const delta = e.deltaY < 0 ? 10 : -10;
+  fullEdit.value.zoom = Math.min(300, Math.max(50, fullEdit.value.zoom + delta));
+  feSave();
+}
+
+function feReset() {
+  if (!fullEdit.value) return;
+  fullEdit.value.fit = "cover";
+  fullEdit.value.posX = 50;
+  fullEdit.value.posY = 50;
+  fullEdit.value.zoom = 100;
+  fullEdit.value.scrim = 100;
+  feSave();
 }
 
 function bumpFeScrim(delta: number) {
   if (!fullEdit.value) return;
   fullEdit.value.scrim = Math.min(100, Math.max(0, fullEdit.value.scrim + delta));
-  feUp();
+  feSave();
 }
 
 function closeFullEdit(save: boolean) {
@@ -321,7 +350,7 @@ async function bumpScrim(delta: number) {
 async function loadReminderBg() {
   try {
     bgOverview.value = await invoke("reminder_bg_overview");
-    bgThumbs.value = await invoke<{ path: string; mime: string; data: string; fit: string; align: string; scrim: number }[]>("reminder_bg_thumbs");
+    bgThumbs.value = await invoke<{ path: string; mime: string; data: string; fit: string; align: string; zoom: number; scrim: number }[]>("reminder_bg_thumbs");
     reminderBgSet.value = bgThumbs.value.length > 0;
     if (selThumb.value >= bgThumbs.value.length) selThumb.value = -1;
   } catch {
@@ -1105,31 +1134,40 @@ onMounted(async () => {
   <!-- 全图编辑层：双击缩略图进入，拖动调位置，实时预览蒙版 -->
   <Teleport to="body">
     <div v-if="fullEdit" class="fulledit">
-      <div
+      <img
         ref="feEl"
         class="fe-img"
+        :src="`data:${fullEdit.mime};base64,${fullEdit.data}`"
+        alt=""
         :style="{
-          backgroundImage: `url(data:${fullEdit.mime};base64,${fullEdit.data})`,
-          backgroundSize: fullEdit.fit === 'contain' ? 'contain' : 'cover',
-          backgroundPosition: `${fullEdit.posX}% ${fullEdit.posY}%`,
+          objectFit: fullEdit.fit === 'contain' ? 'contain' : 'cover',
+          objectPosition: `${fullEdit.posX}% ${fullEdit.posY}%`,
+          transform: `scale(${fullEdit.zoom / 100})`,
         }"
+        draggable="false"
         @pointerdown="feDown"
         @pointermove="feMove"
         @pointerup="feUp"
-      ></div>
+        @wheel.prevent="feWheel"
+      />
       <div class="fe-scrim" :style="{ opacity: String(fullEdit.scrim / 100) }"></div>
       <div class="fe-bar">
-        <button class="ghost" @click="fullEdit.fit = fullEdit.fit === 'cover' ? 'contain' : 'cover'">
+        <button class="febtn" @click="fullEdit.fit = fullEdit.fit === 'cover' ? 'contain' : 'cover'">
           {{ fullEdit.fit === "cover" ? "铺满裁剪" : "完整显示" }}
         </button>
-        <span class="l">蒙版</span>
-        <button class="mini" @click="bumpFeScrim(-10)">−</button>
-        <span class="sval">{{ fullEdit.scrim }} %</span>
-        <button class="mini" @click="bumpFeScrim(10)">+</button>
-        <span class="fe-hint">拖动图片调整位置 · 实时预览</span>
-        <button class="ghost" @click="closeFullEdit(true)">保存并退出</button>
-        <button class="ghost danger" @click="closeFullEdit(false)">取消</button>
+        <span class="fsep"></span>
+        <span class="fl">缩放</span>
+        <span class="fnum">{{ fullEdit.zoom }}%</span>
+        <span class="fl">蒙版</span>
+        <button class="febtn" @click="bumpFeScrim(-10)">−</button>
+        <span class="fnum acc">{{ fullEdit.scrim }}%</span>
+        <button class="febtn" @click="bumpFeScrim(10)">+</button>
+        <button class="febtn" title="恢复默认（铺满 / 居中 / 100% / 蒙版100）" @click="feReset">恢复默认</button>
+        <span class="fsep"></span>
+        <button class="febtn primary" @click="closeFullEdit(true)">保存并退出</button>
+        <button class="febtn" @click="closeFullEdit(false)">取消</button>
       </div>
+      <p class="fe-tip">左键按住拖动调位置 · 滚轮缩放 · 蒙版实时预览</p>
     </div>
   </Teleport>
 </template>
@@ -1440,20 +1478,66 @@ onMounted(async () => {
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 10px;
-  background: rgba(10, 12, 18, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  gap: 14px;
+  white-space: nowrap;
+  background: rgba(10, 12, 18, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 999px;
-  padding: 8px 18px;
+  padding: 10px 26px;
   z-index: 2;
+  max-width: none;
 }
-.fe-bar .l {
+.fe-bar * {
+  white-space: nowrap;
+}
+.febtn {
+  flex: none;
+  font-size: 12px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #eef1e9;
+  cursor: pointer;
+}
+.febtn:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+.febtn.primary {
+  background: var(--accent, #7b84ec);
+  border-color: var(--accent, #7b84ec);
+  color: #10131a;
+  font-weight: 600;
+}
+.fsep {
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.16);
+}
+.fl {
   font-size: 11px;
   color: #9aa3ad;
 }
-.fe-hint {
+.fnum {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #ffffff;
+  min-width: 46px;
+  text-align: center;
+}
+.fnum.acc {
+  color: var(--accent, #7b84ec);
+}
+.fe-tip {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
   font-size: 11px;
-  color: #9aa3ad;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
 }
 .bgthumb .tremove {
   position: absolute;

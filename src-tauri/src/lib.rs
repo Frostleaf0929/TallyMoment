@@ -688,6 +688,7 @@ fn reminder_bg_imgcfg_set(
     path: String,
     fit: String,
     align: String,
+    zoom: i64,
     scrim: i64,
 ) -> Result<(), String> {
     let db = app.state::<Db>();
@@ -695,7 +696,7 @@ fn reminder_bg_imgcfg_set(
     storage::reminder_bg_imgcfg_set(
         &conn,
         &path,
-        &storage::BgImgCfg { fit, align, scrim },
+        &storage::BgImgCfg { fit, align, zoom, scrim },
     )
 }
 

@@ -2861,6 +2861,7 @@ pub struct BgThumb {
     pub data: String,
     pub fit: String,
     pub align: String,
+    pub zoom: i64,
     pub scrim: i64,
 }
 
@@ -2872,6 +2873,7 @@ pub struct BgPick {
     pub data: String,
     pub fit: String,
     pub align: String,
+    pub zoom: i64,
     pub scrim: i64,
 }
 
@@ -2896,6 +2898,7 @@ pub fn reminder_bg_thumbs(conn: &Connection) -> Result<Vec<BgThumb>, String> {
             data: crate::pet_settings::base64_encode(&data),
             fit: cfg.fit,
             align: cfg.align,
+            zoom: cfg.zoom,
             scrim: cfg.scrim,
         });
     }
@@ -3049,13 +3052,20 @@ pub fn bg_set_active_group(conn: &Connection, index: usize) -> Result<(), String
 pub struct BgImgCfg {
     pub fit: String,
     pub align: String,
+    /// 缩放百分比：100 = 原始；50~300（旧数据缺省按 100）
+    #[serde(default = "default_bg_zoom")]
+    pub zoom: i64,
     pub scrim: i64,
+}
+
+fn default_bg_zoom() -> i64 {
+    100
 }
 
 impl Default for BgImgCfg {
     fn default() -> Self {
         // 100 = 原始渐变浓度（与未加可调蒙版前的观感一致）；align 用 "X% Y%" 百分比定位
-        Self { fit: "cover".into(), align: "50% 50%".into(), scrim: 100 }
+        Self { fit: "cover".into(), align: "50% 50%".into(), zoom: 100, scrim: 100 }
     }
 }
 
@@ -3104,6 +3114,9 @@ fn bg_img_cfg_of(conn: &Connection, path: &str) -> BgImgCfg {
     if !valid_align(&cfg.align) {
         cfg.align = align_keyword_to_pct(&cfg.align).unwrap_or_else(|| "50% 50%".into());
     }
+    if !(50..=300).contains(&cfg.zoom) {
+        cfg.zoom = 100;
+    }
     cfg.scrim = cfg.scrim.clamp(0, 100);
     cfg
 }
@@ -3117,6 +3130,9 @@ pub fn reminder_bg_imgcfg_set(conn: &Connection, path: &str, cfg: &BgImgCfg) -> 
     }
     if !valid_align(&c.align) {
         return Err("位置非法".into());
+    }
+    if !(50..=300).contains(&c.zoom) {
+        return Err("缩放需在 50~300%".into());
     }
     c.scrim = c.scrim.clamp(0, 100);
     all.insert(path.to_string(), c);
@@ -3218,6 +3234,7 @@ pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<BgPick>, String> {
         data: crate::pet_settings::base64_encode(&data),
         fit: cfg.fit,
         align: cfg.align,
+        zoom: cfg.zoom,
         scrim: cfg.scrim,
     }))
 }

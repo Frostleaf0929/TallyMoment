@@ -18,7 +18,7 @@ interface Payload {
 const item = ref<Payload | null>(null);
 /** 自定义背景图（个性化里设置；没有则用默认分层柔光）。
  *  ⚠️ 全屏窗口是复用的：每次 reminder-show 都要重新挑图（顺序/随机轮换才生效） */
-const bg = ref<{ url: string; fit: string; align: string; scrim: number } | null>(null);
+const bg = ref<{ url: string; fit: string; align: string; zoom: number; scrim: number } | null>(null);
 const leaving = ref(false);
 let unlisten: UnlistenFn | undefined;
 let autoClose: number | undefined;
@@ -30,9 +30,10 @@ async function refreshBg() {
       data: string;
       fit: string;
       align: string;
+      zoom: number;
       scrim: number;
     } | null>("reminder_bg_pick");
-    bg.value = w ? { url: `data:${w.mime};base64,${w.data}`, fit: w.fit, align: w.align, scrim: w.scrim } : null;
+    bg.value = w ? { url: `data:${w.mime};base64,${w.data}`, fit: w.fit, align: w.align, zoom: w.zoom, scrim: w.scrim } : null;
   } catch {
     bg.value = null;
   }
@@ -89,11 +90,17 @@ async function dismiss(action: string) {
 
 <template>
   <div class="full" :class="{ leaving, hasbg: !!bg }">
-    <div
+    <img
       v-if="bg"
       class="bgimg"
-      :style="{ backgroundImage: `url(${bg.url})`, backgroundSize: bg.fit === 'contain' ? 'contain' : 'cover', backgroundPosition: bg.align }"
-    ></div>
+      :src="bg.url"
+      alt=""
+      :style="{
+        objectFit: bg.fit === 'contain' ? 'contain' : 'cover',
+        objectPosition: bg.align,
+        transform: `scale(${bg.zoom / 100})`,
+      }"
+    />
     <div v-if="bg" class="scrim" :style="{ opacity: String(bg.scrim / 100) }"></div>
     <div class="glow g1"></div>
     <div class="glow g2"></div>
