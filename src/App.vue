@@ -381,19 +381,16 @@ body.glass-off {
   /* 与卡片同一套材质：背景层透上来 + 同一档模糊 */
   background: rgba(var(--side-rgb), var(--side-alpha));
   backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
   transition: width var(--dur) cubic-bezier(0.22, 0.61, 0.36, 1);
   overflow: hidden;
 }
 
 [data-material="liquid"] .side {
   backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
-  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.55)) saturate(1.75) brightness(1.06);
 }
 
 .glass-off .side {
   backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 .side.collapsed {
