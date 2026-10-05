@@ -2943,8 +2943,8 @@ pub fn reminder_bg_set(conn: &Connection, src_path: &str) -> Result<(), String> 
     bg_save_groups(conn, &groups);
     set_setting(conn, "ui.reminder_bg", &dst_str)?;
     // 组内容变了：重置播放进度
-    set_setting(conn, "ui.reminder_bg_cursor", "0");
-    set_setting(conn, "ui.reminder_bg_hand", "[]");
+    let _ = set_setting(conn, "ui.reminder_bg_cursor", "0");
+    let _ = set_setting(conn, "ui.reminder_bg_hand", "[]");
     Ok(())
 }
 
@@ -2958,8 +2958,8 @@ pub fn reminder_bg_remove_file(conn: &Connection, path: &str) -> Result<(), Stri
     let dir = wallpaper_dir()?;
     bg_prune_files(&groups, &dir)?;
     bg_save_groups(conn, &groups);
-    set_setting(conn, "ui.reminder_bg_cursor", "0");
-    set_setting(conn, "ui.reminder_bg_hand", "[]");
+    let _ = set_setting(conn, "ui.reminder_bg_cursor", "0");
+    let _ = set_setting(conn, "ui.reminder_bg_hand", "[]");
     Ok(())
 }
 
@@ -3019,16 +3019,16 @@ pub fn bg_remove_group(conn: &Connection, index: usize) -> Result<(), String> {
         return Err("组不存在".into());
     }
     groups.remove(index);
-    bg_prune_files(&groups, &wallpaper_dir()?);
+    let _ = bg_prune_files(&groups, &wallpaper_dir()?);
     bg_save_groups(conn, &groups);
     // 活动组下标收敛
     let mut active = bg_active_index(conn, groups.len() + 1);
     if active >= groups.len() {
         active = 0;
     }
-    set_setting(conn, "ui.reminder_bg_active", &active.to_string());
-    set_setting(conn, "ui.reminder_bg_cursor", "0");
-    set_setting(conn, "ui.reminder_bg_hand", "[]");
+    let _ = set_setting(conn, "ui.reminder_bg_active", &active.to_string());
+    let _ = set_setting(conn, "ui.reminder_bg_cursor", "0");
+    let _ = set_setting(conn, "ui.reminder_bg_hand", "[]");
     Ok(())
 }
 
@@ -3039,9 +3039,9 @@ pub fn bg_set_active_group(conn: &Connection, index: usize) -> Result<(), String
         return Err("组不存在".into());
     }
     bg_save_groups(conn, &groups); // 顺带把迁移后的组结构落库
-    set_setting(conn, "ui.reminder_bg_active", &index.to_string());
-    set_setting(conn, "ui.reminder_bg_cursor", "0");
-    set_setting(conn, "ui.reminder_bg_hand", "[]");
+    let _ = set_setting(conn, "ui.reminder_bg_active", &index.to_string());
+    let _ = set_setting(conn, "ui.reminder_bg_cursor", "0");
+    let _ = set_setting(conn, "ui.reminder_bg_hand", "[]");
     Ok(())
 }
 
@@ -3175,9 +3175,9 @@ pub fn reminder_bg_test_pick(conn: &Connection, path: &str) -> Result<(), String
         return Err("这张图不在当前组里".into());
     }
     if reminder_bg_rotate_get(conn) {
-        set_setting(conn, "ui.reminder_bg_hand", &serde_json::to_string(&vec![path.to_string()]).unwrap_or_else(|_| "[]".into()));
+        let _ = set_setting(conn, "ui.reminder_bg_hand", &serde_json::to_string(&vec![path.to_string()]).unwrap_or_else(|_| "[]".into()));
     } else if let Some(i) = files.iter().position(|f| f == path) {
-        set_setting(conn, "ui.reminder_bg_cursor", &i.to_string());
+        let _ = set_setting(conn, "ui.reminder_bg_cursor", &i.to_string());
     }
     Ok(())
 }
@@ -3230,12 +3230,12 @@ pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<BgPick>, String> {
             }
         }
         let picked = hand.remove(0);
-        set_setting(
+        let _ = set_setting(
             conn,
             "ui.reminder_bg_hand",
             &serde_json::to_string(&hand).unwrap_or_else(|_| "[]".into()),
         );
-        set_setting(conn, "ui.reminder_bg_last", &picked);
+        let _ = set_setting(conn, "ui.reminder_bg_last", &picked);
         picked
     } else {
         // 顺序循环：游标从左到右
@@ -3243,7 +3243,7 @@ pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<BgPick>, String> {
         let cur = get_setting(conn, "ui.reminder_bg_cursor")
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
-        set_setting(conn, "ui.reminder_bg_cursor", &(cur + 1).to_string());
+        let _ = set_setting(conn, "ui.reminder_bg_cursor", &(cur + 1).to_string());
         files[(cur % len) as usize].clone()
     };
     let data = std::fs::read(&path).map_err(|e| format!("读取图片失败: {e}"))?;
@@ -3433,7 +3433,7 @@ pub fn import_tai_data(src_path: &str, conn: &Connection, mode: &str) -> Result<
 
     // Tai 的表名有两种形态：导出/教程里是 App / DailyLog / HoursLog，
     // 真实运行库是 AppModels / DailyLogModels / HoursLogModels（首次接真库才发现）
-    let mut table = |base: &str, src: &Connection| -> Result<String, String> {
+    let table = |base: &str, src: &Connection| -> Result<String, String> {
         for cand in [base.to_string(), format!("{base}Models")] {
             let n: i64 = src
                 .query_row(

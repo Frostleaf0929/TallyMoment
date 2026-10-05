@@ -550,13 +550,28 @@ fn spawn_cursor_poll(app: AppHandle) {
     }
     std::thread::spawn(move || {
         let mut ignoring = true;
+        // 诊断：UI"用着用着假死"——跨线程窗口查询必须经主线程派发，
+        // 主线程被阻塞时这些查询会显著变慢，此处直接把警告打进控制台
+        let mut ticks: u64 = 0;
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            // 120ms：悬停感知依然跟手，但把跨线程 getter 派发降到原来的 1/2.4（主线程压力敏感）
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            ticks += 1;
             let Some(win) = app.get_webview_window("island") else {
                 continue;
             };
-            let lay = layout(&app);
+            let diag_t0 = std::time::Instant::now();
             let visible = win.is_visible().unwrap_or(false);
+            let diag_ms = diag_t0.elapsed().as_millis();
+            if diag_ms > 200 {
+                eprintln!(
+                    "[island][diag] 跨线程窗口查询耗时 {diag_ms}ms —— 主线程疑似被阻塞（此刻界面应也无响应）"
+                );
+            }
+            if ticks % 1200 == 0 {
+                eprintln!("[island][diag] 轮询心跳正常（已运行 {} 个周期）", ticks);
+            }
+            let lay = layout(&app);
             let want_ignore = lay.click_through || !visible;
             if want_ignore != ignoring {
                 let _ = win.set_ignore_cursor_events(want_ignore);

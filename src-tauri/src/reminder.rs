@@ -155,13 +155,16 @@ fn kill_border(_win: &tauri::WebviewWindow) {}
 /// 窗口先隐藏、等前端就绪再显示：睡眠唤醒后 WebView 首帧可能迟迟不渲染，
 /// 立即显示会露出默认底色（半夜"全黑一片+滚动条"的来源）
 pub fn show_fullscreen(app: &AppHandle, payload: Payload) {
+    eprintln!("[diag] show_fullscreen 进入");
     if let Some(win) = app.get_webview_window("reminder_full") {
+        eprintln!("[diag] show_fullscreen: 复用已有窗口");
         FULL_SHOWN.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = win.show();
         let _ = win.set_focus();
         let _ = app.emit_to("reminder_full", "reminder-show", payload);
         return;
     }
+    eprintln!("[diag] show_fullscreen: 首次创建窗口");
     push_pending(payload);
     let (w, h) = app
         .primary_monitor()

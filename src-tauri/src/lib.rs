@@ -48,12 +48,61 @@ struct DayReport {
     segments: Vec<storage::SegSlice>,
 }
 
+/// 诊断看门狗：把"整体无响应"劈成三种结论（主线程阻塞 / Db 锁被占 / 都正常）。
+/// 卡死瞬间控制台会出现 [diag] 行，据此定位，不再靠猜。
+fn spawn_watchdog(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        // ① 主线程响应性：从独立线程派发一次窗口 getter（必须由主线程事件循环完成），限时等待
+        let (tx, rx) = std::sync::mpsc::channel();
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            let ok = app2
+                .get_webview_window("main")
+                .and_then(|w| w.outer_position().ok())
+                .is_some();
+            let _ = tx.send((ok, t0.elapsed().as_millis()));
+        });
+        let probe = rx.recv_timeout(std::time::Duration::from_millis(2500));
+        // ② Db 锁 3 秒内能否拿到
+        let db_busy = app
+            .try_state::<Db>()
+            .map(|db| db.0.try_lock().is_err())
+            .unwrap_or(false);
+        match probe {
+            Ok((_, ms)) if ms < 1200 && !db_busy => { /* 正常，静默 */ }
+            Ok((_, ms)) => eprintln!(
+                "[diag] ⚠ 主线程探针 {ms}ms（偏慢）｜ Db锁 {}",
+                if db_busy { "被占用" } else { "空闲" }
+            ),
+            Err(_) => eprintln!(
+                "[diag] ⚠⚠ 主线程 2.5s 无响应 ｜ Db锁 {} —— 请把本行发给 AI",
+                if db_busy {
+                    "被占用（某处持锁不放）"
+                } else {
+                    "空闲（主线程自身阻塞）"
+                }
+            ),
+        }
+    });
+}
+
 /// 今日回顾报表：库内数据 + 进行中会话实时合并，前端一次拉全
 #[tauri::command]
 fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
     let shared = app.state::<TrackerShared>();
     let paused = shared.paused.load(Ordering::Relaxed);
-    let session = shared.session.lock().map_err(|_| "会话锁不可用")?;
+    // 会话先取快照、立即释放 session 锁：绝不能持 session 锁去做全量 Db 查询
+    // （tracker 每秒"session→Db"双持，持锁越久与命令撞车的窗口越大）
+    let session = shared
+        .session
+        .lock()
+        .ok()
+        .and_then(|g| {
+            g.as_ref()
+                .map(|s| (s.app_key.clone(), s.seg_start, s.title.clone()))
+        });
     let now = chrono::Local::now().timestamp();
 
     let db = app.state::<Db>();
@@ -69,17 +118,20 @@ fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
     // 进行中的会话并入报表，让面板实时
     let mut current = None;
     let cur_hour = chrono::Local::now().hour() as i32;
-    if let Some(s) = session.as_ref() {
-        let secs = (now - s.seg_start).max(0);
+    if let Some((app_key, seg_start, title)) = session.as_ref() {
+        let s_app_key = app_key.clone();
+        let s_seg_start = *seg_start;
+        let s_title = title;
+        let secs = (now - s_seg_start).max(0);
         let display = apps
             .iter()
-            .find(|a| a.name == s.app_key)
+            .find(|a| a.name == s_app_key)
             .map(|a| a.display_name.clone())
-            .unwrap_or_else(|| s.app_key.trim_end_matches(".exe").to_string());
-        match apps.iter_mut().find(|a| a.name == s.app_key) {
+            .unwrap_or_else(|| s_app_key.trim_end_matches(".exe").to_string());
+        match apps.iter_mut().find(|a| a.name == s_app_key) {
             Some(a) => a.seconds += secs,
             None => apps.push(storage::AppUsage {
-                name: s.app_key.clone(),
+                name: s_app_key.clone(),
                 display_name: display.clone(),
                 seconds: secs,
                 bg_seconds: 0,
@@ -87,20 +139,20 @@ fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
         }
         match hourly
             .iter_mut()
-            .find(|h| h.hour == cur_hour && h.app_name == s.app_key)
+            .find(|h| h.hour == cur_hour && h.app_name == s_app_key)
         {
             Some(h) => h.seconds += secs,
             None => hourly.push(storage::HourSlice {
                 hour: cur_hour,
-                app_name: s.app_key.clone(),
+                app_name: s_app_key.clone(),
                 seconds: secs,
             }),
         }
         segments.push(storage::SegSlice {
-            app_name: s.app_key.clone(),
-            start_ts: s.seg_start,
+            app_name: s_app_key.clone(),
+            start_ts: s_seg_start,
             end_ts: now,
-            title: s.title.clone(),
+            title: s_title.clone(),
         });
         // 状态推断：近 30 分钟内切换 ≥6 次视为碎片化
         let recent_switches = segments
@@ -117,7 +169,7 @@ fn today_report(app: tauri::AppHandle) -> Result<DayReport, String> {
         current = Some(CurrentApp {
             display_name: display,
             seconds: secs,
-            start_ts: s.seg_start,
+            start_ts: s_seg_start,
             status: status.into(),
         });
     }
@@ -677,6 +729,7 @@ fn reminder_bg_thumbs(app: tauri::AppHandle) -> Result<Vec<storage::BgThumb>, St
 /// 全屏试看：立即以真实全屏提醒弹出当前编辑的这张图
 #[tauri::command]
 fn reminder_bg_test_show(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    eprintln!("[diag] test_show 进入（{path}）");
     {
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
@@ -697,6 +750,7 @@ fn reminder_bg_test_show(app: tauri::AppHandle, path: String) -> Result<(), Stri
             style: "fullscreen".into(),
         },
     );
+    eprintln!("[diag] test_show 完成（窗口已请求显示）");
     Ok(())
 }
 
@@ -1317,24 +1371,24 @@ fn flow_get_params(app: tauri::AppHandle) -> insights::FlowParams {
 #[tauri::command]
 fn flow_set_params(
     app: tauri::AppHandle,
-    contextApps: i64,
-    contextMin: i64,
-    activeMin: i64,
+    context_apps: i64,
+    context_min: i64,
+    active_min: i64,
 ) -> Result<(), String> {
-    if !(2..=6).contains(&contextApps) {
+    if !(2..=6).contains(&context_apps) {
         return Err("上下文应用数需在 2~6".into());
     }
-    if !(50..=90).contains(&contextMin) {
+    if !(50..=90).contains(&context_min) {
         return Err("一致度门槛需在 50~90%".into());
     }
-    if !(70..=95).contains(&activeMin) {
+    if !(70..=95).contains(&active_min) {
         return Err("活跃占比门槛需在 70~95%".into());
     }
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-    let _ = crate::storage::set_setting(&conn, "flow.context_apps", &contextApps.to_string());
-    let _ = crate::storage::set_setting(&conn, "flow.context_min", &contextMin.to_string());
-    let _ = crate::storage::set_setting(&conn, "flow.active_min", &activeMin.to_string());
+    let _ = crate::storage::set_setting(&conn, "flow.context_apps", &context_apps.to_string());
+    let _ = crate::storage::set_setting(&conn, "flow.context_min", &context_min.to_string());
+    let _ = crate::storage::set_setting(&conn, "flow.active_min", &active_min.to_string());
     Ok(())
 }
 
@@ -1982,7 +2036,7 @@ pub fn run() {
 
             // 固定事项：启动时把今天该出现的实例生成出来
             {
-                let db = app.state::<Db>().inner().clone();
+                let db = app.state::<Db>().inner();
                 if let Ok(conn) = db.0.lock() {
                     let today = storage::today_date();
                     match storage::materialize_repeats(&conn, &today) {
@@ -2002,6 +2056,7 @@ pub fn run() {
 
             tracker::spawn(app.handle().clone());
             input_hook::spawn(app.handle().clone());
+            spawn_watchdog(app.handle().clone());
 
             // 原子岛：上一次开着就随启动恢复
             // 注意：island::show 内部也要拿 Db 锁，必须先释放外层锁再调用（Mutex 不可重入，
@@ -2010,7 +2065,7 @@ pub fn run() {
     tracker::spawn_bg_tracker(app.handle().clone());
 
     let should_show_island = {
-                let db = app.state::<Db>().inner().clone();
+                let db = app.state::<Db>().inner();
                 match db.0.lock() {
                     Ok(conn) => island::enabled(&conn),
                     Err(_) => false,
