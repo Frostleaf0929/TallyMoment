@@ -1478,6 +1478,25 @@ fn app_set_ignored(app: tauri::AppHandle, name: String, ignored: bool) -> Result
     storage::app_set_ignored(&conn, &name, ignored)
 }
 
+/// 手动归族：把某应用并入另一个（只改 family 列，**不动任何统计数据**，可随时还原）
+#[tauri::command]
+fn app_merge_into(app: tauri::AppHandle, from: String, target: String) -> Result<(), String> {
+    if from == target {
+        return Err("目标不能是它自己".into());
+    }
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::app_merge_into(&conn, &from, &target)
+}
+
+/// 取消归族：恢复为独立应用
+#[tauri::command]
+fn app_family_reset(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::app_family_reset(&conn, &name)
+}
+
 /// Tai 对齐导出：data.db + 每日/时段 CSV（path 为用户选择的 .db 位置）
 #[tauri::command]
 fn export_tai(app: tauri::AppHandle, path: String) -> Result<Vec<String>, String> {
@@ -1892,6 +1911,8 @@ pub fn run() {
             island_set_always_top,
             island_set_accent_mode,
             app_set_track_background,
+            app_merge_into,
+            app_family_reset,
             set_track_self,
             get_track_self,
             island_set_behavior,
@@ -2059,6 +2080,12 @@ pub fn run() {
                         Ok(n) if n > 0 => eprintln!("[apps] 回填了 {n} 个应用的友好名"),
                         Ok(_) => {}
                         Err(e) => eprintln!("[apps] 友好名回填失败: {e}"),
+                    }
+                    // 应用归族：用 exe 产品名回填 family —— 同一软件的不同文件名/副本
+                    // （如绿色版改名 xxx-portable.exe）在报表里合并显示（只填未归族的，增量、幂等）
+                    let fam = storage::app_fill_families(&conn);
+                    if fam > 0 {
+                        eprintln!("[apps] 回填了 {fam} 个应用的归族信息");
                     }
                 }
             }

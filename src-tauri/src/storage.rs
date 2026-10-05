@@ -362,6 +362,9 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         "ALTER TABLE tasks ADD COLUMN related_apps TEXT NOT NULL DEFAULT '[]'",
         // 软删除：删除只从活动列表隐藏，完成记录/统计保留
         "ALTER TABLE tasks ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
+        // 应用归族：同族（同一软件的不同文件名/副本，如便携版改名）在报表里合并显示。
+        // 空 = 未归族（报表按自身名字处理）；读 exe 产品名回填，或用户在详细页手动并入。
+        "ALTER TABLE apps ADD COLUMN family TEXT NOT NULL DEFAULT ''",
     ] {
         let _ = conn.execute(sql, []);
     }
@@ -1085,7 +1088,7 @@ pub fn task_suggest_apps(conn: &Connection, id: i64) -> Result<Vec<(String, i64)
             "SELECT a.name, SUM(s.end_ts - s.start_ts) AS secs
              FROM segments s JOIN apps a ON a.id = s.app_id
              WHERE s.start_ts >= ?1 AND s.end_ts <= ?2 AND COALESCE(a.ignored, 0) = 0
-             GROUP BY a.name ORDER BY secs DESC LIMIT 8",
+             GROUP BY CASE WHEN a.family = '' THEN a.name ELSE a.family END ORDER BY secs DESC LIMIT 8",
         )
         .map_err(|e| format!("查询推荐应用失败: {e}"))?;
     let rows = stmt.query_map(rusqlite::params![start, end], |r| {
@@ -1962,7 +1965,7 @@ pub fn recent_hourly(conn: &Connection, days: i32) -> Result<Vec<HourSlice>, Str
              WHERE h.date IN (
                  SELECT DISTINCT date FROM hourly_stats ORDER BY date DESC LIMIT ?1
              )
-             GROUP BY h.hour, h.app_id",
+             GROUP BY h.hour, CASE WHEN a.family = '' THEN a.name ELSE a.family END",
         )
         .map_err(|e| format!("查询作息分布失败: {e}"))?;
     let rows = stmt
@@ -2088,10 +2091,12 @@ pub fn period_report(conn: &Connection, kind: &str, key: &str) -> Result<PeriodR
 
     let mut app_stmt = conn
         .prepare(
-            "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds)
+            &format!(
+                "SELECT MIN(a.name), MIN(COALESCE(a.display_name, a.name)), SUM(d.seconds)
              FROM daily_stats d JOIN apps a ON a.id = d.app_id AND a.ignored = 0
              WHERE d.date LIKE ?1
-             GROUP BY d.app_id ORDER BY 3 DESC LIMIT 60",
+             GROUP BY {FAMILY_EXPR} ORDER BY 3 DESC LIMIT 60"
+            ),
         )
         .map_err(|e| format!("查询周期应用排行失败: {e}"))?;
     let apps: Vec<AppUsage> = app_stmt
@@ -2112,7 +2117,7 @@ pub fn period_report(conn: &Connection, kind: &str, key: &str) -> Result<PeriodR
             "SELECT h.hour, a.name, SUM(h.seconds)
              FROM hourly_stats h JOIN apps a ON a.id = h.app_id AND a.ignored = 0
              WHERE h.date LIKE ?1
-             GROUP BY h.hour, h.app_id",
+             GROUP BY h.hour, CASE WHEN a.family = '' THEN a.name ELSE a.family END",
         )
         .map_err(|e| format!("查询周期时段分布失败: {e}"))?;
     let hourly: Vec<HourSlice> = hour_stmt
@@ -2202,13 +2207,92 @@ pub fn period_report(conn: &Connection, kind: &str, key: &str) -> Result<PeriodR
 
 // ---------- 按应用查看（历史页「按应用」视图，对标 Tai 的应用详情） ----------
 
+/// 报表里的"归族表达式"：family 为空时用自身名字（保证未回填时行为与从前完全一致）
+pub const FAMILY_EXPR: &str = "CASE WHEN a.family = '' THEN a.name ELSE a.family END";
+
+/// 应用清单条目：按 exe 产品名回填 family（同一产品名 → 同一族，报表合并显示）。
+/// 只处理尚未归族的条目（幂等、增量）；exe 路径缺失或读不到产品名则跳过。
+/// 返回本次回填的条数。
+pub fn app_fill_families(conn: &Connection) -> usize {
+    let rows: Vec<(i64, String, String)> = conn
+        .prepare("SELECT id, name, COALESCE(exe_path, '') FROM apps WHERE family = '' AND exe_path <> ''")
+        .ok()
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .ok()
+            .map(|it| it.filter_map(|x| x.ok()).collect())
+        })
+        .unwrap_or_default();
+    let mut filled = 0usize;
+    for (id, name, exe) in rows {
+        let fam = crate::app_icon::product_name(&exe)
+            .map(|p| p.trim().to_lowercase())
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| name.to_lowercase());
+        if fam != name.to_lowercase() || !fam.is_empty() {
+            let _ = conn.execute(
+                "UPDATE apps SET family = ?1 WHERE id = ?2",
+                rusqlite::params![fam, id],
+            );
+            filled += 1;
+        }
+    }
+    filled
+}
+
+/// 手动归族（详细页"并入其他应用"）：把 from 的 family 设为 target 的 family。
+/// 只改 family 列 → **不动任何统计数据，可随时用 app_family_reset 还原**。
+pub fn app_merge_into(conn: &Connection, from_name: &str, target_name: &str) -> Result<(), String> {
+    let target_family: String = conn
+        .query_row(
+            &format!(
+                "SELECT CASE WHEN a.family = '' THEN a.name ELSE a.family END FROM apps a WHERE a.name = ?1"
+            ),
+            [target_name],
+            |r| r.get(0),
+        )
+        .map_err(|_| "找不到要并入的目标应用".to_string())?;
+    let n = conn
+        .execute(
+            "UPDATE apps SET family = ?1 WHERE name = ?2",
+            rusqlite::params![target_family, from_name],
+        )
+        .map_err(|e| format!("并入失败: {e}"))?;
+    if n == 0 {
+        return Err("找不到该应用".into());
+    }
+    Ok(())
+}
+
+/// 取消归族：恢复为"只代表自己"
+pub fn app_family_reset(conn: &Connection, name: &str) -> Result<(), String> {
+    let n = conn
+        .execute(
+            "UPDATE apps SET family = lower(name) WHERE name = ?1",
+            [name],
+        )
+        .map_err(|e| format!("取消归并失败: {e}"))?;
+    if n == 0 {
+        return Err("找不到该应用".into());
+    }
+    Ok(())
+}
+
 /// 全部时间的应用清单（按时长排序，供侧栏选择）
 pub fn app_list(conn: &Connection, limit: i64) -> Result<Vec<AppUsage>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds)
+            &format!(
+                "SELECT MIN(a.name), MIN(COALESCE(a.display_name, a.name)), SUM(d.seconds)
              FROM daily_stats d JOIN apps a ON a.id = d.app_id AND a.ignored = 0
-             GROUP BY d.app_id ORDER BY 3 DESC LIMIT ?1",
+             GROUP BY {FAMILY_EXPR} ORDER BY 3 DESC LIMIT ?1"
+            ),
         )
         .map_err(|e| format!("查询应用清单失败: {e}"))?;
     let rows = stmt
@@ -2264,7 +2348,7 @@ pub fn app_period_report(
             .prepare(
                 "SELECT h.hour, SUM(h.seconds)
                  FROM hourly_stats h JOIN apps a ON a.id = h.app_id AND a.ignored = 0
-                 WHERE h.date = ?1 AND a.name = ?2 GROUP BY h.hour",
+                 WHERE h.date = ?1 AND (CASE WHEN a.family = '' THEN a.name ELSE a.family END) = (SELECT CASE WHEN family = '' THEN name ELSE family END FROM apps WHERE name = ?2) GROUP BY h.hour",
             )
             .map_err(|e| format!("查询应用日分布失败: {e}"))?;
         let rows = stmt
@@ -2415,11 +2499,16 @@ pub fn range_report(
     let app_filter = app.filter(|a| !a.is_empty());
 
     let apps_sql = format!(
-        "SELECT a.name, COALESCE(a.display_name, a.name), SUM(d.seconds), SUM(d.bg_seconds)
+        "SELECT MIN(a.name), MIN(COALESCE(a.display_name, a.name)), SUM(d.seconds), SUM(d.bg_seconds)
          FROM daily_stats d JOIN apps a ON a.id = d.app_id AND a.ignored = 0
          WHERE d.date >= ?1 AND d.date <= ?2 {app_cond}
-         GROUP BY d.app_id ORDER BY 3 DESC LIMIT 300",
-        app_cond = if app_filter.is_some() { "AND a.name = ?3" } else { "" }
+         GROUP BY {fam} ORDER BY 3 DESC LIMIT 300",
+        fam = FAMILY_EXPR,
+        app_cond = if app_filter.is_some() {
+            "AND (CASE WHEN a.family = '' THEN a.name ELSE a.family END) = (SELECT CASE WHEN family = '' THEN name ELSE family END FROM apps WHERE name = ?3)"
+        } else {
+            ""
+        }
     );
     let mut stmt = conn.prepare(&apps_sql).map_err(|e| format!("查询区间应用失败: {e}"))?;
     let map_row = |r: &rusqlite::Row| {
@@ -2447,7 +2536,7 @@ pub fn range_report(
         "SELECT h.hour, a.name, SUM(h.seconds)
          FROM hourly_stats h JOIN apps a ON a.id = h.app_id AND a.ignored = 0
          WHERE h.date >= ?1 AND h.date <= ?2 {app_cond}
-         GROUP BY h.hour, h.app_id",
+         GROUP BY h.hour, CASE WHEN a.family = '' THEN a.name ELSE a.family END",
         app_cond = if app_filter.is_some() { "AND a.name = ?3" } else { "" }
     );
     let mut hstmt = conn.prepare(&hourly_sql).map_err(|e| format!("查询区间时段失败: {e}"))?;

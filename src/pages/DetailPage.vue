@@ -237,6 +237,40 @@ function updateCardVis() {
 }
 
 
+/** 归并：把当前应用并入另一个（只改归族标记，**不动统计数据**，可用"取消归并"随时还原） */
+const mergeTarget = ref("");
+async function doMerge() {
+  if (!info.value || !mergeTarget.value || infoBusy.value) return;
+  infoBusy.value = true;
+  try {
+    await invoke("app_merge_into", { from: info.value.name, target: mergeTarget.value });
+    mergeTarget.value = "";
+    await loadInfo();
+    await load(false);
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  } finally {
+    infoBusy.value = false;
+  }
+}
+async function undoFamily() {
+  if (!info.value || infoBusy.value) return;
+  infoBusy.value = true;
+  try {
+    await invoke("app_family_reset", { name: info.value.name });
+    await loadInfo();
+    await load(false);
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  } finally {
+    infoBusy.value = false;
+  }
+}
+/** 归并候选：当前范围的应用（排除自己） */
+const mergeCandidates = computed(() =>
+  filteredApps.value.filter((a) => a.name !== info.value?.name)
+);
+
 async function toggleTrackBg() {
   if (!info.value) return;
   infoBusy.value = true;
@@ -501,6 +535,13 @@ watch(navIntent, (n) => {
               <button class="ai-btn bg" :disabled="infoBusy" @click.stop="toggleTrackBg">
                 {{ info.trackBackground ? "停止后台跟踪" : "跟踪后台时长" }}
               </button>
+              <div class="ai-merge">
+                <select v-model="mergeTarget" class="ai-sel" :disabled="infoBusy" @change="doMerge">
+                  <option value="">并入其他应用…</option>
+                  <option v-for="c in mergeCandidates" :key="c.name" :value="c.name">{{ c.displayName }}</option>
+                </select>
+                <button class="ai-btn" :disabled="infoBusy" @click.stop="undoFamily">取消归并</button>
+              </div>
               <p v-if="info.ignored" class="ai-note">已忽略：不再计时、排行不显示（历史保留）</p>
               <p v-else-if="info.trackBackground" class="ai-note">后台跟踪中：切到别的应用也会累计这个应用的时间</p>
             </div>
@@ -519,6 +560,13 @@ watch(navIntent, (n) => {
           <button class="ai-btn bg" :disabled="infoBusy" @click="toggleTrackBg">
             {{ info.trackBackground ? "停止后台跟踪" : "跟踪后台时长" }}
           </button>
+          <div class="ai-merge">
+            <select v-model="mergeTarget" class="ai-sel" :disabled="infoBusy" @change="doMerge">
+              <option value="">并入其他应用…</option>
+              <option v-for="c in mergeCandidates" :key="c.name" :value="c.name">{{ c.displayName }}</option>
+            </select>
+            <button class="ai-btn" :disabled="infoBusy" @click.stop="undoFamily">取消归并</button>
+          </div>
           <p v-if="info.ignored" class="ai-note">已忽略：不再计时，排行里也不再出现（历史保留）</p>
           <p v-else-if="info.trackBackground" class="ai-note">后台跟踪中：切到别的应用也会累计这个应用的时间</p>
         </div>
@@ -1034,6 +1082,25 @@ watch(navIntent, (n) => {
 .ai-btn:hover {
   color: var(--danger);
   border-color: var(--danger);
+}
+
+/* 归并到其他应用（同族合并显示） */
+.ai-merge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 2px;
+  flex-wrap: wrap;
+}
+.ai-sel {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
 }
 
 .ai-note {
