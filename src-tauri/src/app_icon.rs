@@ -43,10 +43,10 @@ fn wide(s: &str) -> Vec<u16> {
     std::ffi::OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
 
-/// 读 exe 版本资源的 FileDescription（任务栏悬停名，Tai 式"花笺"友好名的来源）。
+/// 读 exe 版本资源的指定字符串字段（FileDescription / ProductName / ...）。
 /// 读不到 / 没有该资源返回 None。
 #[cfg(windows)]
-pub fn file_description(path: &str) -> Option<String> {
+fn version_string(path: &str, key: &str) -> Option<String> {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::{
         GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
@@ -75,7 +75,7 @@ pub fn file_description(path: &str) -> Option<String> {
             return None;
         }
         let (lang, codepage) = (*ptr, *ptr.add(1));
-        let q = format!("\\StringFileInfo\\{lang:04x}{codepage:04x}\\FileDescription");
+        let q = format!("\\StringFileInfo\\{lang:04x}{codepage:04x}\\{key}");
         if !VerQueryValueW(
             buf.as_ptr() as *const _,
             PCWSTR(wide(&q).as_ptr()),
@@ -96,6 +96,41 @@ pub fn file_description(path: &str) -> Option<String> {
             Some(t.to_string())
         }
     }
+}
+
+/// 任务栏悬停名 / Tai 式"花笺"友好名的来源
+#[cfg(windows)]
+pub fn file_description(path: &str) -> Option<String> {
+    version_string(path, "FileDescription")
+}
+
+/// exe 产品名（构建期由打包配置写入，**不含版本号**）
+#[cfg(windows)]
+pub fn product_name(path: &str) -> Option<String> {
+    version_string(path, "ProductName")
+}
+
+/// 是否为"拾刻自身"：只看 exe 版本信息里的产品名/描述，**不看文件名**。
+/// 文件名会因版本号（便携版发布时改名以区分下载）或用户重命名而变化，产品名不会——
+/// 这是"记录自身被拆成多条、每个版本一条"问题的根治依据。
+#[cfg(windows)]
+pub fn is_self_exe(path: &str) -> bool {
+    let hit = |s: &str| {
+        let l = s.to_lowercase();
+        l.contains("tallymoment") || l.contains("拾刻")
+    };
+    product_name(path).as_deref().map(hit).unwrap_or(false)
+        || file_description(path).as_deref().map(hit).unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+pub fn product_name(_path: &str) -> Option<String> {
+    None
+}
+
+#[cfg(not(windows))]
+pub fn is_self_exe(_path: &str) -> bool {
+    false
 }
 
 #[cfg(not(windows))]

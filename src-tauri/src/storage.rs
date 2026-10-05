@@ -365,7 +365,105 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
     ] {
         let _ = conn.execute(sql, []);
     }
+    // 一次性迁移：合并历史上因"exe 文件名带版本号"被拆开的自身条目（幂等；执行前自动备份数据库）
+    merge_self_entries(&conn, path);
     Ok(conn)
+}
+
+/// 历史合并：把"拾刻自身"的多条应用记录归并为一条。
+/// 起因：旧版用 exe 文件名当身份，而便携版发布时会带版本号改名
+/// （TallyMoment_0.3.0_x64-portable.exe / 0.3.1 / 安装版 / 开发版…）→ 统计被拆成多条"拾刻"。
+/// 现在身份改用 exe 产品名（见 app_icon::is_self_exe），此处把**已经拆开的历史**并回来。
+///
+/// - 幂等：settings 标记 `migration.self_merge`，执行过就不再跑
+/// - 安全：执行前先 WAL checkpoint 并把数据库文件备份为 `<db>.bak-selfmerge-<时间戳>`
+fn merge_self_entries(conn: &Connection, db_path: &std::path::Path) {
+    const MARK: &str = "migration.self_merge";
+    if get_setting(conn, MARK).is_some() {
+        return;
+    }
+    // 收集应用条目，按名字判断哪些是"自身"（去扩展名后以 tallymoment / 拾刻 开头）
+    let rows: Vec<(i64, String)> = conn
+        .prepare("SELECT id, name FROM apps")
+        .ok()
+        .and_then(|mut st| {
+            st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                .ok()
+                .map(|it| it.filter_map(|x| x.ok()).collect())
+        })
+        .unwrap_or_default();
+    let is_self_name = |n: &str| {
+        let l = n.trim().to_lowercase();
+        let stem = l.strip_suffix(".exe").unwrap_or(&l);
+        stem.starts_with("tallymoment") || stem.starts_with("拾刻")
+    };
+    let mut selfs: Vec<(i64, String)> = rows.into_iter().filter(|(_, n)| is_self_name(n)).collect();
+    if selfs.len() < 2 {
+        let _ = set_setting(conn, MARK, "1");
+        return;
+    }
+    // 备份（先把 WAL 落盘，确保备份文件完整）
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(FULL);");
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let bak = db_path.with_extension(format!("db.bak-selfmerge-{ts}"));
+    if std::fs::copy(db_path, &bak).is_ok() {
+        eprintln!("[migrate] 自身条目合并前已备份数据库: {}", bak.display());
+    }
+    // 主条目：优先已经是归一 key 的那条，否则取 id 最小者
+    selfs.sort_by_key(|(id, _)| *id);
+    let main = selfs
+        .iter()
+        .find(|(_, n)| n.eq_ignore_ascii_case("tallymoment.exe"))
+        .cloned()
+        .unwrap_or_else(|| selfs[0].clone());
+    let others: Vec<(i64, String)> = selfs
+        .iter()
+        .filter(|(id, _)| *id != main.0)
+        .cloned()
+        .collect();
+    // 主条目改名为归一 key + 固定展示名（不带版本号）
+    let _ = conn.execute(
+        "UPDATE apps SET name = 'tallymoment.exe', display_name = '拾刻 TallyMoment' WHERE id = ?1",
+        [main.0],
+    );
+    let mut moved = 0usize;
+    for (oid, _) in &others {
+        // segments：无唯一约束，直接改指
+        if let Ok(n) = conn.execute(
+            "UPDATE segments SET app_id = ?1 WHERE app_id = ?2",
+            rusqlite::params![main.0, oid],
+        ) {
+            moved += n;
+        }
+        // hourly_stats / daily_stats：按 app_id 关联且带 UNIQUE(date,hour,app_id)，
+        // 必须先"累加合并"再删原行，否则撞唯一约束；且外键约束要求先清干净才能删 apps
+        let _ = conn.execute(
+            "INSERT INTO hourly_stats(date, hour, app_id, seconds, bg_seconds)
+             SELECT date, hour, ?1, seconds, bg_seconds FROM hourly_stats WHERE app_id = ?2
+             ON CONFLICT(date, hour, app_id) DO UPDATE SET
+               seconds = seconds + excluded.seconds,
+               bg_seconds = bg_seconds + excluded.bg_seconds",
+            rusqlite::params![main.0, oid],
+        );
+        let _ = conn.execute("DELETE FROM hourly_stats WHERE app_id = ?1", [oid]);
+        let _ = conn.execute(
+            "INSERT INTO daily_stats(date, app_id, seconds, bg_seconds)
+             SELECT date, ?1, seconds, bg_seconds FROM daily_stats WHERE app_id = ?2
+             ON CONFLICT(date, app_id) DO UPDATE SET
+               seconds = seconds + excluded.seconds,
+               bg_seconds = bg_seconds + excluded.bg_seconds",
+            rusqlite::params![main.0, oid],
+        );
+        let _ = conn.execute("DELETE FROM daily_stats WHERE app_id = ?1", [oid]);
+        let _ = conn.execute("DELETE FROM apps WHERE id = ?1", [oid]);
+    }
+    let _ = set_setting(conn, MARK, "1");
+    eprintln!(
+        "[migrate] 已合并 {} 条自身应用记录（归并 {} 段前台记录）→ 统一为 {}",
+        others.len(),
+        moved,
+        main.1
+    );
 }
 
 /// 按 name 找应用，不存在则创建，返回 app_id
@@ -4394,4 +4492,107 @@ mod tai_export_tests {
             assert_eq!(left, 0, "{t} 应为空");
         }
     }
+
+    #[test]
+    fn merge_self_entries_combines_version_variants() {
+        // 模拟：便携版带版本号改名 + 安装版 + 开发版 → 历史被拆成多条"拾刻"
+        let dir = std::env::temp_dir().join(format!("tallymoment-selfmerge-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("selfmerge.db");
+        let _ = std::fs::remove_file(&p);
+        let conn = super::open(&p).unwrap();
+        for n in [
+            "tallymoment.exe",
+            "TallyMoment_0.3.0_x64-portable.exe",
+            "tallymoment_0.3.1_x64-portable.exe",
+        ] {
+            conn.execute("INSERT INTO apps(name, exe_path) VALUES(?1, '')", [n])
+                .unwrap();
+        }
+        conn.execute("INSERT INTO apps(name, exe_path) VALUES('msedge.exe', '')", [])
+            .unwrap();
+        // 每个自身变体一段前台记录 + 同一时间槽的小时统计（同一 date/hour → 合并时须累加）
+        for n in [
+            "tallymoment.exe",
+            "TallyMoment_0.3.0_x64-portable.exe",
+            "tallymoment_0.3.1_x64-portable.exe",
+            "msedge.exe",
+        ] {
+            let id: i64 = conn
+                .query_row("SELECT id FROM apps WHERE name = ?1", [n], |r| r.get(0))
+                .unwrap();
+            conn.execute(
+                "INSERT INTO segments(app_id, start_ts, end_ts, title) VALUES(?1, 0, 60, '')",
+                [id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO hourly_stats(date, hour, app_id, seconds, bg_seconds)
+                 VALUES('2026-10-05', 10, ?1, 60, 0)",
+                [id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO daily_stats(date, app_id, seconds, bg_seconds)
+                 VALUES('2026-10-05', ?1, 60, 0)",
+                [id],
+            )
+            .unwrap();
+        }
+        // 清掉标记后执行合并（open 时无自身条目已写过标记）
+        conn.execute("DELETE FROM settings WHERE key = 'migration.self_merge'", [])
+            .unwrap();
+        super::merge_self_entries(&conn, &p);
+
+        // 自身只剩一条，且是归一 key
+        let self_cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM apps WHERE name LIKE 'tallymoment%' OR name LIKE '拾刻%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(self_cnt, 1, "自身条目应合并为一条");
+        let main_id: i64 = conn
+            .query_row("SELECT id FROM apps WHERE name = 'tallymoment.exe'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        // 三段自身记录都归并到主条目
+        let seg_cnt: i64 = conn
+            .query_row("SELECT COUNT(*) FROM segments WHERE app_id = ?1", [main_id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(seg_cnt, 3, "三段自身前台记录应归并到同一条");
+        // 非自身应用不受影响
+        let edge_cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM segments s JOIN apps a ON a.id = s.app_id WHERE a.name = 'msedge.exe'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(edge_cnt, 1);
+        // 统计表：同一时间槽的自身记录应累加（3 × 60 = 180 秒），不产生重复行
+        let hourly: (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(seconds), 0) FROM hourly_stats WHERE app_id = ?1",
+                [main_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(hourly, (1, 180), "小时统计应合并累加为一行 180 秒");
+        let daily: (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(seconds), 0) FROM daily_stats WHERE app_id = ?1",
+                [main_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(daily, (1, 180), "日统计应合并累加为一行 180 秒");
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

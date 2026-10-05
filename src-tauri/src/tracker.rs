@@ -86,6 +86,41 @@ fn with_db<R>(app: &AppHandle, f: impl FnOnce(&Connection) -> R) -> Option<R> {
     Some(f(&guard))
 }
 
+/// 自身归一后的固定身份：**无论 exe 文件名/版本号怎么变**（便携版发布改名、安装版、开发版），
+/// 拾刻自己永远记为同一条应用，统计不会被拆成"每个版本一条"。
+const SELF_APP_KEY: &str = "tallymoment.exe";
+const SELF_APP_NAME: &str = "拾刻 TallyMoment";
+
+/// is_self_exe 的进程内缓存（exe 路径 → 是否自身）：foreground() 每秒都会调用，
+/// 没有缓存会变成每秒读一次 exe 版本资源（文件 IO）
+static SELF_CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, bool>>> =
+    std::sync::Mutex::new(None);
+
+fn cached_is_self(exe: &str) -> bool {
+    let key = exe.to_lowercase();
+    if let Ok(g) = SELF_CACHE.lock() {
+        if let Some(m) = g.as_ref() {
+            if let Some(v) = m.get(&key) {
+                return *v;
+            }
+        }
+    }
+    let v = crate::app_icon::is_self_exe(exe);
+    if let Ok(mut g) = SELF_CACHE.lock() {
+        g.get_or_insert_with(std::collections::HashMap::new)
+            .insert(key, v);
+    }
+    v
+}
+
+/// 自身判定：**exe 完整路径相同**（最准）或 **exe 版本信息的产品名标记**（多副本/被改名时兜底）。
+/// 为什么不用文件名：文件名会随版本号变化（便携版发布时改名区分下载），
+/// 用文件名正是"每个版本被记成不同应用"的根源。
+fn is_self_process(self_path: Option<&str>, exe: &str) -> bool {
+    let by_path = self_path.map(|p| p.eq_ignore_ascii_case(exe)).unwrap_or(false);
+    by_path || cached_is_self(exe)
+}
+
 /// 解析前台窗口 -> (进程标识, 展示名, exe 路径, 窗口标题)
 fn foreground() -> Option<(String, String, String, String)> {
     let win = match get_active_window() {
@@ -104,15 +139,19 @@ fn foreground() -> Option<(String, String, String, String)> {
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| app_key.clone());
     let title = win.title.chars().take(200).collect::<String>();
+    // 自身归一：不看文件名，看 exe 产品名（见 SELF_APP_KEY 注释）
+    if cached_is_self(&exe) {
+        return Some((SELF_APP_KEY.to_string(), SELF_APP_NAME.to_string(), exe, title));
+    }
     Some((app_key, display, exe, title))
 }
 
 /// 追踪主循环：每秒一次，独立线程
 pub fn spawn(app: AppHandle) {
-    // 自排除：不记录 tallymoment 自己
-    let self_key = std::env::current_exe()
+    // 自排除用"自身 exe 完整路径"判定（比文件名可靠：改名/换版本都不影响）
+    let self_path = std::env::current_exe()
         .ok()
-        .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_lowercase()));
+        .map(|p| p.to_string_lossy().to_lowercase());
     // 切换防抖：新应用需连续 2 秒在前台才确认切换（过滤 Alt-Tab 掠过的瞬态）
     let mut pending: Option<(String, String, String, String, i64)> = None;
 
@@ -174,7 +213,8 @@ pub fn spawn(app: AppHandle) {
             continue;
         };
 
-        if self_key.as_ref() == Some(&app_key) && !shared.track_self.load(Ordering::Relaxed) {
+        if is_self_process(self_path.as_deref(), &exe) && !shared.track_self.load(Ordering::Relaxed)
+        {
             // 前台是自己且未开"记录自身"：不计时（弹提醒卡会把拾刻置前台，计进去会污染统计）
             if let Ok(mut guard) = shared.session.lock() {
                 if let Some(s) = guard.take() {
