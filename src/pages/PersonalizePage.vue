@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { primaryMonitor } from "@tauri-apps/api/window";
+import { bgImgStyle } from "../lib/bgStyle";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { NSwitch } from "naive-ui";
 import Icon from "../components/Icon.vue";
@@ -312,6 +313,17 @@ function feTestShow() {
   feSave();
   invoke("reminder_bg_test_show", { path: fe.path }).catch((e) => (err.value = String(e).replace(/^.*Error: /, "")));
 }
+
+/** 编辑预览样式：与真实全屏提醒走同一函数（bgImgStyle）——口径唯一 */
+const feStyle = computed(() =>
+  fullEdit.value
+    ? bgImgStyle({
+        fit: fullEdit.value.fit,
+        align: `${fullEdit.value.posX}% ${fullEdit.value.posY}%`,
+        zoom: fullEdit.value.zoom,
+      })
+    : {}
+);
 
 function feReset() {
   if (!fullEdit.value) return;
@@ -1128,11 +1140,7 @@ onMounted(async () => {
           class="fe-img"
           :src="`data:${fullEdit.mime};base64,${fullEdit.data}`"
           alt=""
-          :style="{
-            objectFit: fullEdit.fit === 'contain' ? 'contain' : 'cover',
-            objectPosition: `${fullEdit.posX}% ${fullEdit.posY}%`,
-            transform: `scale(${fullEdit.zoom / 100})`,
-          }"
+          :style="feStyle"
           draggable="false"
           @mousedown="feDown"
           @wheel.prevent="feWheel"

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { bgImgStyle, bgScrimOpacity } from "../lib/bgStyle";
 
 /** 全屏休息提醒（提醒方式 = 全屏时由 reminder_full 窗口渲染）
  *  设计：分层柔光 + 呼吸动效 + 大号提示语 + 两个动作按钮 */
@@ -22,6 +23,12 @@ const bg = ref<{ url: string; fit: string; align: string; zoom: number; scrim: n
 const leaving = ref(false);
 let unlisten: UnlistenFn | undefined;
 let autoClose: number | undefined;
+
+/** 渲染样式：与编辑器同一函数（唯一口径） */
+const bgStyle = computed(() => (bg.value ? bgImgStyle(bg.value) : {}));
+const scrimStyle = computed(() => ({
+  opacity: bg.value ? bgScrimOpacity(bg.value.scrim) : "1",
+}));
 
 async function refreshBg() {
   try {
@@ -90,18 +97,10 @@ async function dismiss(action: string) {
 
 <template>
   <div class="full" :class="{ leaving, hasbg: !!bg }">
-    <img
-      v-if="bg"
-      class="bgimg"
-      :src="bg.url"
-      alt=""
-      :style="{
-        objectFit: bg.fit === 'contain' ? 'contain' : 'cover',
-        objectPosition: bg.align,
-        transform: `scale(${bg.zoom / 100})`,
-      }"
-    />
-    <div v-if="bg" class="scrim" :style="{ opacity: String(bg.scrim / 100) }"></div>
+    <div v-if="bg" class="bgbox">
+      <img class="bgimg" :src="bg.url" alt="" :style="bgStyle" />
+    </div>
+    <div v-if="bg" class="scrim" :style="scrimStyle"></div>
     <div class="glow g1"></div>
     <div class="glow g2"></div>
     <div class="glow g3"></div>
@@ -159,11 +158,22 @@ async function dismiss(action: string) {
 }
 
 /* 自定义背景图 + 暗色压层（保证文字可读） */
+/* 背景裁切容器 + 铺满图片。
+   ⚠️ 关键修复（2026-10-05）：<img> 必须有显式 width/height 才会铺满容器；
+   只写 inset:0 时 img 会按"原始像素尺寸"渲染（replaced element 的尺寸规则），
+   结果原图比窗口大→只看到左上角（观感=位置偏移/缩放不对）、比窗口小→右下露底色（黑区）。
+   编辑器预览一直有宽高所以正常，实机没有 → 这就是"预览与实机不一致"的根源。 */
+.bgbox {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
 .bgimg {
   position: absolute;
   inset: 0;
-  background-size: cover;
-  background-position: center;
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .scrim {
