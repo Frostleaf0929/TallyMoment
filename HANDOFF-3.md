@@ -89,6 +89,7 @@
 15. **CSS 前缀绝不手写双份**：Vite 8（Rolldown）压缩会做前缀去重，**"标准 + `-webkit-`"双写会丢标准属性、只留 Safari 前缀** → WebView2 不认 → 效果（毛玻璃等）在 release 里整体失效，而 **dev 正常**（不压缩）。**只写标准属性**，让构建器自动补前缀。排查法：`dist/assets/*.css` 里标准属性数量 vs 源码数量（`main-*.css` 里 `(?<!-)backdrop-filter` 计数）
 16. **dev 与 release 的 localStorage 按 origin 隔离**：dev=`http://localhost:1420`、release=`http://tauri.localhost`，**外观设置互不相通**（同一 WebView 数据目录但键空间不同）——"dev 调好的外观在 release 不生效"先查这里；但**若滑杆调了完全无视觉变化，则是渲染链路问题（见第 15 条）而非设置问题**
 17. **发布检查清单（打包前逐项过）**：① 版本号四处同步；② 清 `target/release/build/`（若报 plugin permissions 路径错）；③ `pnpm build` 后抽查 `dist` 关键属性数量（前缀类问题只在此暴露）；④ 用 `out=$(cmd 2>&1); rc=$?` 判成败；⑤ 资产 sha256 与本地归档一致
+18. **身份绝不用 exe 文件名**：应用身份/自身识别若依赖文件名，会随版本号（发布时改名区分下载）或用户重命名而**分裂**——「记录自身」曾把一个软件记成 3 条（tallymoment.exe / tallymoment_0.2.0_x64-setup.exe / tallymoment_0.3.0_x64-portable.exe）。稳定标识用 exe 版本信息的 `ProductName`/`FileDescription`（`app_icon::product_name` / `is_self_exe`）；自身判定再加「exe 完整路径相同」最可靠。历史已分裂的条目由 `storage::merge_self_entries` 一次性幂等合并（**执行前自动备份** `<db>.bak-selfmerge-<ts>`）
 
 ## 六、安全红线（公开仓库）
 
