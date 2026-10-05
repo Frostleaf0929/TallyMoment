@@ -356,23 +356,32 @@ async function addTask() {
   }
 }
 
-/** 今日待办卡的高度以月历卡为准：量月历卡边框盒高度，多出的待办在卡内滚动 */
+/** 今日待办卡的高度以月历卡为准：直接把卡高设为月历卡实测高度（窄屏堆叠时恢复自适应） */
 const calcardEl = ref<HTMLElement | null>(null);
 const calcardH = ref(0);
+const isNarrow = ref(false);
 let calRO: ResizeObserver | null = null;
 const todayCardStyle = computed(() =>
-  calcardH.value > 0 ? { maxHeight: `${Math.round(calcardH.value)}px` } : {}
+  calcardH.value > 0 && !isNarrow.value ? { height: `${Math.round(calcardH.value)}px` } : {}
 );
+function updateNarrow() {
+  isNarrow.value = window.innerWidth <= 900;
+}
 onMounted(async () => {
   await load();
   void loadNoteSummary();
   void loadHabit();
+  updateNarrow();
+  window.addEventListener("resize", updateNarrow);
   calRO = new ResizeObserver(() => {
     calcardH.value = calcardEl.value?.getBoundingClientRect().height ?? 0;
   });
   if (calcardEl.value) calRO.observe(calcardEl.value);
 });
-onUnmounted(() => calRO?.disconnect());
+onUnmounted(() => {
+  calRO?.disconnect();
+  window.removeEventListener("resize", updateNarrow);
+});
 const rateLabel = (v: number) => (v < 0 ? "—" : `${v}%`);
 const bucketLabels = ["<15分", "15~60分", "1~4时", "4~24时", "≥1天"];
 const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));

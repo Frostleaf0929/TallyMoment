@@ -3054,8 +3054,8 @@ pub struct BgImgCfg {
 
 impl Default for BgImgCfg {
     fn default() -> Self {
-        // 100 = 原始渐变浓度（与未加可调蒙版前的观感一致）
-        Self { fit: "cover".into(), align: "center".into(), scrim: 100 }
+        // 100 = 原始渐变浓度（与未加可调蒙版前的观感一致）；align 用 "X% Y%" 百分比定位
+        Self { fit: "cover".into(), align: "50% 50%".into(), scrim: 100 }
     }
 }
 
@@ -3067,18 +3067,42 @@ fn bg_imgcfg_all(conn: &Connection) -> std::collections::HashMap<String, BgImgCf
         .unwrap_or_default()
 }
 
+/// 旧版九宫格关键词 → 百分比（迁移用）
+fn align_keyword_to_pct(a: &str) -> Option<String> {
+    let m: &[(&str, &str)] = &[
+        ("center", "50% 50%"),
+        ("top", "50% 0%"),
+        ("bottom", "50% 100%"),
+        ("left", "0% 50%"),
+        ("right", "100% 50%"),
+        ("left top", "0% 0%"),
+        ("right top", "100% 0%"),
+        ("left bottom", "0% 100%"),
+        ("right bottom", "100% 100%"),
+    ];
+    m.iter().find(|(k, _)| *k == a).map(|(_, v)| v.to_string())
+}
+
+fn valid_align(a: &str) -> bool {
+    let parts: Vec<&str> = a.split(' ').collect();
+    parts.len() == 2
+        && parts.iter().all(|p| {
+            p.ends_with('%')
+                && p[..p.len() - 1]
+                    .parse::<i64>()
+                    .map(|x| (0..=100).contains(&x))
+                    .unwrap_or(false)
+        })
+}
+
 fn bg_img_cfg_of(conn: &Connection, path: &str) -> BgImgCfg {
     let all = bg_imgcfg_all(conn);
     let mut cfg = all.get(path).cloned().unwrap_or_default();
     if !["cover", "contain"].contains(&cfg.fit.as_str()) {
         cfg.fit = "cover".into();
     }
-    let ok_align = [
-        "center", "top", "bottom", "left", "right", "left top", "right top",
-        "left bottom", "right bottom",
-    ];
-    if !ok_align.contains(&cfg.align.as_str()) {
-        cfg.align = "center".into();
+    if !valid_align(&cfg.align) {
+        cfg.align = align_keyword_to_pct(&cfg.align).unwrap_or_else(|| "50% 50%".into());
     }
     cfg.scrim = cfg.scrim.clamp(0, 100);
     cfg
@@ -3090,6 +3114,9 @@ pub fn reminder_bg_imgcfg_set(conn: &Connection, path: &str, cfg: &BgImgCfg) -> 
     let mut c = cfg.clone();
     if !["cover", "contain"].contains(&c.fit.as_str()) {
         return Err("填充方式非法".into());
+    }
+    if !valid_align(&c.align) {
+        return Err("位置非法".into());
     }
     c.scrim = c.scrim.clamp(0, 100);
     all.insert(path.to_string(), c);
