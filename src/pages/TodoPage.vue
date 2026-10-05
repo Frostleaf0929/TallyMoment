@@ -356,14 +356,28 @@ async function addTask() {
   }
 }
 
-/** 今日待办卡的高度以月历卡为准：直接把卡高设为月历卡实测高度（窄屏堆叠时恢复自适应） */
-const calcardEl = ref<HTMLElement | null>(null);
-const calcardH = ref(0);
+/** 今日待办卡高度以月历卡为准。
+ *  关键：量的是月历卡的"内容层"（calinner）——内容层高度永远等于自身内容，
+ *  不会被 flex 拉伸污染（此前直接量卡片，量到的是被今日待办撑高后的值，死循环）。
+ *  行高设到 .toprow 上，两张卡各自 stretch 到同一高度；窄屏堆叠时恢复自适应。 */
+const calInnerEl = ref<HTMLElement | null>(null);
+const calH = ref(0);
 const isNarrow = ref(false);
 let calRO: ResizeObserver | null = null;
-const todayCardStyle = computed(() =>
-  calcardH.value > 0 && !isNarrow.value ? { height: `${Math.round(calcardH.value)}px` } : {}
+const toprowStyle = computed(() =>
+  calH.value > 0 && !isNarrow.value ? { height: `${Math.round(calH.value)}px` } : {}
 );
+function measureCal() {
+  const el = calInnerEl.value;
+  if (!el) return;
+  const card = el.parentElement;
+  if (!card) return;
+  const cs = getComputedStyle(card);
+  const extra =
+    parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) +
+    parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  calH.value = el.getBoundingClientRect().height + extra;
+}
 function updateNarrow() {
   isNarrow.value = window.innerWidth <= 900;
 }
@@ -373,10 +387,8 @@ onMounted(async () => {
   void loadHabit();
   updateNarrow();
   window.addEventListener("resize", updateNarrow);
-  calRO = new ResizeObserver(() => {
-    calcardH.value = calcardEl.value?.getBoundingClientRect().height ?? 0;
-  });
-  if (calcardEl.value) calRO.observe(calcardEl.value);
+  calRO = new ResizeObserver(measureCal);
+  if (calInnerEl.value) calRO.observe(calInnerEl.value);
 });
 onUnmounted(() => {
   calRO?.disconnect();
@@ -399,18 +411,20 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     <p v-if="msg" class="okline">{{ msg }}</p>
 
     <!-- 顶部：左月历 + 右今日待办（约 3:2，等高对齐） -->
-    <section class="toprow">
-      <div ref="calcardEl" class="glass-card calcard">
-        <h2>日程 · 月历</h2>
-        <CalendarHeat
-          compact
-          :selected="new Date(pickedDay).toISOString().slice(0, 10)"
-          @pick="onPickDay"
-          @locate="onLocate"
-        />
-        <p class="hint">点某一天进入那天的详情；颜色越深表示那天用得越久</p>
+    <section class="toprow" :style="toprowStyle">
+      <div class="glass-card calcard">
+        <div ref="calInnerEl" class="calinner">
+          <h2>日程 · 月历</h2>
+          <CalendarHeat
+            compact
+            :selected="new Date(pickedDay).toISOString().slice(0, 10)"
+            @pick="onPickDay"
+            @locate="onLocate"
+          />
+          <p class="hint">点某一天进入那天的详情；颜色越深表示那天用得越久</p>
+        </div>
       </div>
-      <div class="glass-card todaycard" :style="todayCardStyle">
+      <div class="glass-card todaycard">
         <div class="modhead">
           <h2>今日待办</h2>
           <span class="cnt">{{ todayTasks.length }} 项</span>
@@ -688,25 +702,24 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 }
 
 /* 顶部两列：月历 3 : 今日待办 2，等高对齐
-   今日待办卡的高度由月历卡决定（脚本量月历卡实际高度后设为今日卡的 max-height），
-   多出的待办在卡内滚动，不再把整行撑高 */
+   行高 = 月历卡内容层的实测高度（脚本设到 .toprow 上，绕开 flex 拉伸的死循环），
+   两卡各自拉伸到行高；今日待办多出的部分在卡内滚动 */
 .toprow {
   display: flex;
   gap: 14px;
   align-items: stretch;
 }
 
-/* 月历 3 : 今日待办 2，两卡等高 */
+/* 月历 3 : 今日待办 2 */
 .calcard {
   flex: 3 1 0;
   min-width: 0;
-  /* 关键：月历卡不参与拉伸，高度=自身内容；脚本量到的才是"月历本来的高度" */
-  align-self: flex-start;
 }
 
 .todaycard {
   flex: 2 1 0;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -727,6 +740,11 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 .cnt {
   font-size: 11px;
   color: var(--text-faint);
+}
+
+.calinner {
+  display: flex;
+  flex-direction: column;
 }
 
 .todaylist {

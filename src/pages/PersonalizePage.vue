@@ -212,12 +212,6 @@ const bgOverview = ref<{ groups: { name: string; files: string[] }[]; active: nu
 });
 const bgThumbs = ref<{ path: string; mime: string; data: string; fit: string; align: string; zoom: number; scrim: number }[]>([]);
 const renameValue = ref("");
-/** 点选中的缩略图下标（-1 = 未选中）；编辑行改这张图的填充/位置/蒙版 */
-const selThumb = ref(-1);
-const editFit = ref("cover");
-const editAlign = ref("center");
-const editScrim = ref(100);
-
 /** 双击缩略图进入全图编辑：全屏预览里拖动调位置、实时看蒙版 */
 const fullEdit = ref<null | { path: string; mime: string; data: string; fit: string; posX: number; posY: number; zoom: number; scrim: number }>(null);
 const feEl = ref<HTMLElement | null>(null);
@@ -244,14 +238,17 @@ function openFullEdit(t: { path: string; mime: string; data: string; fit: string
   fullEdit.value = { path: t.path, mime: t.mime, data: t.data, fit: t.fit, posX: x, posY: y, zoom: t.zoom, scrim: t.scrim };
 }
 
-function feDown(e: PointerEvent) {
+function feDown(e: MouseEvent) {
   if (e.button !== 0) return; // 只认左键：按住才拖
-  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  e.preventDefault();
   feDragging = true;
+  // window 级监听：拖出预览区也照常跟踪
+  window.addEventListener("mousemove", feMove);
+  window.addEventListener("mouseup", feUp);
   feMove(e);
 }
 
-function feMove(e: PointerEvent) {
+function feMove(e: MouseEvent) {
   if (!feDragging) return; // 松开/未按下：图不跟手
   const el = feEl.value;
   if (!el || !fullEdit.value) return;
@@ -261,7 +258,10 @@ function feMove(e: PointerEvent) {
 }
 
 function feUp() {
+  if (!feDragging) return;
   feDragging = false;
+  window.removeEventListener("mousemove", feMove);
+  window.removeEventListener("mouseup", feUp);
   feSave();
 }
 
@@ -310,6 +310,7 @@ function closeFullEdit(save: boolean) {
       path: fe.path,
       fit: fe.fit,
       align: `${fe.posX}% ${fe.posY}%`,
+      zoom: fe.zoom,
       scrim: fe.scrim,
     })
       .then(() => loadReminderBg())
@@ -317,42 +318,11 @@ function closeFullEdit(save: boolean) {
   }
 }
 
-function selectThumb(i: number) {
-  selThumb.value = selThumb.value === i ? -1 : i;
-  if (selThumb.value >= 0 && bgThumbs.value[selThumb.value]) {
-    const t = bgThumbs.value[selThumb.value];
-    editFit.value = t.fit;
-    editAlign.value = t.align;
-    editScrim.value = t.scrim;
-  }
-}
-
-async function saveImgCfg() {
-  const t = bgThumbs.value[selThumb.value];
-  if (!t) return;
-  try {
-    await invoke("reminder_bg_imgcfg_set", {
-      path: t.path,
-      fit: editFit.value,
-      align: editAlign.value,
-      scrim: editScrim.value,
-    });
-  } catch (e) {
-    err.value = String(e).replace(/^.*Error: /, "");
-  }
-}
-
-async function bumpScrim(delta: number) {
-  editScrim.value = Math.min(100, Math.max(0, editScrim.value + delta));
-  await saveImgCfg();
-}
-
 async function loadReminderBg() {
   try {
     bgOverview.value = await invoke("reminder_bg_overview");
     bgThumbs.value = await invoke<{ path: string; mime: string; data: string; fit: string; align: string; zoom: number; scrim: number }[]>("reminder_bg_thumbs");
     reminderBgSet.value = bgThumbs.value.length > 0;
-    if (selThumb.value >= bgThumbs.value.length) selThumb.value = -1;
   } catch {
     bgThumbs.value = [];
   }
@@ -438,7 +408,7 @@ const islandSnap = ref(false);
 const islandSnapWake = ref("hover");
 const islandClickThrough = ref(false);
 const islandAlwaysTop = ref(true);
-const islandCardOpen = ref(true);
+const islandCardOpen = ref(false); // 默认折叠：卡片太长，收起后只留标题行
 const islandAccentMode = ref("endfield");
 const POS_DEFS: Record<string, string> = {
   center: "顶部居中",
@@ -1047,9 +1017,8 @@ onMounted(async () => {
           v-for="(t, i) in bgThumbs"
           :key="t.path"
           class="bgthumb"
-          :class="{ cur: i === 0, sel: i === selThumb }"
+          :class="{ cur: i === 0 }"
           :title="i === 0 ? '当前使用 · 双击进入全图编辑' : '双击进入全图编辑'"
-          @click="selectThumb(i)"
           @dblclick="openFullEdit(t)"
         >
           <img :src="`data:${t.mime};base64,${t.data}`" alt="" />
@@ -1059,32 +1028,7 @@ onMounted(async () => {
       </div>
       <p v-if="bgThumbs.length" class="rd more">双击缩略图进入全图编辑：拖动调整位置、实时预览蒙版浓淡。</p>
       <p v-else class="rd more">当前组还没有图片，点上面「选择图片」添加。</p>
-      <div v-if="selThumb >= 0 && bgThumbs[selThumb]" class="bgedit">
-        <div class="bgedit-row">
-          <span class="l">填充</span>
-          <select v-model="editFit" class="esel2" @change="saveImgCfg">
-            <option value="cover">铺满裁剪</option>
-            <option value="contain">完整显示</option>
-          </select>
-          <span class="l">位置</span>
-          <select v-model="editAlign" class="esel2" @change="saveImgCfg">
-            <option value="center">居中</option>
-            <option value="top">顶部</option>
-            <option value="bottom">底部</option>
-            <option value="left">左侧</option>
-            <option value="right">右侧</option>
-            <option value="left top">左上</option>
-            <option value="right top">右上</option>
-            <option value="left bottom">左下</option>
-            <option value="right bottom">右下</option>
-          </select>
-          <span class="l">蒙版</span>
-          <button class="mini" @click="bumpScrim(-10)">−</button>
-          <span class="sval">{{ editScrim }} %</span>
-          <button class="mini" @click="bumpScrim(10)">+</button>
-        </div>
-        <p class="rd more">改动即刻保存到这张图；蒙版 = 提醒文字背后的暗色压层浓度。</p>
-      </div>
+
       <div class="row">
         <div class="rlabel">
           <p class="rt">轮换方式</p>
@@ -1145,9 +1089,7 @@ onMounted(async () => {
           transform: `scale(${fullEdit.zoom / 100})`,
         }"
         draggable="false"
-        @pointerdown="feDown"
-        @pointermove="feMove"
-        @pointerup="feUp"
+        @mousedown="feDown"
         @wheel.prevent="feWheel"
       />
       <div class="fe-scrim" :style="{ opacity: String(fullEdit.scrim / 100) }"></div>
