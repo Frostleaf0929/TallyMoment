@@ -21,6 +21,7 @@
         "decorations": false,
         "resizable": true,
         "transparent": true,
+        "visible": false,
         "windowEffects": {
           "effects": [
             "acrylic",

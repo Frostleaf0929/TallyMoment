@@ -48,6 +48,8 @@ pub struct Task {
     pub start_ts: Option<i64>,
     /// 是否有今天是它的一次"实例"（固定事项列表算出来的，不落库）
     pub is_template: bool,
+    /// 重复任务已停止：不再生成以后的实例，历史实例与完成记录全部保留
+    pub repeat_stopped: bool,
     /// 到期提醒方式：''=默认卡片 / card / fullscreen / none
     pub remind_style: String,
     /// 进行中间隔提醒分钟数（0 = 不提醒）
@@ -71,6 +73,9 @@ pub struct ReminderRule {
     pub enabled: bool,
     /// card | fullscreen
     pub style: String,
+    /// 生效范围：NULL = 不限；只在这个日期区间内弹（含首尾）
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -362,6 +367,11 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         "ALTER TABLE tasks ADD COLUMN related_apps TEXT NOT NULL DEFAULT '[]'",
         // 软删除：删除只从活动列表隐藏，完成记录/统计保留
         "ALTER TABLE tasks ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
+        // 重复任务停止：模板置 1 后 materialize 不再生成以后的实例（历史实例与统计保留，可恢复）
+        "ALTER TABLE tasks ADD COLUMN repeat_stopped INTEGER NOT NULL DEFAULT 0",
+        // 提醒规则生效范围：NULL = 不限（从某天开始 / 到某天为止）
+        "ALTER TABLE reminder_rules ADD COLUMN start_date TEXT",
+        "ALTER TABLE reminder_rules ADD COLUMN end_date TEXT",
         // 应用归族：同族（同一软件的不同文件名/副本，如便携版改名）在报表里合并显示。
         // 空 = 未归族（报表按自身名字处理）；读 exe 产品名回填，或用户在详细页手动并入。
         "ALTER TABLE apps ADD COLUMN family TEXT NOT NULL DEFAULT ''",
@@ -718,6 +728,7 @@ fn task_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         is_template: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
         remind_style: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
         remind_interval_min: row.get::<_, Option<i64>>(12)?.unwrap_or(0),
+        repeat_stopped: row.get::<_, Option<i64>>(14)?.unwrap_or(0) != 0,
         related_apps: related_apps
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or_default(),
@@ -730,7 +741,8 @@ pub fn task_list(conn: &Connection) -> Result<Vec<Task>, String> {
             "SELECT id, content, priority, due_ts, done, done_ts, created_ts,
                     repeat_mode, template_id, start_ts,
                     CASE WHEN repeat_mode = '' THEN 0 ELSE 1 END,
-                    remind_style, remind_interval_min, related_apps
+                    remind_style, remind_interval_min, related_apps,
+                    COALESCE(repeat_stopped, 0)
              FROM tasks
              WHERE deleted = 0
              ORDER BY done ASC,
@@ -807,6 +819,9 @@ pub fn task_update(
             return Err("间隔提醒需在 0~1440 分钟".into());
         }
     }
+    let old_due: Option<i64> = conn
+        .query_row("SELECT due_ts FROM tasks WHERE id = ?1", [id], |r| r.get(0))
+        .unwrap_or(None);
     conn.execute(
         "UPDATE tasks SET content = ?2, priority = ?3, due_ts = ?4,
             remind_style = COALESCE(?5, remind_style),
@@ -815,6 +830,49 @@ pub fn task_update(
         rusqlite::params![id, content, priority, due_ts, remind_style, remind_interval_min],
     )
     .map_err(|e| format!("更新任务失败: {e}"))?;
+    // 编辑的是重复任务模板：内容/优先级/提醒设置同步到所有未完成实例——
+    // 已完成的实例是历史记录，保持原样（到期时间只在明确修改时才同步，避免把模板创建日的旧值铺出去）
+    let is_template: bool = conn
+        .query_row(
+            "SELECT repeat_mode <> '' AND template_id IS NULL FROM tasks WHERE id = ?1",
+            [id],
+            |r| r.get::<_, i64>(0).map(|v| v != 0),
+        )
+        .unwrap_or(false);
+    if is_template {
+        let due_changed = old_due != due_ts;
+        let sql = if due_changed {
+            "UPDATE tasks SET content = ?2, priority = ?3, due_ts = ?4,
+                remind_style = COALESCE(?5, remind_style),
+                remind_interval_min = COALESCE(?6, remind_interval_min)
+             WHERE template_id = ?1 AND done = 0 AND deleted = 0"
+        } else {
+            "UPDATE tasks SET content = ?2, priority = ?3,
+                remind_style = COALESCE(?5, remind_style),
+                remind_interval_min = COALESCE(?6, remind_interval_min)
+             WHERE template_id = ?1 AND done = 0 AND deleted = 0"
+        };
+        conn.execute(
+            sql,
+            rusqlite::params![id, content, priority, due_ts, remind_style, remind_interval_min],
+        )
+        .map_err(|e| format!("同步重复任务实例失败: {e}"))?;
+    }
+    Ok(())
+}
+
+/// 停止/恢复重复任务：停止后不再生成以后的实例；历史实例与完成记录全部保留，可随时恢复
+pub fn task_stop_repeat(conn: &Connection, id: i64, stopped: bool) -> Result<(), String> {
+    let n = conn
+        .execute(
+            "UPDATE tasks SET repeat_stopped = ?2
+             WHERE id = ?1 AND repeat_mode <> '' AND template_id IS NULL",
+            rusqlite::params![id, stopped as i64],
+        )
+        .map_err(|e| format!("更新重复任务失败: {e}"))?;
+    if n == 0 {
+        return Err("只有重复任务本身可以停止或恢复".into());
+    }
     Ok(())
 }
 
@@ -826,22 +884,28 @@ pub fn task_set_started(conn: &Connection, id: i64, ts: Option<i64>) -> Result<(
 }
 
 /// 固定事项：为"今天该出现"的模板生成实例（幂等，可反复调用）
+/// 停止（repeat_stopped=1）或已删除的模板不再生成；实例的到期时刻跟随模板设定的时刻（未设则 09:00）
 pub fn materialize_repeats(conn: &Connection, today: &str) -> Result<usize, String> {
     use chrono::{Datelike, NaiveDate};
     let Some(today_date) = NaiveDate::parse_from_str(today, "%Y-%m-%d").ok() else {
         return Ok(0);
     };
-    let templates: Vec<(i64, String, i32, String)> = {
+    let templates: Vec<(i64, String, i32, String, Option<i64>)> = {
         let mut stmt = conn
-            .prepare("SELECT id, content, priority, repeat_mode FROM tasks WHERE repeat_mode != '' AND deleted = 0")
+            .prepare(
+                "SELECT id, content, priority, repeat_mode, due_ts FROM tasks
+                 WHERE repeat_mode != '' AND deleted = 0 AND COALESCE(repeat_stopped, 0) = 0",
+            )
             .map_err(|e| format!("查询固定事项失败: {e}"))?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
             .map_err(|e| format!("查询固定事项失败: {e}"))?;
         rows.filter_map(|r| r.ok()).collect()
     };
     let mut made = 0usize;
-    for (id, content, priority, mode) in templates {
+    for (id, content, priority, mode, tpl_due) in templates {
         // 判断今天是否命中该重复规则（按模板创建日推定周期锚点）
         let anchor: String = conn
             .query_row(
@@ -882,10 +946,19 @@ pub fn materialize_repeats(conn: &Connection, today: &str) -> Result<usize, Stri
         if exists > 0 {
             continue;
         }
+        // 实例到期时刻 = 模板设定的时刻（跟随用户建任务时填的时间），未填则默认 09:00。
+        // 用本地时区落 epoch（此前误用 and_utc 把本地 09:00 存成了 17:00）
         let due = NaiveDate::parse_from_str(today, "%Y-%m-%d")
             .ok()
-            .and_then(|d| d.and_hms_opt(9, 0, 0))
-            .map(|d| d.and_utc().timestamp());
+            .and_then(|d| {
+                let (h, m) = tpl_due
+                    .and_then(|ts| Local.timestamp_opt(ts, 0).single())
+                    .map(|t| (t.hour(), t.minute()))
+                    .unwrap_or((9, 0));
+                d.and_hms_opt(h, m, 0)
+                    .and_then(|n| Local.from_local_datetime(&n).single())
+            })
+            .map(|d| d.timestamp());
         task_add_repeat(conn, &content, priority, due, "", Some(id))?;
         made += 1;
     }
@@ -908,6 +981,8 @@ pub struct HabitRow {
     pub task_id: i64,
     pub content: String,
     pub repeat_mode: String,
+    /// 已停止/已删除：不再生成以后的实例，但历史完成格继续显示（删除≠抹掉历史）
+    pub stopped: bool,
     pub cells: Vec<HabitCell>,
 }
 
@@ -917,18 +992,25 @@ pub fn habit_grid(conn: &Connection, days: i32) -> Result<Vec<HabitRow>, String>
         .format("%Y-%m-%d")
         .to_string();
 
-    let templates: Vec<(i64, String, String)> = {
+    // 不按 deleted 过滤：已删除/已停止的重复任务，历史完成记录仍要在习惯追踪里可见
+    let templates: Vec<(i64, String, String, bool)> = {
         let mut stmt = conn
-            .prepare("SELECT id, content, repeat_mode FROM tasks WHERE repeat_mode != '' AND template_id IS NULL AND deleted = 0 ORDER BY id")
+            .prepare(
+                "SELECT id, content, repeat_mode,
+                        (COALESCE(deleted, 0) = 1 OR COALESCE(repeat_stopped, 0) = 1)
+                 FROM tasks WHERE repeat_mode != '' AND template_id IS NULL ORDER BY id",
+            )
             .map_err(|e| format!("查询固定事项失败: {e}"))?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? != 0))
+            })
             .map_err(|e| format!("查询固定事项失败: {e}"))?;
         rows.filter_map(|r| r.ok()).collect()
     };
 
     let mut out: Vec<HabitRow> = Vec::new();
-    for (tid, content, mode) in templates {
+    for (tid, content, mode, stopped) in templates {
         let mut stmt = conn
             .prepare(
                 "SELECT done,
@@ -969,6 +1051,7 @@ pub fn habit_grid(conn: &Connection, days: i32) -> Result<Vec<HabitRow>, String>
             task_id: tid,
             content,
             repeat_mode: mode,
+            stopped,
             cells: by_date.into_values().collect(),
         });
     }
@@ -1004,7 +1087,8 @@ pub fn habit_toggle(conn: &Connection, template_id: i64, date: &str) -> Result<b
             let due = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
                 .ok()
                 .and_then(|d| d.and_hms_opt(9, 0, 0))
-                .map(|d| d.and_utc().timestamp());
+                .and_then(|n| Local.from_local_datetime(&n).single())
+                .map(|d| d.timestamp());
             let now = Local::now().timestamp();
             conn.execute(
                 "INSERT INTO tasks(content, priority, due_ts, created_ts, done, done_ts, repeat_mode, template_id)
@@ -1128,16 +1212,25 @@ pub struct DueTask {
     pub remind_style: String,
 }
 
+/// 到期未提醒的任务（调度用）：只提醒"今天到期"的——
+/// 过期多日的旧实例只是历史记录，不该在启动时连环弹卡
 pub fn due_tasks(conn: &Connection, now: i64) -> Result<Vec<DueTask>, String> {
+    let today0 = Local
+        .timestamp_opt(now, 0)
+        .single()
+        .and_then(|t| t.date_naive().and_hms_opt(0, 0, 0))
+        .and_then(|d| Local.from_local_datetime(&d).single())
+        .map(|d| d.timestamp())
+        .unwrap_or(now - 86_400);
     let mut stmt = conn
         .prepare(
             "SELECT id, content, due_ts, remind_style FROM tasks
-             WHERE done = 0 AND deleted = 0 AND due_ts IS NOT NULL AND due_ts <= ?1
+             WHERE done = 0 AND deleted = 0 AND due_ts IS NOT NULL AND due_ts <= ?1 AND due_ts >= ?2
                AND COALESCE(reminded_key, '') <> CAST(due_ts AS TEXT)",
         )
         .map_err(|e| format!("查询到期任务失败: {e}"))?;
     let rows = stmt
-        .query_map([now], |row| {
+        .query_map(rusqlite::params![now, today0], |row| {
             Ok(DueTask {
                 id: row.get(0)?,
                 content: row.get(1)?,
@@ -1277,12 +1370,14 @@ fn rule_row(row: &rusqlite::Row) -> rusqlite::Result<ReminderRule> {
         accent_color: row.get(8)?,
         enabled: row.get::<_, i64>(9)? != 0,
         style: row.get::<_, Option<String>>(10)?.unwrap_or_else(|| "card".into()),
+        start_date: row.get(11)?,
+        end_date: row.get(12)?,
     })
 }
 
 const RULE_COLS: &str =
     "id, title, body, mode, interval_minutes, sticky, daily_times, card_duration_sec, accent_color, enabled,
-     COALESCE(style, 'card')";
+     COALESCE(style, 'card'), start_date, end_date";
 
 pub fn rule_list(conn: &Connection) -> Result<Vec<ReminderRule>, String> {
     let mut stmt = conn
@@ -1296,6 +1391,26 @@ pub fn rule_list(conn: &Connection) -> Result<Vec<ReminderRule>, String> {
         out.push(r.map_err(|e| format!("读取提醒规则失败: {e}"))?);
     }
     Ok(out)
+}
+
+fn valid_ymd(s: &str) -> bool {
+    s.len() == 10
+        && chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
+}
+
+/// 生效日期范围校验（都空 = 永久生效；否则需合法日期且开始 ≤ 结束）
+fn validate_range(start_date: Option<&str>, end_date: Option<&str>) -> Result<(), String> {
+    let (s, e) = (start_date.unwrap_or(""), end_date.unwrap_or(""));
+    if !s.is_empty() && !valid_ymd(s) {
+        return Err("生效开始日期格式需为 YYYY-MM-DD".into());
+    }
+    if !e.is_empty() && !valid_ymd(e) {
+        return Err("生效结束日期格式需为 YYYY-MM-DD".into());
+    }
+    if !s.is_empty() && !e.is_empty() && s > e {
+        return Err("生效开始日期不能晚于结束日期".into());
+    }
+    Ok(())
 }
 
 fn validate_rule(
@@ -1337,34 +1452,7 @@ fn validate_rule(
     Ok(())
 }
 
-/// 新增规则；interval 模式把上次触发基线设为创建时刻（首次提醒在下一个间隔后）
-#[allow(clippy::too_many_arguments)]
-pub fn rule_add(
-    conn: &Connection,
-    title: &str,
-    body: &str,
-    mode: &str,
-    interval_minutes: Option<i64>,
-    daily_times: Vec<String>,
-    sticky: bool,
-    card_duration_sec: i32,
-    accent_color: Option<String>,
-) -> Result<(), String> {
-    rule_add_style(
-        conn,
-        title,
-        body,
-        mode,
-        interval_minutes,
-        daily_times,
-        sticky,
-        card_duration_sec,
-        accent_color,
-        "card",
-    )
-}
-
-/// 新增提醒规则（style: card | fullscreen）
+/// 新增提醒规则（style: card | fullscreen；start/end_date: 生效范围，NULL = 不限）
 #[allow(clippy::too_many_arguments)]
 pub fn rule_add_style(
     conn: &Connection,
@@ -1377,14 +1465,17 @@ pub fn rule_add_style(
     card_duration_sec: i32,
     accent_color: Option<String>,
     style: &str,
+    start_date: Option<String>,
+    end_date: Option<String>,
 ) -> Result<(), String> {
     if style != "card" && style != "fullscreen" {
         return Err("提醒方式需为 card 或 fullscreen".into());
     }
     validate_rule(title, mode, interval_minutes, &daily_times, card_duration_sec)?;
+    validate_range(start_date.as_deref(), end_date.as_deref())?;
     conn.execute(
-        "INSERT INTO reminder_rules(title, body, mode, interval_minutes, daily_times, sticky, card_duration_sec, accent_color, last_fired_key, style)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO reminder_rules(title, body, mode, interval_minutes, daily_times, sticky, card_duration_sec, accent_color, last_fired_key, style, start_date, end_date)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         rusqlite::params![
             title.trim(),
             body.trim(),
@@ -1395,7 +1486,9 @@ pub fn rule_add_style(
             card_duration_sec,
             accent_color,
             Local::now().timestamp().to_string(),
-            style
+            style,
+            start_date.filter(|s| !s.is_empty()),
+            end_date.filter(|s| !s.is_empty()),
         ],
     )
     .map_err(|e| format!("新增提醒规则失败: {e}"))?;
@@ -1415,16 +1508,19 @@ pub fn rule_update(
     card_duration_sec: i32,
     accent_color: Option<String>,
     style: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
 ) -> Result<(), String> {
     let style = style.unwrap_or_else(|| "card".into());
     if style != "card" && style != "fullscreen" {
         return Err("提醒方式需为 card 或 fullscreen".into());
     }
     validate_rule(title, mode, interval_minutes, &daily_times, card_duration_sec)?;
+    validate_range(start_date.as_deref(), end_date.as_deref())?;
     conn.execute(
         "UPDATE reminder_rules SET title = ?2, body = ?3, mode = ?4, interval_minutes = ?5,
          daily_times = ?6, sticky = ?7, card_duration_sec = ?8, accent_color = ?9,
-         style = ?10 WHERE id = ?1",
+         style = ?10, start_date = ?11, end_date = ?12 WHERE id = ?1",
         rusqlite::params![
             id,
             title.trim(),
@@ -1435,7 +1531,9 @@ pub fn rule_update(
             sticky as i64,
             card_duration_sec,
             accent_color,
-            style
+            style,
+            start_date.filter(|s| !s.is_empty()),
+            end_date.filter(|s| !s.is_empty()),
         ],
     )
     .map_err(|e| format!("更新提醒规则失败: {e}"))?;
@@ -1474,16 +1572,21 @@ pub struct RuleDue {
 }
 
 pub fn rule_enabled(conn: &Connection) -> Result<Vec<RuleDue>, String> {
+    // 生效范围过滤：start/end 之间（含首尾，NULL = 不限）才参与调度
+    let today = Local::now().format("%Y-%m-%d").to_string();
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {RULE_COLS}, COALESCE(last_fired_key, '') FROM reminder_rules
-             WHERE enabled = 1 ORDER BY id"
+             WHERE enabled = 1
+               AND (start_date IS NULL OR start_date <= ?1)
+               AND (end_date IS NULL OR end_date >= ?1)
+             ORDER BY id"
         ))
         .map_err(|e| format!("查询提醒规则失败: {e}"))?;
     let rows = stmt
-        .query_map([], |row| {
+        .query_map([&today], |row| {
             let r = rule_row(row)?;
-            let last = row.get::<_, String>(11)?;
+            let last = row.get::<_, String>(13)?;
             Ok(RuleDue {
                 id: r.id,
                 title: r.title,
@@ -2837,6 +2940,11 @@ struct RulePack {
     sticky: bool,
     card_duration_sec: i32,
     accent_color: Option<String>,
+    /// 生效范围（旧版导出的 JSON 没有这两个字段，反序列化为 None = 不限）
+    #[serde(default)]
+    start_date: Option<String>,
+    #[serde(default)]
+    end_date: Option<String>,
 }
 
 pub fn rules_export_json(conn: &Connection, dir: &std::path::Path, file_name: &str) -> Result<String, String> {
@@ -2852,6 +2960,8 @@ pub fn rules_export_json(conn: &Connection, dir: &std::path::Path, file_name: &s
             sticky: r.sticky,
             card_duration_sec: r.card_duration_sec,
             accent_color: r.accent_color,
+            start_date: r.start_date,
+            end_date: r.end_date,
         })
         .collect();
     let json = serde_json::to_string_pretty(&pack).map_err(|e| format!("序列化失败: {e}"))?;
@@ -2877,7 +2987,7 @@ pub fn rules_import_json(conn: &Connection, path: &str) -> Result<(usize, usize)
             skipped += 1;
             continue;
         }
-        rule_add(
+        rule_add_style(
             conn,
             &r.title,
             &r.body,
@@ -2887,6 +2997,9 @@ pub fn rules_import_json(conn: &Connection, path: &str) -> Result<(usize, usize)
             r.sticky,
             r.card_duration_sec,
             r.accent_color,
+            "card",
+            r.start_date,
+            r.end_date,
         )?;
         added += 1;
     }
@@ -4417,16 +4530,16 @@ mod tests {
         let conn = open(&path).unwrap();
         let _ = conn.execute("DELETE FROM reminder_rules", []);
         rule_add_style(
-            &conn, "全屏休息", "起来走走", "interval", Some(45), vec![], true, 15, None, "fullscreen",
+            &conn, "全屏休息", "起来走走", "interval", Some(45), vec![], true, 15, None, "fullscreen", None, None,
         )
         .unwrap();
-        rule_add(&conn, "普通卡片", "喝水", "interval", Some(30), vec![], false, 10, None).unwrap();
+        rule_add_style(&conn, "普通卡片", "喝水", "interval", Some(30), vec![], false, 10, None, "card", None, None).unwrap();
         let list = rule_list(&conn).unwrap();
         assert_eq!(list.len(), 2);
         assert!(list.iter().any(|r| r.style == "fullscreen"));
         assert!(list.iter().any(|r| r.style == "card"));
         // 非法方式被拒
-        assert!(rule_add_style(&conn, "x", "", "interval", Some(1), vec![], false, 10, None, "popup").is_err());
+        assert!(rule_add_style(&conn, "x", "", "interval", Some(1), vec![], false, 10, None, "popup", None, None).is_err());
         // 调度用的查询也要带出 style
         let due = rule_enabled(&conn).unwrap();
         assert!(due.iter().any(|r| r.style == "fullscreen"));
@@ -4484,7 +4597,7 @@ mod tests {
         add_seconds(&conn, app_id, 1_700_000_000, 1_700_000_600).unwrap();
         write_segment(&conn, app_id, 1_700_000_000, 1_700_000_600, "测试区间").unwrap();
         task_add(&conn, "测试任务", 1, None).unwrap();
-        rule_add(&conn, "测试规则", "", "interval", Some(30), vec![], false, 10, None).unwrap();
+        rule_add_style(&conn, "测试规则", "", "interval", Some(30), vec![], false, 10, None, "card", None, None).unwrap();
 
         let exported = export_json(&conn, &dir, "export-test.json").unwrap();
 
@@ -4682,6 +4795,226 @@ mod tai_export_tests {
         assert_eq!(daily, (1, 180), "日统计应合并累加为一行 180 秒");
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 停止重复：停止后不再生成新实例，历史实例保留；恢复后继续生成
+    #[test]
+    fn stop_repeat_halts_materialization() {
+        let path = std::env::temp_dir().join("tm-stop-repeat.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        // 模板：创建于 3 天前（保证今天命中且不是"今天建的"）
+        conn.execute(
+            "INSERT INTO tasks(content, priority, created_ts, repeat_mode)
+             VALUES('早睡打卡', 1, ?1, 'daily')",
+            [Local::now().timestamp() - 3 * 86400],
+        )
+        .unwrap();
+        let tpl: i64 = conn.last_insert_rowid();
+        assert_eq!(materialize_repeats(&conn, &today).unwrap(), 1, "每日模板应生成今日实例");
+        // 停止 → 明天不再生成
+        task_stop_repeat(&conn, tpl, true).unwrap();
+        let tomorrow = (Local::now() + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(
+            materialize_repeats(&conn, &tomorrow).unwrap(),
+            0,
+            "停止后不应生成新实例"
+        );
+        // 历史实例仍在
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE template_id = ?1",
+                [tpl],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "停止不应动历史实例");
+        // 恢复 → 继续生成
+        task_stop_repeat(&conn, tpl, false).unwrap();
+        assert_eq!(materialize_repeats(&conn, &tomorrow).unwrap(), 1);
+        // 非模板行不能停止
+        let inst: i64 = conn
+            .query_row("SELECT id FROM tasks WHERE template_id = ?1 LIMIT 1", [tpl], |r| r.get(0))
+            .unwrap();
+        assert!(task_stop_repeat(&conn, inst, true).is_err());
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 编辑模板联动：内容/优先级同步到未完成实例；已完成实例（历史）保持原样
+    #[test]
+    fn task_update_propagates_to_undone_instances() {
+        let path = std::env::temp_dir().join("tm-propagate.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, created_ts, repeat_mode)
+             VALUES('早睡', 1, ?1, 'daily')",
+            [Local::now().timestamp() - 86400],
+        )
+        .unwrap();
+        let tpl: i64 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, due_ts, created_ts, done, done_ts, repeat_mode, template_id)
+             VALUES('早睡', 1, NULL, ?1, 1, ?1, '', ?2)",
+            rusqlite::params![Local::now().timestamp() - 86400, tpl],
+        )
+        .unwrap();
+        let done_inst: i64 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, due_ts, created_ts, repeat_mode, template_id)
+             VALUES('早睡', 1, NULL, ?1, '', ?2)",
+            rusqlite::params![Local::now().timestamp(), tpl],
+        )
+        .unwrap();
+        let open_inst: i64 = conn.last_insert_rowid();
+        task_update(&conn, tpl, "早睡，今日亦如此", 2, None, None, None).unwrap();
+        let (c, p): (String, i32) = conn
+            .query_row(
+                "SELECT content, priority FROM tasks WHERE id = ?1",
+                [open_inst],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((c.as_str(), p), ("早睡，今日亦如此", 2), "未完成实例应跟随模板");
+        let c: String = conn
+            .query_row("SELECT content FROM tasks WHERE id = ?1", [done_inst], |r| r.get(0))
+            .unwrap();
+        assert_eq!(c, "早睡", "已完成的历史实例不应被联动改动");
+        // 普通一次性任务编辑不受影响（只改自己）
+        task_add(&conn, "一次性", 1, None).unwrap();
+        let oneoff: i64 = conn.last_insert_rowid();
+        task_update(&conn, oneoff, "一次性改", 0, None, None, None).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE content = '一次性改'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 停止/删除的重复任务，习惯追踪的历史完成格仍要显示（删除≠抹掉历史）
+    #[test]
+    fn habit_grid_keeps_stopped_templates() {
+        let path = std::env::temp_dir().join("tm-habit-stopped.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, created_ts, repeat_mode, repeat_stopped, done, done_ts)
+             VALUES('已停止的习惯', 1, ?1, 'daily', 1, 0, NULL)",
+            [Local::now().timestamp() - 86400],
+        )
+        .unwrap();
+        let tpl: i64 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, due_ts, created_ts, done, done_ts, repeat_mode, template_id)
+             VALUES('已停止的习惯', 1, ?1, ?1, 1, ?1, '', ?2)",
+            rusqlite::params![Local::now().timestamp() - 3600, tpl],
+        )
+        .unwrap();
+        // 软删除的模板也应保留历史
+        conn.execute(
+            "INSERT INTO tasks(content, priority, created_ts, repeat_mode, deleted)
+             VALUES('已删除的习惯', 1, ?1, 'daily', 1)",
+            [Local::now().timestamp() - 86400],
+        )
+        .unwrap();
+        let del_tpl: i64 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, due_ts, created_ts, done, done_ts, repeat_mode, template_id)
+             VALUES('已删除的习惯', 1, ?1, ?1, 1, ?1, '', ?2)",
+            rusqlite::params![Local::now().timestamp() - 3600, del_tpl],
+        )
+        .unwrap();
+        let rows = habit_grid(&conn, 7).unwrap();
+        assert_eq!(rows.len(), 2, "停止/删除的模板历史都应保留");
+        assert!(rows.iter().all(|r| r.stopped), "两者都应标记为已停止");
+        assert!(rows.iter().all(|r| r.cells.iter().any(|c| c.done)));
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 提醒规则生效范围：区间外不参与调度（含首尾）
+    #[test]
+    fn rule_range_filters_scheduling() {
+        let path = std::env::temp_dir().join("tm-rule-range.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let tomorrow = (Local::now() + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let yesterday = (Local::now() - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        // 今天到期（区间=今天，含首尾应命中）
+        rule_add_style(
+            &conn, "限时提醒", "正文", "interval", Some(30), vec![], false, 10, None,
+            "card", Some(today.clone()), Some(today.clone()),
+        )
+        .unwrap();
+        // 昨天已结束的
+        rule_add_style(
+            &conn, "过期提醒", "正文", "interval", Some(30), vec![], false, 10, None,
+            "card", Some(yesterday.clone()), Some(yesterday),
+        )
+        .unwrap();
+        // 明天才开始
+        rule_add_style(
+            &conn, "未来提醒", "正文", "interval", Some(30), vec![], false, 10, None,
+            "card", Some(tomorrow.clone()), None,
+        )
+        .unwrap();
+        // 无限期的
+        rule_add_style(&conn, "永久提醒", "正文", "interval", Some(60), vec![], false, 10, None, "card", None, None).unwrap();
+        let due: Vec<String> = rule_enabled(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.title)
+            .collect();
+        assert!(due.contains(&"限时提醒".to_string()), "区间含首尾应命中");
+        assert!(due.contains(&"永久提醒".to_string()), "不限区间应命中");
+        assert!(!due.contains(&"过期提醒".to_string()), "已结束不应命中");
+        assert!(!due.contains(&"未来提醒".to_string()), "未开始不应命中");
+        // 区间校验：开始晚于结束要被拒
+        assert!(rule_add_style(
+            &conn, "倒置区间", "", "interval", Some(30), vec![], false, 10, None,
+            "card", Some(tomorrow.clone()), Some(today.clone()),
+        )
+        .is_err());
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 到期提醒只针对"今天到期"：过期多日的旧实例是历史记录，不再连环弹卡
+    #[test]
+    fn due_tasks_same_day_only() {
+        let path = std::env::temp_dir().join("tm-due-day.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        let now = Local::now().timestamp();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, due_ts, created_ts) VALUES('今天到期', 1, ?1, ?2)",
+            rusqlite::params![now - 600, now - 86400],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks(content, priority, due_ts, created_ts) VALUES('三天前到期', 1, ?1, ?2)",
+            rusqlite::params![now - 3 * 86400, now - 4 * 86400],
+        )
+        .unwrap();
+        let due = due_tasks(&conn, now).unwrap();
+        assert_eq!(due.len(), 1, "只有今天到期的应触发提醒");
+        assert_eq!(due[0].content, "今天到期");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 
 }

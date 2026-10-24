@@ -142,12 +142,13 @@ function dotStyle(date: string) {
           v-for="r in rows"
           :key="r.taskId"
           class="hg-row"
-          :class="{ sel: modelValue === r.taskId }"
+          :class="{ sel: modelValue === r.taskId, stopped: r.stopped }"
           :style="{ gridTemplateColumns: rowGrid }"
           @click="emit('select', r.taskId)"
         >
           <span class="hg-name">
             <em v-if="repeatLabel(r.repeatMode)" class="rep">{{ repeatLabel(r.repeatMode) }}</em>
+            <em v-if="r.stopped" class="rep stop">已停止</em>
             <span class="nm">{{ r.content }}</span>
           </span>
           <span v-for="a in axis" :key="a.date" class="hg-cell" :title="tip(r, a.date)" @click.stop="onCell(r, a.date)">
@@ -177,11 +178,12 @@ function dotStyle(date: string) {
           v-for="r in rows"
           :key="r.taskId"
           class="hg-row"
-          :class="{ sel: modelValue === r.taskId }"
+          :class="{ sel: modelValue === r.taskId, stopped: r.stopped }"
           @click="emit('select', r.taskId)"
         >
           <span class="hg-name">
             <em v-if="repeatLabel(r.repeatMode)" class="rep">{{ repeatLabel(r.repeatMode) }}</em>
+            <em v-if="r.stopped" class="rep stop">已停止</em>
             <span class="nm">{{ r.content }}</span>
           </span>
           <div class="tl-track">
@@ -315,6 +317,16 @@ function dotStyle(date: string) {
   background: var(--accent-soft);
   border-radius: var(--r-full);
   padding: 1px 8px;
+}
+
+.rep.stop {
+  color: var(--text-faint);
+  background: var(--surface);
+}
+
+/* 已停止的习惯：整行弱化，但历史格照常显示 */
+.hg-row.stopped {
+  opacity: 0.55;
 }
 
 .hg-col {

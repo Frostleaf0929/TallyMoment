@@ -170,6 +170,8 @@ export interface HabitRow {
   taskId: number;
   content: string;
   repeatMode: string;
+  /** 已停止/已删除：历史完成格仍显示 */
+  stopped: boolean;
   cells: HabitCell[];
 }
 
@@ -193,6 +195,8 @@ export interface Task {
   remindIntervalMin: number;
   /** 该条本身是固定事项模板 */
   isTemplate: boolean;
+  /** 重复任务已停止：不再生成以后的实例，历史记录保留 */
+  repeatStopped: boolean;
   /** 相关应用（心流归属用，exe 名列表） */
   relatedApps: string[];
 }
@@ -210,6 +214,9 @@ export interface ReminderRule {
   enabled: boolean;
   /** card | fullscreen */
   style: string;
+  /** 生效范围（null = 不限；区间含首尾） */
+  startDate: string | null;
+  endDate: string | null;
 }
 
 export interface TodoStats {

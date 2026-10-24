@@ -19,6 +19,9 @@ const draft = ref({
   sticky: false,
   cardDurationSec: 10,
   style: "card" as "card" | "fullscreen",
+  /** 生效范围：空 = 不限（比如"就这几天提醒"设个结束日期即可） */
+  startDate: "",
+  endDate: "",
 });
 
 const err = ref("");
@@ -36,6 +39,8 @@ function openNew() {
     sticky: false,
     cardDurationSec: 10,
     style: "card",
+    startDate: "",
+    endDate: "",
   };
 }
 
@@ -52,6 +57,8 @@ function openEdit(r: ReminderRule) {
     sticky: r.sticky,
     style: (r.style || "card") as "card" | "fullscreen",
     cardDurationSec: r.cardDurationSec,
+    startDate: r.startDate ?? "",
+    endDate: r.endDate ?? "",
   };
 }
 
@@ -81,6 +88,8 @@ async function save() {
     cardDurationSec: draft.value.cardDurationSec,
     accentColor: null,
     style: draft.value.style,
+    startDate: draft.value.startDate || null,
+    endDate: draft.value.endDate || null,
   };
   try {
     await invoke(isNew ? "rule_add" : "rule_update", isNew ? args : { id: editingId.value, ...args });
@@ -103,6 +112,15 @@ async function remove(r: ReminderRule) {
 
 const modeLabel = (r: ReminderRule) =>
   r.mode === "interval" ? `每 ${r.intervalMinutes} 分钟` : `定点 ${r.dailyTimes.join(" / ")}`;
+
+/** 生效范围标签：10/24 ~ 10/31（只有一端就显示 起/止） */
+const rangeLabel = (r: ReminderRule): string => {
+  if (!r.startDate && !r.endDate) return "";
+  const md = (s: string | null) => (s ? s.slice(5).replace("-", "/") : "");
+  if (r.startDate && r.endDate) return `${md(r.startDate)}~${md(r.endDate)}`;
+  if (r.startDate) return `${md(r.startDate)} 起`;
+  return `至 ${md(r.endDate)}`;
+};
 </script>
 
 <template>
@@ -116,6 +134,7 @@ const modeLabel = (r: ReminderRule) =>
       <div class="line1">
         <span class="title" :title="r.title">{{ r.title }}</span>
         <span class="tag">{{ modeLabel(r) }}</span>
+        <span v-if="rangeLabel(r)" class="tag rng" title="生效日期范围，过期自动停">{{ rangeLabel(r) }}</span>
         <span class="tag">{{ r.sticky ? "卡片常驻" : `停留 ${r.cardDurationSec}s` }}</span>
         <span class="tag" :class="{ full: r.style === 'fullscreen' }">
           {{ r.style === "fullscreen" ? "全屏" : "卡片" }}
@@ -174,6 +193,13 @@ const modeLabel = (r: ReminderRule) =>
         <input v-model.number="draft.cardDurationSec" type="number" min="3" max="600" class="num" />
         <span>秒</span>
         <label class="stk"><input v-model="draft.sticky" type="checkbox" /> 卡片常驻</label>
+      </div>
+      <div class="frow">
+        <span>生效范围</span>
+        <input v-model="draft.startDate" type="date" class="tp" title="从这天开始提醒（留空 = 不限）" />
+        <span>~</span>
+        <input v-model="draft.endDate" type="date" class="tp" title="到这天为止（留空 = 一直提醒）" />
+        <span class="rangehint">两端都留空 = 一直生效；设个结束日期就不用手动停了</span>
       </div>
       <p v-if="err" class="err">{{ err }}</p>
       <div class="btns">
@@ -254,6 +280,16 @@ const modeLabel = (r: ReminderRule) =>
 .tag.full {
   color: var(--accent-text);
   background: var(--accent-soft);
+}
+
+.tag.rng {
+  color: var(--info, #6aa1ff);
+  background: var(--info-soft, rgba(106, 161, 255, 0.14));
+}
+
+.rangehint {
+  font-size: 11px;
+  color: var(--text-faint);
 }
 
 .tag {

@@ -268,6 +268,25 @@ async function toggleTask(t: Task) {
 }
 
 
+/** 任务卡的"未完成"计数：一次性任务逐条计；重复任务不再按每天一条计，
+ *  只有"今天有实例且未完成"才计 1（模板已删的孤儿未完成实例逐条计，供清理） */
+const openCount = computed(() => {
+  const today = todayStr();
+  const tpls = tasks.value.filter((t) => t.repeatMode && !t.templateId);
+  const tplIds = new Set(tpls.map((t) => t.id));
+  let n = tasks.value.filter((t) => !t.repeatMode && !t.templateId && !t.done).length;
+  n += tasks.value.filter(
+    (t) => t.templateId != null && !tplIds.has(t.templateId) && !t.done
+  ).length;
+  for (const tpl of tpls) {
+    if (tpl.repeatStopped) continue;
+    const inst = tasks.value.find((i) => i.templateId === tpl.id && taskDay(i) === today);
+    const scheduled = inst ?? (taskDay(tpl) === today ? tpl : null);
+    if (scheduled && !scheduled.done) n += 1;
+  }
+  return n;
+});
+
 async function load() {
   try {
     tasks.value = await invoke<Task[]>("task_list");
@@ -469,7 +488,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
           <h2>任务</h2>
           <Icon name="checklist" :size="16" />
         </div>
-        <p class="mnum">{{ tasks.filter((t) => !t.done).length }} <small>项未完成</small></p>
+        <p class="mnum">{{ openCount }} <small>项未完成</small></p>
         <p class="msub">今日待办 {{ todayTasks.length }} 项 · 点开编辑清单</p>
       </button>
 

@@ -167,6 +167,7 @@ async function saveDay() {
     }
     draftRestore.value = null;
     await loadList();
+    if (overviewLoaded.value) await reloadOverview();
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   } finally {
@@ -303,6 +304,53 @@ async function pickRecent(d: string) {
   await loadDay();
 }
 
+/* ---------- 历史总览：全部日志一览 + 搜索，不用一天一天点 ---------- */
+const overview = ref(false);
+const allNotes = ref<DailyNote[]>([]);
+const overviewLoaded = ref(false);
+const searchText = ref("");
+
+async function toggleOverview() {
+  overview.value = !overview.value;
+  if (overview.value && !overviewLoaded.value) {
+    await reloadOverview();
+  }
+}
+
+async function reloadOverview() {
+  try {
+    allNotes.value = await invoke<DailyNote[]>("notes_recent", { limit: 365 });
+    overviewLoaded.value = true;
+  } catch {
+    allNotes.value = [];
+  }
+}
+
+/** 摘要：剥掉 Markdown 标记与图片语法，取开头一段 */
+function brief(content: string): string {
+  const text = content
+    .replace(/<img[^>]*>/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/[*_~`>|-]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.slice(0, 90);
+}
+
+const filteredNotes = computed(() => {
+  const q = searchText.value.trim().toLowerCase();
+  if (!q) return allNotes.value;
+  return allNotes.value.filter(
+    (n) => n.date.includes(q) || n.content.toLowerCase().includes(q)
+  );
+});
+
+async function openFromOverview(d: string) {
+  overview.value = false;
+  await pickRecent(d);
+}
+
 // 从月历点一天过来：切到那天
 watch(
   () => props.dayTs,
@@ -332,6 +380,9 @@ onMounted(async () => {
       />
       <span class="d">{{ dateStr() }}{{ dateStr() === today ? " · 今天" : "" }}</span>
       <div class="acts">
+        <NButton size="tiny" quaternary :type="overview ? 'primary' : 'default'" @click="toggleOverview">
+          {{ overview ? "回到编辑" : "历史总览" }}
+        </NButton>
         <NButton size="tiny" quaternary @click="addImage">添加图片</NButton>
         <NButton size="tiny" quaternary @click="importMd">导入 MD</NButton>
         <NButton size="tiny" quaternary @click="exportMd">导出全部 MD</NButton>
@@ -353,8 +404,27 @@ onMounted(async () => {
       <span v-if="!recent.length" class="empty">还没有日志，写第一条试试</span>
     </div>
 
+    <!-- 历史总览：全部日志（日期 / 摘要 / 图数），点一条回到那天的编辑 -->
+    <template v-if="overview">
+      <div class="ov-bar">
+        <input v-model="searchText" class="ov-search" placeholder="搜索日期或正文…" />
+        <span class="ov-cnt">{{ filteredNotes.length }} 篇</span>
+      </div>
+      <div class="ovlist">
+        <button v-for="n in filteredNotes" :key="n.date" class="ovrow" @click="openFromOverview(n.date)">
+          <span class="ovdate" :class="{ td: n.date === today }">{{ n.date }}</span>
+          <span class="ovbrief">{{ brief(n.content) || "（无正文）" }}</span>
+          <span v-if="n.images.length" class="ovimgs">{{ n.images.length }}图</span>
+        </button>
+        <span v-if="!filteredNotes.length" class="empty">
+          {{ allNotes.length ? "没有匹配的日志" : "还没有日志" }}
+        </span>
+      </div>
+    </template>
+
     <!-- 工具栏固定两行：第一行是文字效果，第二行是"新图片宽度"+ 视图切换 -->
-    <div class="blocks">
+    <template v-else>
+      <div class="blocks">
       <button class="tb" title="选中行转标题（再点升级，### 后回到正文）" @click="line('heading')">标题</button>
       <button class="tb" title="转回普通段落" @click="line('plain')">正文</button>
       <button class="tb" title="选中行加待办框 / 取消" @click="line('todo')">待办</button>
@@ -416,6 +486,7 @@ onMounted(async () => {
         <button class="rm" title="从此天移除" @click="removeImage(name)">×</button>
       </div>
     </div>
+    </template>
 
     <p v-if="msg" class="ok">{{ msg }}</p>
     <p v-if="err" class="err">{{ err }}</p>
@@ -434,6 +505,92 @@ onMounted(async () => {
   align-items: center;
   gap: 4px;
   flex-wrap: wrap;
+}
+
+/* 历史总览 */
+.ov-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ov-search {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+
+.ov-search:focus {
+  border-color: var(--accent-border);
+}
+
+.ov-cnt {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.ovlist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.ovrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  padding: 7px 10px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--dur), transform var(--dur);
+}
+
+.ovrow:hover {
+  background: var(--surface-hover);
+  transform: translateX(calc(2px * var(--motion)));
+}
+
+.ovdate {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ovdate.td {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.ovbrief {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ovimgs {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-faint);
 }
 
 .draftbar {

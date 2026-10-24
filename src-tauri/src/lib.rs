@@ -635,6 +635,31 @@ fn task_delete(app: tauri::AppHandle, id: i64) -> Result<(), String> {
     storage::task_delete(&conn, id)
 }
 
+/// 停止/恢复重复任务（只影响以后的生成；历史实例与完成记录保留）
+#[tauri::command]
+fn task_stop_repeat(app: tauri::AppHandle, id: i64, stopped: bool) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::task_stop_repeat(&conn, id, stopped)
+}
+
+/// 开机自启动是否显示主窗（默认不显示 = 静默后台启动）
+#[tauri::command]
+fn startup_show_get(app: tauri::AppHandle) -> Result<bool, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    Ok(storage::get_setting(&conn, "autostart.show_window")
+        .map(|v| v == "1")
+        .unwrap_or(false))
+}
+
+#[tauri::command]
+fn startup_show_set(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::set_setting(&conn, "autostart.show_window", if on { "1" } else { "0" })
+}
+
 /// 习惯追踪格：固定事项 × 近 N 天完成情况
 #[tauri::command]
 fn habit_grid(app: tauri::AppHandle, days: Option<i32>) -> Result<Vec<storage::HabitRow>, String> {
@@ -678,6 +703,8 @@ fn rule_add(
     card_duration_sec: i32,
     accent_color: Option<String>,
     style: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
 ) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
@@ -692,6 +719,8 @@ fn rule_add(
         card_duration_sec,
         accent_color,
         style.as_deref().unwrap_or("card"),
+        start_date,
+        end_date,
     )
 }
 
@@ -862,6 +891,8 @@ fn rule_update(
     card_duration_sec: i32,
     accent_color: Option<String>,
     style: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
 ) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
@@ -877,6 +908,8 @@ fn rule_update(
         card_duration_sec,
         accent_color,
         style,
+        start_date,
+        end_date,
     )
 }
 
@@ -1856,9 +1889,11 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // 自启动注册带 --autostart 标记：启动时用它区分"开机拉起"与"用户手动打开"，
+        // 前者按设置（默认静默后台），后者照常显示主窗
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec!["--autostart"]),
         ))
         .plugin(tauri_plugin_opener::init())
         .manage(Db(Mutex::new(db)))
@@ -1880,6 +1915,9 @@ pub fn run() {
             task_update,
             task_set_done,
             task_delete,
+            task_stop_repeat,
+            startup_show_get,
+            startup_show_set,
             todo_stats,
             habit_grid,
             habit_toggle,
@@ -2109,6 +2147,35 @@ pub fn run() {
             };
             if should_show_island {
                 island::show(app.handle());
+            }
+
+            // 主窗显示策略：手动启动总是显示；开机自启动（--autostart 标记）按设置，
+            // 默认静默后台（记录类软件应无痕）。主窗在 tauri.conf.json 里 visible:false，
+            // 由这里决定要不要 show。
+            let autostarted = std::env::args().any(|a| a == "--autostart");
+            let show_main = if autostarted {
+                let db = app.state::<Db>().inner();
+                match db.0.lock() {
+                    Ok(conn) => storage::get_setting(&conn, "autostart.show_window")
+                        .map(|v| v == "1")
+                        .unwrap_or(false),
+                    Err(_) => true,
+                }
+            } else {
+                true
+            };
+            if show_main {
+                show_main_window(app.handle());
+            }
+
+            // 自启动注册重写（幂等）：老版本注册的条目不带 --autostart 标记，
+            // 已启用就重写一次，让下一次开机带上标记
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let auto = app.autolaunch();
+                if auto.is_enabled().unwrap_or(false) {
+                    let _ = auto.enable();
+                }
             }
             Ok(())
         })
