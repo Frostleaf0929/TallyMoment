@@ -9,18 +9,29 @@ export const isLight = ref(false);
 /** 应用排行显示条数（设置页可调 5~20） */
 export const appsTopN = ref(10);
 
+/** 清单页（原"事项"）的子标签：总览 / 任务 / 提示 / 日志 */
+export type ChecklistTab = "overview" | "tasks" | "rules" | "notes";
+
 /** 跨页跳转意图（今日卡片、应用排行、某天弹层、任务名 → 历史页/详细页） */
 export const navIntent = ref<{
-  view: "recent" | "app" | "items" | "task";
+  view: "recent" | "app" | "items" | "task" | "checklist";
   app?: string;
   date?: string;
   /** view = task 时：固定事项模板的任务 id */
   taskId?: number;
+  /** view = checklist 时：要落的子标签 */
+  sub?: ChecklistTab;
   at: number;
 } | null>(null);
 
-export function jumpTo(view: "recent" | "app" | "items" | "task", app?: string, date?: string, taskId?: number) {
-  navIntent.value = { view, app, date, taskId, at: Date.now() };
+export function jumpTo(
+  view: "recent" | "app" | "items" | "task" | "checklist",
+  app?: string,
+  date?: string,
+  taskId?: number,
+  sub?: ChecklistTab
+) {
+  navIntent.value = { view, app, date, taskId, sub, at: Date.now() };
 }
 
 /** 单纯切到某个页面（不传数据），用于"返回待办"这类按钮 */

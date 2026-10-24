@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { NButton, NInput, NSelect } from "naive-ui";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { NButton } from "naive-ui";
+import { save } from "@tauri-apps/plugin-dialog";
 import type { ReminderRule, Task, TodoStats } from "../types";
 import Icon from "../components/Icon.vue";
 import TaskBoard from "../components/TaskBoard.vue";
@@ -18,56 +18,10 @@ const tasks = ref<Task[]>([]);
 const rules = ref<ReminderRule[]>([]);
 const stats = ref<TodoStats | null>(null);
 
-const newContent = ref("");
-const newPriority = ref(1);
-const newDue = ref<string | null>(null);
 const err = ref("");
 const msg = ref("");
 /** 月历选中的那天，传给日志面板 */
 const pickedDay = ref<number>(Date.now());
-
-const repeatOptions = [
-  { label: "不重复", value: "" },
-  { label: "每天", value: "daily" },
-  { label: "每周", value: "weekly" },
-  { label: "每月", value: "monthly" },
-  { label: "每年", value: "yearly" },
-];
-const newRepeat = ref("");
-
-/* 正在输入的任务本地草稿：切走/意外退出不丢（保存成功后清除） */
-const taskDraftKey = "task.draft.new";
-try {
-  const saved = localStorage.getItem(taskDraftKey);
-  if (saved) {
-    const d = JSON.parse(saved) as { content?: string; due?: string | null; priority?: number; repeat?: string };
-    if (typeof d.content === "string" && d.content) {
-      newContent.value = d.content;
-      if (typeof d.due === "string") newDue.value = d.due;
-      if (typeof d.priority === "number") newPriority.value = d.priority;
-      if (typeof d.repeat === "string") newRepeat.value = d.repeat;
-    }
-  }
-} catch {
-  /* 忽略 */
-}
-let taskDraftTimer = 0;
-function saveTaskDraft() {
-  try {
-    if (!newContent.value.trim()) return;
-    localStorage.setItem(
-      taskDraftKey,
-      JSON.stringify({ content: newContent.value, due: newDue.value, priority: newPriority.value, repeat: newRepeat.value })
-    );
-  } catch {
-    /* 忽略 */
-  }
-}
-watch(newContent, () => {
-  window.clearTimeout(taskDraftTimer);
-  taskDraftTimer = window.setTimeout(saveTaskDraft, 400);
-});
-watch([newDue, newPriority, newRepeat], () => saveTaskDraft());
 
 const debouncedHabitRefresh = ref(0);
 let habitRefreshTimer = 0;
@@ -75,83 +29,6 @@ watch(() => tasks.value.map((t) => `${t.id}:${t.done ? 1 : 0}`).join(","), () =>
   window.clearTimeout(habitRefreshTimer);
   habitRefreshTimer = window.setTimeout(() => (debouncedHabitRefresh.value = Date.now()), 600);
 });
-
-const priorityOptions = [
-  { label: "高", value: 2 },
-  { label: "中", value: 1 },
-  { label: "低", value: 0 },
-];
-
-/** Markdown 导出（对齐 Obsidian / Notion 的 - [ ] 语法） */
-async function exportMd() {
-  err.value = "";
-  try {
-    const picked = await save({
-      title: "导出待办为 Markdown",
-      defaultPath: `拾刻待办-${new Date().toISOString().slice(0, 10)}.md`,
-      filters: [{ name: "Markdown", extensions: ["md"] }],
-    });
-    if (!picked) return;
-    const file = await invoke<string>("tasks_export_md", { path: picked });
-    msg.value = `已导出：${file}`;
-  } catch (e) {
-    err.value = String(e).replace(/^.*Error: /, "");
-  }
-}
-
-/** Markdown 导入（同内容的任务自动跳过） */
-async function importMd() {
-  err.value = "";
-  try {
-    const picked = await open({
-      multiple: false,
-      directory: false,
-      title: "选择 Markdown 文件",
-      filters: [{ name: "Markdown", extensions: ["md", "markdown", "txt"] }],
-    });
-    if (!picked || Array.isArray(picked)) return;
-    const sum = await invoke<{ skipped: number }>("tasks_import_md", { path: picked });
-    await load();
-    msg.value = `导入完成，跳过 ${sum.skipped} 条已存在的任务`;
-  } catch (e) {
-    err.value = String(e).replace(/^.*Error: /, "");
-  }
-}
-
-/** 提醒规则：结构化字段多，用 JSON 才能完整回环 */
-async function exportRules() {
-  err.value = "";
-  try {
-    const picked = await save({
-      title: "导出提醒规则",
-      defaultPath: `拾刻提醒规则-${new Date().toISOString().slice(0, 10)}.json`,
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-    if (!picked) return;
-    const file = await invoke<string>("rules_export_json", { path: picked });
-    msg.value = `已导出规则：${file}`;
-  } catch (e) {
-    err.value = String(e).replace(/^.*Error: /, "");
-  }
-}
-
-async function importRules() {
-  err.value = "";
-  try {
-    const picked = await open({
-      multiple: false,
-      directory: false,
-      title: "选择规则 JSON",
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-    if (!picked || Array.isArray(picked)) return;
-    const [added, skipped] = await invoke<[number, number]>("rules_import_json", { path: picked });
-    await load();
-    msg.value = `导入规则 ${added} 条，跳过同名的 ${skipped} 条`;
-  } catch (e) {
-    err.value = String(e).replace(/^.*Error: /, "");
-  }
-}
 
 /** 整包导出：任务 MD + 规则 JSON（同一目录、同一时间戳） */
 async function exportAll() {
@@ -187,19 +64,11 @@ function maskRelease(e: MouseEvent, close: () => void) {
   maskDownOnSelf = false;
 }
 
-/** 日志面板当前编辑的日期（放大按钮跳「详细 · 事项」用） */
-function noteDateStr(): string {
-  const d = new Date(pickedDay.value);
-  const m = `${d.getMonth() + 1}`.padStart(2, "0");
-  const day = `${d.getDate()}`.padStart(2, "0");
-  return `${d.getFullYear()}-${m}-${day}`;
-}
-
 function openDetail(date: string) {
   detailDate.value = date;
 }
 
-/** 放大：不在这里放大，而是跳到 详细 · 事项 里看同一天 */
+/** 放大：不在这里放大，而是跳到 详细 · 清单 · 日志 里看同一天 */
 function openInDetail() {
   jumpTo("items", undefined, detailDate.value);
   detailDate.value = "";
@@ -298,10 +167,17 @@ async function load() {
 }
 
 
-/** 点任务名 → 详细 · 事项，按任务看坚持情况 */
+/** 点任务名 → 详细 · 清单 · 任务，按任务看坚持情况 */
 function jumpToDetail(taskId: number) {
   jumpTo("task", undefined, undefined, taskId);
 }
+
+/** 卡片右上角的定位胶囊：直达「详细 · 清单」对应子标签（样式与月历定位按钮同族） */
+function jumpChecklist(sub: "tasks" | "rules" | "notes") {
+  jumpTo("checklist", undefined, undefined, undefined, sub);
+}
+
+const notesPanel = ref<InstanceType<typeof NotesPanel> | null>(null);
 
 /* 任何跨页跳转都先关掉本页的二级框：不然遮罩盖着新页面，看起来像"点了没反应" */
 watch([navIntent, tabIntent], () => {
@@ -309,13 +185,15 @@ watch([navIntent, tabIntent], () => {
   detailDate.value = "";
 });
 
-/* 详细 · 事项 里点"编辑"→ 打开日志面板并定位到那天 */
+/* 详细 · 清单 · 日志 里点"编辑"→ 打开日志面板并直接进那天的编辑器 */
 watch(notesIntent, async (n) => {
   if (!n) return;
   notesIntent.value = null;
   pickedDay.value = new Date(`${n.date}T00:00:00`).getTime();
   openModule.value = "notes";
   await load();
+  await nextTick();
+  notesPanel.value?.openEditor(n.date);
 });
 
 /* ---------- 习惯追踪（固定事项完成格，挪到待办页底部；点格子直接打卡） ---------- */
@@ -345,35 +223,6 @@ watch(activeTab, (t) => {
   if (t === "todo") void loadHabit();
 });
 watch(debouncedHabitRefresh, () => void loadHabit());
-
-async function addTask() {
-  err.value = "";
-  if (!newContent.value.trim()) {
-    err.value = "先写点任务内容";
-    return;
-  }
-  const dueTs = newDue.value
-    ? Math.floor(new Date(`${new Date().toDateString()} ${newDue.value}`).getTime() / 1000)
-    : null;
-  try {
-    await invoke("task_add", {
-      content: newContent.value,
-      priority: newPriority.value,
-      repeatMode: newRepeat.value,
-      dueTs,
-    });
-    newContent.value = "";
-    newDue.value = null;
-    try {
-      localStorage.removeItem(taskDraftKey);
-    } catch {
-      /* 忽略 */
-    }
-    await load();
-  } catch (e) {
-    err.value = String(e).replace(/^.*Error: /, "");
-  }
-}
 
 /** 今日待办卡高度以月历卡为准。
  *  关键：量的是月历卡的"内容层"（calinner）——内容层高度永远等于自身内容，
@@ -483,32 +332,56 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     <!-- 任务看板 -->
     <!-- 三卡并列：任务 / 待办提醒 / 日志（点卡片在二级框里编辑） -->
     <section class="modrow">
-      <button class="glass-card mcard" @click="openModule = 'tasks'">
+      <div class="glass-card mcard" role="button" tabindex="0" @click="openModule = 'tasks'" @keyup.enter="openModule = 'tasks'">
         <div class="mhead">
           <h2>任务</h2>
-          <Icon name="checklist" :size="16" />
+          <span class="macts">
+            <button class="jump" title="在「详细 · 清单」中查看" @click.stop="jumpChecklist('tasks')">
+              <svg viewBox="0 0 24 24" class="jicon" aria-hidden="true">
+                <path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span class="jtxt">清单</span>
+            </button>
+            <Icon name="checklist" :size="16" />
+          </span>
         </div>
         <p class="mnum">{{ openCount }} <small>项未完成</small></p>
         <p class="msub">今日待办 {{ todayTasks.length }} 项 · 点开编辑清单</p>
-      </button>
+      </div>
 
-      <button class="glass-card mcard" @click="openModule = 'rules'">
+      <div class="glass-card mcard" role="button" tabindex="0" @click="openModule = 'rules'" @keyup.enter="openModule = 'rules'">
         <div class="mhead">
           <h2>提示</h2>
-          <Icon name="bell" :size="16" />
+          <span class="macts">
+            <button class="jump" title="在「详细 · 清单」中查看" @click.stop="jumpChecklist('rules')">
+              <svg viewBox="0 0 24 24" class="jicon" aria-hidden="true">
+                <path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span class="jtxt">清单</span>
+            </button>
+            <Icon name="bell" :size="16" />
+          </span>
         </div>
         <p class="mnum">{{ rules.filter((r) => r.enabled).length }} <small>条启用中</small></p>
         <p class="msub">共 {{ rules.length }} 条规则 · 点开管理</p>
-      </button>
+      </div>
 
-      <button class="glass-card mcard" @click="openModule = 'notes'">
+      <div class="glass-card mcard" role="button" tabindex="0" @click="openModule = 'notes'" @keyup.enter="openModule = 'notes'">
         <div class="mhead">
           <h2>日志</h2>
-          <Icon name="doc" :size="16" />
+          <span class="macts">
+            <button class="jump" title="在「详细 · 清单」中查看" @click.stop="jumpChecklist('notes')">
+              <svg viewBox="0 0 24 24" class="jicon" aria-hidden="true">
+                <path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span class="jtxt">清单</span>
+            </button>
+            <Icon name="doc" :size="16" />
+          </span>
         </div>
         <p class="mnum">{{ noteCount }} <small>篇</small></p>
         <p class="msub">{{ lastNoteDate || "还没有日志" }} · 点开写今天的</p>
-      </button>
+      </div>
     </section>
 
 
@@ -551,15 +424,15 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
           <div class="modhead">
             <h2>{{ moduleTitle }}</h2>
             <div class="dacts">
-              <!-- 日志二级框：放大图标与关闭并排，跳「详细 · 事项」看同一天 -->
+              <!-- 日志二级框：编辑胶囊（打开选中那天的日志编辑器，与待办卡片同族样式） -->
               <button
                 v-if="openModule === 'notes'"
-                class="wbtn"
-                title="在「详细 · 事项」中打开"
-                @click="jumpTo('items', undefined, noteDateStr())"
+                class="wbtn editpill"
+                title="编辑这天的日志"
+                @click="notesPanel?.openEditor()"
               >
-                <svg width="12" height="12" viewBox="0 0 12 12">
-                  <rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+                <svg width="12" height="12" viewBox="0 0 24 24">
+                  <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </button>
               <button class="wbtn" title="关闭" @click="openModule = ''">
@@ -570,31 +443,12 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
             </div>
           </div>
           <template v-if="openModule === 'tasks'">
-            <div class="addrow">
-              <NInput
-                v-model:value="newContent"
-                size="small"
-                placeholder="添加任务…（时间留空 = 今天）"
-                @keyup.enter="addTask"
-              />
-              <NSelect v-model:value="newPriority" size="small" :options="priorityOptions" style="width: 84px" />
-              <input v-model="newDue" type="time" class="tp" />
-              <NSelect v-model:value="newRepeat" size="small" :options="repeatOptions" style="width: 92px" />
-              <NButton size="small" type="primary" secondary @click="addTask">添加</NButton>
-              <NButton size="tiny" quaternary @click="importMd">导入 MD</NButton>
-              <NButton size="tiny" quaternary @click="exportMd">导出 MD</NButton>
-            </div>
             <TaskBoard :tasks="tasks" @reload="load" @jump="jumpToDetail" />
           </template>
           <template v-else-if="openModule === 'rules'">
-            <div class="addrow">
-              <NButton size="tiny" quaternary @click="importRules">导入 JSON</NButton>
-              <NButton size="tiny" quaternary @click="exportRules">导出 JSON</NButton>
-              <span class="msub">规则支持卡片 / 全屏两种提醒方式</span>
-            </div>
             <ReminderRules :rules="rules" @reload="load" />
           </template>
-          <NotesPanel v-else-if="openModule === 'notes'" :day-ts="pickedDay" />
+          <NotesPanel v-else-if="openModule === 'notes'" ref="notesPanel" :day-ts="pickedDay" />
         </div>
       </div>
     </Teleport>
@@ -606,8 +460,8 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
         <div class="modhead">
           <h2>{{ detailDate }} · 那天</h2>
           <div class="dacts">
-            <!-- 与窗口控制同款图标：□ 放大（跳转到 详细 · 事项）、× 关闭 -->
-            <button class="wbtn" title="在「详细 · 事项」中打开" @click="openInDetail">
+            <!-- 与窗口控制同款图标：□ 放大（跳转到 详细 · 清单 · 日志）、× 关闭 -->
+            <button class="wbtn" title="在「详细 · 清单 · 日志」中打开" @click="openInDetail">
               <svg width="12" height="12" viewBox="0 0 12 12">
                 <rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
               </svg>
@@ -672,6 +526,60 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   border: 1px solid var(--card-border);
   cursor: pointer;
   font-family: inherit;
+}
+
+/* 卡片右上角的跳转胶囊：默认圆形图标，悬停展开文字（与月历定位按钮同族） */
+.macts {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.jump {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface);
+  color: var(--text-faint);
+  cursor: pointer;
+  overflow: hidden;
+  opacity: 0.75;
+  transition: width var(--dur) cubic-bezier(0.22, 0.61, 0.36, 1), background var(--dur), color var(--dur), border-color var(--dur), opacity var(--dur);
+}
+
+.jicon {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.jtxt {
+  max-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  transition: max-width var(--dur) ease, opacity var(--dur) ease, margin-left var(--dur) ease;
+}
+
+.jump:hover {
+  width: 56px;
+  opacity: 1;
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.jump:hover .jtxt {
+  max-width: 30px;
+  opacity: 1;
+  margin-left: 4px;
 }
 
 .mhead {
@@ -887,6 +795,20 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
 .dbtn:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+/* 日志弹层的「编辑」胶囊：与任务卡编辑按钮同族的强调态 */
+.wbtn.editpill {
+  width: auto;
+  padding: 0 9px;
+  color: var(--accent-text);
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.wbtn.editpill:hover {
+  color: var(--surface);
+  background: var(--accent-text);
 }
 
 .sheet {

@@ -12,7 +12,7 @@ import {
   type SelEdit,
 } from "../lib/mdBlocks";
 
-/** 每日日志：Markdown 正文 + 图片附件（后端 notes.rs） */
+/** 每日日志：默认是记录列表（列表 / 画廊两种看法），点开某天才进编辑器（与任务/提醒同一套交互） */
 const props = defineProps<{ dayTs?: number }>();
 interface DailyNote {
   date: string;
@@ -22,18 +22,23 @@ interface DailyNote {
 }
 
 const day = ref(Date.now());
+const editorOpen = ref(false);
 const content = ref("");
 const images = ref<string[]>([]);
 const thumbs = reactive<Record<string, string>>({});
-const recent = ref<DailyNote[]>([]);
 const msg = ref("");
 const err = ref("");
 const busy = ref(false);
 /** 视图三态：edit 只编辑 / split 上下分栏（编辑+预览）/ preview 只读预览 */
 const noteView = ref<"edit" | "split" | "preview">("split");
-
 /** 插入图片的宽度（新图片块用） */
 const imgWidth = ref<"100%" | "60%" | "33%">("100%");
+
+/* ---------- 记录列表（默认主体） ---------- */
+const allNotes = ref<DailyNote[]>([]);
+const listLoaded = ref(false);
+const searchText = ref("");
+const listMode = ref<"list" | "gallery">("list");
 
 function ymd(ts: number): string {
   const d = new Date(ts);
@@ -43,6 +48,94 @@ function ymd(ts: number): string {
 const today = ymd(Date.now());
 const dateStr = () => ymd(day.value);
 
+async function loadList() {
+  try {
+    allNotes.value = await invoke<DailyNote[]>("notes_recent", { limit: 365 });
+    listLoaded.value = true;
+  } catch {
+    allNotes.value = [];
+  }
+}
+
+/** 摘要：剥掉 Markdown 标记与图片语法，取开头一段 */
+function brief(text: string): string {
+  return text
+    .replace(/<img[^>]*>/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/[*_~`>|-]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function firstLine(text: string): string {
+  for (const raw of text.split("\n")) {
+    const l = brief(raw);
+    if (l) return l.slice(0, 40);
+  }
+  return "";
+}
+
+const filteredNotes = computed(() => {
+  const q = searchText.value.trim().toLowerCase();
+  if (!q) return allNotes.value;
+  return allNotes.value.filter(
+    (n) => n.date.includes(q) || n.content.toLowerCase().includes(q)
+  );
+});
+
+/* ---------- 画廊封面：懒加载（每篇取第一张图，缩到 320px） ---------- */
+const covers = reactive<Record<string, string>>({});
+let coversStarted = false;
+
+function toThumb(dataUrl: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => {
+      try {
+        const k = Math.min(1, 320 / Math.max(img.width, img.height));
+        const cv = document.createElement("canvas");
+        cv.width = Math.max(1, Math.round(img.width * k));
+        cv.height = Math.max(1, Math.round(img.height * k));
+        const ctx = cv.getContext("2d");
+        if (!ctx) return resolve(dataUrl);
+        ctx.drawImage(img, 0, 0, cv.width, cv.height);
+        resolve(cv.toDataURL("image/jpeg", 0.8));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+async function loadCovers() {
+  if (coversStarted) return;
+  coversStarted = true;
+  let n = 0;
+  for (const note of allNotes.value) {
+    if (n >= 60) break; // 封面懒加载上限：最多 60 篇，其余显示文字卡
+    if (!note.images.length || covers[note.date]) continue;
+    n++;
+    try {
+      const [mime, b64] = await invoke<[string, string]>("notes_image_data", {
+        date: note.date,
+        name: note.images[0],
+      });
+      covers[note.date] = await toThumb(`data:${mime};base64,${b64}`);
+    } catch {
+      /* 单篇失败就显示文字卡 */
+    }
+  }
+}
+
+watch(listMode, (m) => {
+  if (m === "gallery") void loadCovers();
+});
+
+/* ---------- 编辑器（次级视图） ---------- */
 /** 附件加载为 data URL（同一天内缓存） */
 async function ensureThumb(date: string, name: string) {
   const key = `${date}/${name}`;
@@ -52,14 +145,6 @@ async function ensureThumb(date: string, name: string) {
     thumbs[key] = `data:${mime};base64,${b64}`;
   } catch {
     /* 忽略单张读失败 */
-  }
-}
-
-async function loadList() {
-  try {
-    recent.value = await invoke<DailyNote[]>("notes_recent", { limit: 30 });
-  } catch {
-    recent.value = [];
   }
 }
 
@@ -92,6 +177,21 @@ async function loadDay() {
     err.value = String(e).replace(/^.*Error: /, "");
   }
 }
+
+function openEditor(date?: string) {
+  if (date) day.value = new Date(`${date}T00:00:00`).getTime();
+  editorOpen.value = true;
+  void loadDay();
+}
+
+function closeEditor() {
+  window.clearTimeout(draftTimer);
+  flushDraft();
+  editorOpen.value = false;
+  void loadList();
+}
+
+defineExpose({ openEditor });
 
 /* ---------- 实时草稿：输入即缓存到浏览器本地，防意外退出丢全文 ---------- */
 const draftRestore = ref<{ content: string; images: string[] | null; at: number } | null>(null);
@@ -166,8 +266,8 @@ async function saveDay() {
       /* 忽略 */
     }
     draftRestore.value = null;
+    coversStarted = false;
     await loadList();
-    if (overviewLoaded.value) await reloadOverview();
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   } finally {
@@ -199,8 +299,8 @@ function applySel(fn: (t: string, s: number, e: number) => SelEdit) {
 
 const line = (kind: "heading" | "todo" | "list" | "quote" | "plain") =>
   applySel((t, s, e) => toggleLinePrefix(t, s, e, kind));
-const wrap = (open: string, close: string) =>
-  applySel((t, s, e) => wrapSelection(t, s, e, open, close));
+const wrap = (openStr: string, close: string) =>
+  applySel((t, s, e) => wrapSelection(t, s, e, openStr, close));
 const hr = () => applySel((t, s, e) => insertAtCursor(t, s, e, "---"));
 
 /** 编辑器内 Ctrl+B / Ctrl+I（与 Notion 一致） */
@@ -299,197 +399,165 @@ async function importMd() {
   }
 }
 
-async function pickRecent(d: string) {
-  day.value = new Date(`${d}T00:00:00`).getTime();
-  await loadDay();
-}
-
-/* ---------- 历史总览：全部日志一览 + 搜索，不用一天一天点 ---------- */
-const overview = ref(false);
-const allNotes = ref<DailyNote[]>([]);
-const overviewLoaded = ref(false);
-const searchText = ref("");
-
-async function toggleOverview() {
-  overview.value = !overview.value;
-  if (overview.value && !overviewLoaded.value) {
-    await reloadOverview();
-  }
-}
-
-async function reloadOverview() {
-  try {
-    allNotes.value = await invoke<DailyNote[]>("notes_recent", { limit: 365 });
-    overviewLoaded.value = true;
-  } catch {
-    allNotes.value = [];
-  }
-}
-
-/** 摘要：剥掉 Markdown 标记与图片语法，取开头一段 */
-function brief(content: string): string {
-  const text = content
-    .replace(/<img[^>]*>/g, " ")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/[*_~`>|-]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return text.slice(0, 90);
-}
-
-const filteredNotes = computed(() => {
-  const q = searchText.value.trim().toLowerCase();
-  if (!q) return allNotes.value;
-  return allNotes.value.filter(
-    (n) => n.date.includes(q) || n.content.toLowerCase().includes(q)
-  );
-});
-
-async function openFromOverview(d: string) {
-  overview.value = false;
-  await pickRecent(d);
-}
-
-// 从月历点一天过来：切到那天
+// 从月历点一天过来 / 详细事项跳来：直接打开那天的编辑器
 watch(
   () => props.dayTs,
   async (v) => {
     if (!v) return;
     day.value = v;
+    editorOpen.value = true;
     await loadDay();
   }
 );
 
-onMounted(async () => {
-  await loadList();
-  await loadDay();
+onMounted(() => {
+  void loadList();
+  void loadDay();
 });
 </script>
 
 <template>
   <div class="notes">
-    <div class="bar">
-      <NDatePicker
-        v-model:value="day"
-        type="date"
-        :actions="['confirm']"
-        :clearable="false"
-        style="width: 170px"
-        @update:value="loadDay"
-      />
-      <span class="d">{{ dateStr() }}{{ dateStr() === today ? " · 今天" : "" }}</span>
-      <div class="acts">
-        <NButton size="tiny" quaternary :type="overview ? 'primary' : 'default'" @click="toggleOverview">
-          {{ overview ? "回到编辑" : "历史总览" }}
-        </NButton>
-        <NButton size="tiny" quaternary @click="addImage">添加图片</NButton>
-        <NButton size="tiny" quaternary @click="importMd">导入 MD</NButton>
-        <NButton size="tiny" quaternary @click="exportMd">导出全部 MD</NButton>
-        <NButton size="small" type="primary" secondary :loading="busy" @click="saveDay">保存</NButton>
-      </div>
-    </div>
-
-    <div class="chips">
-      <button
-        v-for="n in recent"
-        :key="n.date"
-        class="chip"
-        :class="{ active: n.date === dateStr() }"
-        @click="pickRecent(n.date)"
-      >
-        <span>{{ n.date.slice(5) }}</span>
-        <span class="cnt">{{ n.images.length ? `${n.images.length}图` : "" }}</span>
-      </button>
-      <span v-if="!recent.length" class="empty">还没有日志，写第一条试试</span>
-    </div>
-
-    <!-- 历史总览：全部日志（日期 / 摘要 / 图数），点一条回到那天的编辑 -->
-    <template v-if="overview">
+    <!-- ===== 记录列表（默认主体）：列表 / 画廊 ===== -->
+    <template v-if="!editorOpen">
       <div class="ov-bar">
+        <div class="viewseg">
+          <button :class="{ on: listMode === 'list' }" @click="listMode = 'list'">列表</button>
+          <button :class="{ on: listMode === 'gallery' }" @click="listMode = 'gallery'">画廊</button>
+        </div>
         <input v-model="searchText" class="ov-search" placeholder="搜索日期或正文…" />
         <span class="ov-cnt">{{ filteredNotes.length }} 篇</span>
+        <button class="newbtn" @click="openEditor(today)">写今天的</button>
       </div>
-      <div class="ovlist">
-        <button v-for="n in filteredNotes" :key="n.date" class="ovrow" @click="openFromOverview(n.date)">
+
+      <!-- 列表 -->
+      <div v-if="listMode === 'list'" class="ovlist">
+        <div v-for="n in filteredNotes" :key="n.date" class="ovrow" @click="openEditor(n.date)">
           <span class="ovdate" :class="{ td: n.date === today }">{{ n.date }}</span>
-          <span class="ovbrief">{{ brief(n.content) || "（无正文）" }}</span>
+          <span class="ovbrief">{{ brief(n.content).slice(0, 90) || "（无正文）" }}</span>
           <span v-if="n.images.length" class="ovimgs">{{ n.images.length }}图</span>
-        </button>
+          <button class="mini edit" title="编辑这天" @click.stop="openEditor(n.date)">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span>编辑</span>
+          </button>
+        </div>
         <span v-if="!filteredNotes.length" class="empty">
-          {{ allNotes.length ? "没有匹配的日志" : "还没有日志" }}
+          {{ allNotes.length ? "没有匹配的日志" : "还没有日志，点右上角「写今天的」开始" }}
         </span>
       </div>
+
+      <!-- 画廊（Notion 式：封面图 + 日期/标题） -->
+      <div v-else class="ggrid">
+        <button v-for="n in filteredNotes" :key="'g' + n.date" class="gcard" @click="openEditor(n.date)">
+          <span class="gcover">
+            <img v-if="covers[n.date]" :src="covers[n.date]" alt="" draggable="false" />
+            <span v-else class="gnoimg">{{ brief(n.content).slice(0, 36) || "（空日志）" }}</span>
+          </span>
+          <span class="gmeta">
+            <span class="gdate" :class="{ td: n.date === today }">{{ n.date }}</span>
+            <span v-if="n.images.length" class="gcnt">{{ n.images.length }}图</span>
+          </span>
+          <span class="gtitle">{{ firstLine(n.content) || "（无标题）" }}</span>
+        </button>
+        <span v-if="!filteredNotes.length" class="empty">没有匹配的日志</span>
+      </div>
     </template>
 
-    <!-- 工具栏固定两行：第一行是文字效果，第二行是"新图片宽度"+ 视图切换 -->
+    <!-- ===== 编辑器（次级视图） ===== -->
     <template v-else>
+      <div class="bar">
+        <button class="mini back" @click="closeEditor">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14.5 5.5L8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>返回列表</span>
+        </button>
+        <NDatePicker
+          v-model:value="day"
+          type="date"
+          :actions="['confirm']"
+          :clearable="false"
+          style="width: 150px"
+          @update:value="loadDay"
+        />
+        <span class="d">{{ dateStr() }}{{ dateStr() === today ? " · 今天" : "" }}</span>
+        <div class="acts">
+          <NButton size="tiny" quaternary @click="addImage">添加图片</NButton>
+          <NButton size="tiny" quaternary @click="importMd">导入 MD</NButton>
+          <NButton size="tiny" quaternary @click="exportMd">导出全部 MD</NButton>
+          <NButton size="small" type="primary" secondary :loading="busy" @click="saveDay">保存</NButton>
+        </div>
+      </div>
+
+      <!-- 工具栏固定两行：文字效果 / 新图片宽度+视图切换 -->
       <div class="blocks">
-      <button class="tb" title="选中行转标题（再点升级，### 后回到正文）" @click="line('heading')">标题</button>
-      <button class="tb" title="转回普通段落" @click="line('plain')">正文</button>
-      <button class="tb" title="选中行加待办框 / 取消" @click="line('todo')">待办</button>
-      <button class="tb" title="选中行加项目符号 / 取消" @click="line('list')">列表</button>
-      <button class="tb" title="选中行变引用 / 取消" @click="line('quote')">引用</button>
-      <span class="tb-sep"></span>
-      <button class="tb" title="选中文字加粗（Ctrl+B）" @click="wrap('**', '**')"><b>B</b></button>
-      <button class="tb" title="选中文字斜体（Ctrl+I）" @click="wrap('*', '*')"><i>I</i></button>
-      <button class="tb" title="选中文字下划线" @click="wrap('<u>', '</u>')"><u>U</u></button>
-      <button class="tb" title="选中文字删除线" @click="wrap('~~', '~~')"><s>S</s></button>
-      <button class="tb" title="行内代码" @click="wrap(String.fromCharCode(96), String.fromCharCode(96))">code</button>
-      <button class="tb" title="链接" @click="wrap('[', '](链接地址)')">链接</button>
-      <span class="tb-sep"></span>
-      <button class="tb" title="在光标处插入分割线" @click="hr">分割线</button>
-      <button class="tb" @click="addImage">图片…</button>
-    </div>
-    <div class="blocks subrow">
-      <span class="tb-w">
-        新图片宽度
-        <button class="tb sm" :class="{ active: imgWidth === '33%' }" @click="imgWidth = '33%'">小</button>
-        <button class="tb sm" :class="{ active: imgWidth === '60%' }" @click="imgWidth = '60%'">中</button>
-        <button class="tb sm" :class="{ active: imgWidth === '100%' }" @click="imgWidth = '100%'">全宽</button>
-      </span>
-      <div class="viewseg">
-        <button :class="{ on: noteView === 'edit' }" @click="noteView = 'edit'">编辑</button>
-        <button :class="{ on: noteView === 'split' }" @click="noteView = 'split'">分栏</button>
-        <button :class="{ on: noteView === 'preview' }" @click="noteView = 'preview'">预览</button>
+        <button class="tb" title="选中行转标题（再点升级，### 后回到正文）" @click="line('heading')">标题</button>
+        <button class="tb" title="转回普通段落" @click="line('plain')">正文</button>
+        <button class="tb" title="选中行加待办框 / 取消" @click="line('todo')">待办</button>
+        <button class="tb" title="选中行加项目符号 / 取消" @click="line('list')">列表</button>
+        <button class="tb" title="选中行变引用 / 取消" @click="line('quote')">引用</button>
+        <span class="tb-sep"></span>
+        <button class="tb" title="选中文字加粗（Ctrl+B）" @click="wrap('**', '**')"><b>B</b></button>
+        <button class="tb" title="选中文字斜体（Ctrl+I）" @click="wrap('*', '*')"><i>I</i></button>
+        <button class="tb" title="选中文字下划线" @click="wrap('<u>', '</u>')"><u>U</u></button>
+        <button class="tb" title="选中文字删除线" @click="wrap('~~', '~~')"><s>S</s></button>
+        <button class="tb" title="行内代码" @click="wrap(String.fromCharCode(96), String.fromCharCode(96))">code</button>
+        <button class="tb" title="链接" @click="wrap('[', '](链接地址)')">链接</button>
+        <span class="tb-sep"></span>
+        <button class="tb" title="在光标处插入分割线" @click="hr">分割线</button>
+        <button class="tb" @click="addImage">图片…</button>
       </div>
-    </div>
-
-    <!-- 未保存草稿提示条：意外退出也不丢内容 -->
-    <div v-if="draftRestore" class="draftbar">
-      <span>有 {{ fmtAt(draftRestore.at) }} 的未保存草稿</span>
-      <button class="tb sm" @click="restoreDraft">恢复草稿</button>
-      <button class="tb sm" @click="discardDraft">丢弃</button>
-    </div>
-
-    <div v-show="noteView !== 'preview'" ref="editorWrap" class="editor" @keydown="onEditorKey">
-      <NInput
-        v-model:value="content"
-        type="textarea"
-        placeholder="写点什么…也可以直接手写 Markdown；选中文字后点上面的按钮直接加格式"
-        :autosize="{ minRows: 5, maxRows: 14 }"
-      />
-    </div>
-
-    <div v-show="noteView !== 'edit'" class="preview">
-      <MarkdownPreview
-        :content="content"
-        :images="imageMap"
-        @update:content="(v: string) => (content = v)"
-      />
-    </div>
-
-    <div v-if="images.length" class="imgs">
-      <div v-for="name in images" :key="name" class="img">
-        <img v-if="thumbs[`${dateStr()}/${name}`]" :src="thumbs[`${dateStr()}/${name}`]" alt="" />
-        <span v-else class="none">读取中…</span>
-        <button class="rm" title="从此天移除" @click="removeImage(name)">×</button>
+      <div class="blocks subrow">
+        <span class="tb-w">
+          新图片宽度
+          <button class="tb sm" :class="{ active: imgWidth === '33%' }" @click="imgWidth = '33%'">小</button>
+          <button class="tb sm" :class="{ active: imgWidth === '60%' }" @click="imgWidth = '60%'">中</button>
+          <button class="tb sm" :class="{ active: imgWidth === '100%' }" @click="imgWidth = '100%'">全宽</button>
+        </span>
+        <div class="viewseg">
+          <button :class="{ on: noteView === 'edit' }" @click="noteView = 'edit'">编辑</button>
+          <button :class="{ on: noteView === 'split' }" @click="noteView = 'split'">分栏</button>
+          <button :class="{ on: noteView === 'preview' }" @click="noteView = 'preview'">预览</button>
+        </div>
       </div>
-    </div>
+
+      <!-- 未保存草稿提示条：意外退出也不丢内容 -->
+      <div v-if="draftRestore" class="draftbar">
+        <span>有 {{ fmtAt(draftRestore.at) }} 的未保存草稿</span>
+        <button class="tb sm" @click="restoreDraft">恢复草稿</button>
+        <button class="tb sm" @click="discardDraft">丢弃</button>
+      </div>
+
+      <div v-show="noteView !== 'preview'" ref="editorWrap" class="editor" @keydown="onEditorKey">
+        <NInput
+          v-model:value="content"
+          type="textarea"
+          placeholder="写点什么…也可以直接手写 Markdown；选中文字后点上面的按钮直接加格式"
+          :autosize="{ minRows: 5, maxRows: 14 }"
+        />
+      </div>
+
+      <div v-show="noteView !== 'edit'" class="preview">
+        <MarkdownPreview
+          :content="content"
+          :images="imageMap"
+          @update:content="(v: string) => (content = v)"
+        />
+      </div>
+
+      <div v-if="images.length" class="imgs">
+        <div v-for="name in images" :key="name" class="img">
+          <img v-if="thumbs[`${dateStr()}/${name}`]" :src="thumbs[`${dateStr()}/${name}`]" alt="" />
+          <span v-else class="none">读取中…</span>
+          <button class="rm" title="从此天移除" @click="removeImage(name)">×</button>
+        </div>
+      </div>
+
+      <p v-if="msg" class="ok">{{ msg }}</p>
+      <p v-if="err" class="err">{{ err }}</p>
     </template>
-
-    <p v-if="msg" class="ok">{{ msg }}</p>
-    <p v-if="err" class="err">{{ err }}</p>
   </div>
 </template>
 
@@ -500,14 +568,7 @@ onMounted(async () => {
   gap: 10px;
 }
 
-.blocks {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-/* 历史总览 */
+/* ===== 记录列表 ===== */
 .ov-bar {
   display: flex;
   align-items: center;
@@ -537,11 +598,32 @@ onMounted(async () => {
   color: var(--text-faint);
 }
 
+.newbtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: var(--r-full);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background var(--dur), color var(--dur);
+}
+
+.newbtn:hover {
+  background: var(--accent-text);
+  color: var(--surface);
+}
+
 .ovlist {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 380px;
+  max-height: 420px;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -550,19 +632,16 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 10px;
-  text-align: left;
   border: 1px solid var(--border);
   background: var(--surface);
   border-radius: var(--r-sm);
   padding: 7px 10px;
   cursor: pointer;
-  font-family: inherit;
-  transition: background var(--dur), transform var(--dur);
+  transition: background var(--dur);
 }
 
 .ovrow:hover {
   background: var(--surface-hover);
-  transform: translateX(calc(2px * var(--motion)));
 }
 
 .ovdate {
@@ -591,6 +670,146 @@ onMounted(async () => {
   flex: none;
   font-size: 10px;
   color: var(--text-faint);
+}
+
+/* 行内编辑胶囊：默认圆形图标，悬停展开文字（与定位按钮同族） */
+.mini.edit {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: var(--r-full);
+  cursor: pointer;
+  overflow: hidden;
+  transition: width var(--dur) cubic-bezier(0.22, 0.61, 0.36, 1), background var(--dur), color var(--dur), border-color var(--dur);
+}
+
+.mini.edit svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.mini.edit span {
+  max-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: max-width var(--dur) ease, opacity var(--dur) ease, margin-left var(--dur) ease;
+}
+
+.mini.edit:hover {
+  width: 66px;
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.mini.edit:hover span {
+  max-width: 34px;
+  opacity: 1;
+  margin-left: 4px;
+}
+
+/* ===== 画廊 ===== */
+.ggrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 2px 4px 2px 2px;
+}
+
+.gcard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0 10px 8px;
+  transition: border-color var(--dur), transform var(--dur);
+}
+
+.gcard:hover {
+  border-color: var(--accent-border);
+  transform: translateY(calc(-1px * var(--motion)));
+}
+
+.gcover {
+  display: block;
+  margin: 0 -10px;
+  height: 96px;
+  background: var(--surface-hover);
+}
+
+.gcover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.gnoimg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 8px 12px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+}
+
+.gmeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+}
+
+.gdate {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.gdate.td {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.gcnt {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.gtitle {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== 编辑器 ===== */
+.blocks {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 
 .draftbar {
@@ -708,13 +927,9 @@ onMounted(async () => {
   gap: 4px;
 }
 
-.chips {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.chip {
+/* 返回列表胶囊：与编辑/定位按钮同族 */
+.mini.back {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -724,25 +939,20 @@ onMounted(async () => {
   border-radius: var(--r-full);
   font-size: 11px;
   font-family: inherit;
-  padding: 3px 10px;
+  padding: 4px 10px;
   cursor: pointer;
-  transition: background var(--dur), color var(--dur), transform var(--dur);
+  transition: color var(--dur), border-color var(--dur), background var(--dur);
 }
 
-.chip:hover {
-  transform: translateY(calc(-1px * var(--motion)));
-  color: var(--text);
+.mini.back svg {
+  width: 11px;
+  height: 11px;
 }
 
-.chip.active {
+.mini.back:hover {
   color: var(--accent-text);
-  background: var(--accent-soft);
   border-color: var(--accent-border);
-}
-
-.cnt {
-  color: var(--text-faint);
-  font-size: 10px;
+  background: var(--accent-soft);
 }
 
 .imgs {
@@ -794,6 +1004,7 @@ onMounted(async () => {
 .empty {
   font-size: 12px;
   color: var(--text-faint);
+  padding: 10px 0;
 }
 
 .ok {

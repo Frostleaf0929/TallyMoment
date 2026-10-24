@@ -66,8 +66,11 @@ watchEffect(() => {
 watchEffect(() => {
   const n = navIntent.value;
   if (!n) return;
-  // 应用排行 / 某天弹层放大 / 任务名 → 详细页；其余 → 历史页
-  active.value = n.view === "app" || n.view === "items" || n.view === "task" ? "detail" : "history";
+  // 应用排行 / 某天弹层放大 / 任务名 / 清单子标签 → 详细页；其余 → 历史页
+  active.value =
+    n.view === "app" || n.view === "items" || n.view === "task" || n.view === "checklist"
+      ? "detail"
+      : "history";
 });
 const collapsed = ref(localStorage.getItem("ui.side") === "collapsed");
 

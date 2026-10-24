@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { NButton, NInput, NPopconfirm, NSwitch } from "naive-ui";
+import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
+import { NButton, NPopconfirm, NSwitch } from "naive-ui";
 import type { ReminderRule } from "../types";
 
 const props = defineProps<{ rules: ReminderRule[] }>();
 const emit = defineEmits<{ (e: "reload"): void }>();
 
-// 编辑态：null = 无；-1 = 新建
-const editingId = ref<number | null>(null);
+/* ---------- 列表 / 次级表单（与任务卡同一套交互：列表只负责看，编辑进表单） ---------- */
+const form = ref<null | { isNew: boolean; id: number }>(null);
 const draft = ref({
   title: "",
   body: "",
@@ -23,12 +24,11 @@ const draft = ref({
   startDate: "",
   endDate: "",
 });
-
 const err = ref("");
 
 function openNew() {
-  editingId.value = -1;
   err.value = "";
+  form.value = { isNew: true, id: -1 };
   draft.value = {
     title: "",
     body: "",
@@ -45,8 +45,8 @@ function openNew() {
 }
 
 function openEdit(r: ReminderRule) {
-  editingId.value = r.id;
   err.value = "";
+  form.value = { isNew: false, id: r.id };
   draft.value = {
     title: r.title,
     body: r.body,
@@ -62,8 +62,9 @@ function openEdit(r: ReminderRule) {
   };
 }
 
-function close() {
-  editingId.value = null;
+function closeForm() {
+  form.value = null;
+  err.value = "";
 }
 
 function addTime() {
@@ -77,7 +78,6 @@ function addTime() {
 
 async function save() {
   err.value = "";
-  const isNew = editingId.value === -1;
   const args = {
     title: draft.value.title,
     body: draft.value.body,
@@ -92,8 +92,10 @@ async function save() {
     endDate: draft.value.endDate || null,
   };
   try {
-    await invoke(isNew ? "rule_add" : "rule_update", isNew ? args : { id: editingId.value, ...args });
-    close();
+    const f = form.value;
+    if (!f) return;
+    await invoke(f.isNew ? "rule_add" : "rule_update", f.isNew ? args : { id: f.id, ...args });
+    closeForm();
     emit("reload");
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
@@ -113,7 +115,7 @@ async function remove(r: ReminderRule) {
 const modeLabel = (r: ReminderRule) =>
   r.mode === "interval" ? `每 ${r.intervalMinutes} 分钟` : `定点 ${r.dailyTimes.join(" / ")}`;
 
-/** 生效范围标签：10/24 ~ 10/31（只有一端就显示 起/止） */
+/** 生效范围标签：10/24~10/31（只有一端就显示 起/止） */
 const rangeLabel = (r: ReminderRule): string => {
   if (!r.startDate && !r.endDate) return "";
   const md = (s: string | null) => (s ? s.slice(5).replace("-", "/") : "");
@@ -121,26 +123,71 @@ const rangeLabel = (r: ReminderRule): string => {
   if (r.startDate) return `${md(r.startDate)} 起`;
   return `至 ${md(r.endDate)}`;
 };
+
+/* ---------- JSON 导入导出（低频，收在列表头部） ---------- */
+async function exportRules() {
+  err.value = "";
+  try {
+    const picked = await saveFile({
+      title: "导出提醒规则",
+      defaultPath: `拾刻提醒规则-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!picked) return;
+    await invoke<string>("rules_export_json", { path: picked });
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
+async function importRules() {
+  err.value = "";
+  try {
+    const picked = await openFile({
+      multiple: false,
+      directory: false,
+      title: "选择规则 JSON",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!picked || Array.isArray(picked)) return;
+    await invoke<[number, number]>("rules_import_json", { path: picked });
+    emit("reload");
+  } catch (e) {
+    err.value = String(e).replace(/^.*Error: /, "");
+  }
+}
 </script>
 
 <template>
   <div>
-    <div class="toolbar">
-      <span class="count">{{ rules.filter((r) => r.enabled).length }} 条启用中</span>
-      <NButton size="small" type="primary" secondary @click="openNew">新建提醒</NButton>
-    </div>
+    <!-- ===== 列表视图 ===== -->
+    <template v-if="!form">
+      <div class="listhead">
+        <span class="lstat">{{ rules.filter((r) => r.enabled).length }} 条启用中 · 共 {{ rules.length }} 条</span>
+        <div class="lacts">
+          <NButton size="tiny" quaternary title="从 JSON 导入规则" @click="importRules">导入 JSON</NButton>
+          <NButton size="tiny" quaternary title="导出规则为 JSON" @click="exportRules">导出 JSON</NButton>
+          <button class="newbtn" @click="openNew">
+            <svg viewBox="0 0 12 12" aria-hidden="true">
+              <path d="M6 2v8M2 6h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            </svg>
+            新建提醒
+          </button>
+        </div>
+      </div>
 
-    <div v-for="r in rules" :key="r.id" class="rule" :class="{ off: !r.enabled }">
-      <div class="line1">
-        <span class="title" :title="r.title">{{ r.title }}</span>
+      <div v-for="r in rules" :key="r.id" class="row" :class="{ off: !r.enabled }">
+        <span class="dot" :class="{ on: r.enabled }" :title="r.enabled ? '启用中' : '已停用'"></span>
+        <span class="content" :title="r.title">{{ r.title }}</span>
         <span class="tag">{{ modeLabel(r) }}</span>
-        <span v-if="rangeLabel(r)" class="tag rng" title="生效日期范围，过期自动停">{{ rangeLabel(r) }}</span>
-        <span class="tag">{{ r.sticky ? "卡片常驻" : `停留 ${r.cardDurationSec}s` }}</span>
+        <span class="tag">{{ r.sticky ? "常驻" : `${r.cardDurationSec}s` }}</span>
         <span class="tag" :class="{ full: r.style === 'fullscreen' }">
           {{ r.style === "fullscreen" ? "全屏" : "卡片" }}
         </span>
+        <span v-if="rangeLabel(r)" class="tag rng" title="生效日期范围，过期自动停">{{ rangeLabel(r) }}</span>
+        <span v-if="r.body" class="body" :title="r.body">{{ r.body }}</span>
         <NSwitch size="small" :value="r.enabled" @update:value="(v: boolean) => toggle(r, v)" />
-        <NButton quaternary size="tiny" @click="openEdit(r)">编辑</NButton>
+        <button class="mini edit" title="编辑" @click="openEdit(r)">编辑</button>
         <NPopconfirm @positive-click="remove(r)">
           <template #trigger>
             <NButton quaternary size="tiny" type="error">删除</NButton>
@@ -148,35 +195,34 @@ const rangeLabel = (r: ReminderRule): string => {
           删除提醒「{{ r.title }}」？
         </NPopconfirm>
       </div>
-      <p v-if="r.body" class="body">{{ r.body }}</p>
-    </div>
-    <p v-if="!rules.length" class="empty">还没有提醒规则，点右上角「新建提醒」开始</p>
+      <p v-if="!rules.length" class="empty">还没有提醒规则，点右上角「新建提醒」开始</p>
+    </template>
 
-    <!-- 内联编辑卡 -->
-    <div v-if="editingId !== null" class="editor glass-card">
-      <p class="et">{{ editingId === -1 ? "新建提醒" : "编辑提醒" }}</p>
-      <NInput v-model:value="draft.title" size="small" placeholder="标题，如：护眼提醒" maxlength="50" />
-      <NInput v-model:value="draft.body" size="small" type="textarea" placeholder="正文（可选）" :rows="2" />
-      <div class="seg">
-        <button class="seg-i" :class="{ on: draft.mode === 'interval' }" @click="draft.mode = 'interval'">
-          时间间隔
+    <!-- ===== 次级表单 ===== -->
+    <template v-else>
+      <div class="formhead">
+        <button class="mini back" @click="closeForm">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14.5 5.5L8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          返回列表
         </button>
-        <button class="seg-i" :class="{ on: draft.mode === 'daily' }" @click="draft.mode = 'daily'">
-          每日定点
-        </button>
+        <span class="ftitle">{{ form.isNew ? "新建提醒" : "编辑提醒" }}</span>
       </div>
-      <!-- 提醒方式：卡片（右下角）/ 全屏（该休息了） -->
-      <div class="seg">
-        <button class="seg-i" :class="{ on: draft.style === 'card' }" @click="draft.style = 'card'">
-          右下角卡片
-        </button>
-        <button
-          class="seg-i"
-          :class="{ on: draft.style === 'fullscreen' }"
-          @click="draft.style = 'fullscreen'"
-        >
-          全屏提醒
-        </button>
+
+      <input v-model="draft.title" class="edit" placeholder="标题，如：护眼提醒" maxlength="50" />
+      <textarea v-model="draft.body" class="edit area" placeholder="正文（可选）" rows="2" />
+      <div class="frow">
+        <span class="flabel">触发</span>
+        <div class="seg">
+          <button class="seg-i" :class="{ on: draft.mode === 'interval' }" @click="draft.mode = 'interval'">时间间隔</button>
+          <button class="seg-i" :class="{ on: draft.mode === 'daily' }" @click="draft.mode = 'daily'">每日定点</button>
+        </div>
+        <span class="flabel">方式</span>
+        <div class="seg">
+          <button class="seg-i" :class="{ on: draft.style === 'card' }" @click="draft.style = 'card'">右下角卡片</button>
+          <button class="seg-i" :class="{ on: draft.style === 'fullscreen' }" @click="draft.style = 'fullscreen'">全屏提醒</button>
+        </div>
       </div>
       <div v-if="draft.mode === 'interval'" class="frow">
         <span>每</span>
@@ -184,8 +230,8 @@ const rangeLabel = (r: ReminderRule): string => {
         <span>分钟提醒一次（1~1440）</span>
       </div>
       <div v-else class="frow">
-        <input v-model="draft.dailyTime" type="time" class="tp" />
-        <NButton size="tiny" @click="addTime">添加</NButton>
+        <input v-model="draft.dailyTime" type="time" class="num tp" />
+        <button class="mini" @click="addTime">添加时间点</button>
         <span v-if="draft.dailyTimes.length" class="times">{{ draft.dailyTimes.join(" / ") }}</span>
       </div>
       <div class="frow">
@@ -196,79 +242,97 @@ const rangeLabel = (r: ReminderRule): string => {
       </div>
       <div class="frow">
         <span>生效范围</span>
-        <input v-model="draft.startDate" type="date" class="tp" title="从这天开始提醒（留空 = 不限）" />
+        <input v-model="draft.startDate" type="date" class="num tp" title="从这天开始提醒（留空 = 不限）" />
         <span>~</span>
-        <input v-model="draft.endDate" type="date" class="tp" title="到这天为止（留空 = 一直提醒）" />
+        <input v-model="draft.endDate" type="date" class="num tp" title="到这天为止（留空 = 一直提醒）" />
         <span class="rangehint">两端都留空 = 一直生效；设个结束日期就不用手动停了</span>
       </div>
-      <p v-if="err" class="err">{{ err }}</p>
+      <p v-if="err" class="ferr">{{ err }}</p>
       <div class="btns">
-        <NButton size="small" @click="close">取消</NButton>
-        <NButton size="small" type="primary" @click="save">{{ editingId === -1 ? "创建" : "保存" }}</NButton>
+        <button class="mini" @click="closeForm">取消</button>
+        <button class="primary" @click="save">{{ form.isNew ? "创建" : "保存" }}</button>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.seg {
-  display: inline-flex;
-  gap: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 4px;
-  background: var(--surface);
-}
-
-.seg-item {
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 12.5px;
-  font-family: inherit;
-  padding: 5px 12px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-}
-
-.seg-item.active {
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
-
-.toolbar {
+/* 与任务卡同一套规格：行/标签/小按钮共用尺寸 */
+.listhead {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   margin-bottom: 10px;
 }
 
-.count {
+.lstat {
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-faint);
 }
 
-.rule {
+.lacts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.newbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: var(--r-full);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background var(--dur), color var(--dur);
+}
+
+.newbtn svg {
+  width: 11px;
+  height: 11px;
+}
+
+.newbtn:hover {
+  background: var(--accent-text);
+  color: var(--surface);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
   border: 1px solid var(--border);
   background: var(--surface);
   border-radius: var(--r-md);
-  padding: 10px 12px;
   margin-bottom: 8px;
 }
 
-.rule.off {
+.row.off {
   opacity: 0.5;
   border-style: dashed;
 }
 
-.line1 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
 }
 
-.title {
+.dot.on {
+  background: var(--good);
+}
+
+.content {
   flex: 1;
+  min-width: 60px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
@@ -277,19 +341,14 @@ const rangeLabel = (r: ReminderRule): string => {
   white-space: nowrap;
 }
 
-.tag.full {
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
-
-.tag.rng {
-  color: var(--info, #6aa1ff);
-  background: var(--info-soft, rgba(106, 161, 255, 0.14));
-}
-
-.rangehint {
-  font-size: 11px;
-  color: var(--text-faint);
+.body {
+  flex: 1;
+  min-width: 40px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tag {
@@ -298,13 +357,35 @@ const rangeLabel = (r: ReminderRule): string => {
   color: var(--accent-text);
   background: var(--accent-soft);
   border-radius: var(--r-full);
-  padding: 2px 9px;
+  padding: 1px 8px;
 }
 
-.body {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--text-muted);
+.tag.full {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.tag.rng {
+  color: var(--info, #6aa1ff);
+  background: var(--info-soft, rgba(106, 161, 255, 0.14));
+}
+
+.mini {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-faint);
+  border-radius: var(--r-full);
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 9px;
+  cursor: pointer;
+  transition: color var(--dur), border-color var(--dur), background var(--dur);
+}
+
+.mini.edit {
+  color: var(--accent-text);
+  border-color: var(--accent-border);
 }
 
 .empty {
@@ -312,19 +393,61 @@ const rangeLabel = (r: ReminderRule): string => {
   color: var(--text-faint);
 }
 
-.editor {
-  padding: 14px;
+/* ---- 次级表单 ---- */
+.formhead {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 10px;
-  margin-top: 12px;
+  margin-bottom: 12px;
 }
 
-.et {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+.mini.back {
+  font-size: 11px;
+  padding: 4px 10px;
+}
+
+.ftitle {
+  font-size: 14px;
+  font-weight: 700;
   color: var(--text);
+}
+
+.edit {
+  width: 100%;
+  border: 1px solid var(--accent-border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  margin-bottom: 10px;
+  box-sizing: border-box;
+}
+
+.edit:focus {
+  border-color: var(--accent-text);
+}
+
+.edit.area {
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.frow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.flabel {
+  font-size: 11px;
+  color: var(--text-muted, #888);
 }
 
 .seg {
@@ -334,7 +457,6 @@ const rangeLabel = (r: ReminderRule): string => {
   border-radius: var(--r-md);
   padding: 3px;
   background: var(--surface);
-  width: fit-content;
 }
 
 .seg-i {
@@ -343,7 +465,7 @@ const rangeLabel = (r: ReminderRule): string => {
   color: var(--text-muted);
   font-size: 12px;
   font-family: inherit;
-  padding: 6px 12px;
+  padding: 5px 12px;
   border-radius: var(--r-sm);
   cursor: pointer;
 }
@@ -353,40 +475,29 @@ const rangeLabel = (r: ReminderRule): string => {
   background: var(--accent-soft);
 }
 
-.frow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-  flex-wrap: wrap;
-}
-
 .num {
   width: 70px;
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text);
-  border-radius: 6px;
-  padding: 4px 6px;
+  border-radius: 8px;
+  padding: 5px 7px;
   font-size: 12px;
   font-family: inherit;
   outline: none;
 }
 
-.tp {
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text);
-  border-radius: 6px;
-  padding: 4px 6px;
-  font-size: 12px;
-  font-family: inherit;
-  outline: none;
+.num.tp {
+  width: auto;
 }
 
 .times {
   color: var(--accent-text);
+}
+
+.rangehint {
+  font-size: 11px;
+  color: var(--text-faint);
 }
 
 .stk {
@@ -396,7 +507,24 @@ const rangeLabel = (r: ReminderRule): string => {
   cursor: pointer;
 }
 
-.err {
+.primary {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: var(--r-full);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 5px 16px;
+  cursor: pointer;
+  transition: background var(--dur), color var(--dur);
+}
+
+.primary:hover {
+  background: var(--accent-text);
+  color: var(--surface);
+}
+
+.ferr {
   margin: 0;
   font-size: 12px;
   color: var(--danger);
@@ -406,9 +534,5 @@ const rangeLabel = (r: ReminderRule): string => {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-}
-
-button {
-  font-family: inherit;
 }
 </style>

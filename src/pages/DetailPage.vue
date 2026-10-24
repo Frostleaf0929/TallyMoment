@@ -2,13 +2,13 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NInput } from "naive-ui";
-import type { AppUsage, HabitRow, RangeReport } from "../types";
+import type { AppUsage, HabitRow, RangeReport, ReminderRule, Task } from "../types";
 import { fmtDuration } from "../lib/format";
 import { colorFor } from "../lib/colors";
 import { accentColor } from "../lib/chartColors";
 import { appColorMode, appNameEnglish } from "../lib/appearance";
 import { iconColor, iconUrl, requestIcons } from "../lib/appIcons";
-import { activeTab, goTab, navIntent } from "../lib/uiState";
+import { activeTab, goTab, navIntent, type ChecklistTab } from "../lib/uiState";
 import BallLoader from "../components/BallLoader.vue";
 import DayDetail from "../components/DayDetail.vue";
 import RangeCard from "../components/RangeCard.vue";
@@ -21,15 +21,14 @@ import HourlyChart from "../components/HourlyChart.vue";
  */
 type RangeKey = "day" | "week" | "month" | "year" | "all";
 
-/** 页面内两个视角：时间（按应用看时长）/ 事项（某天的任务与记录对照） */
-const view = ref<"time" | "items">("time");
+/** 页面内两个视角：时间（按应用看时长）/ 清单（任务、提示、日志的记录总览） */
+const view = ref<"time" | "checklist">("time");
+/** 清单视角的子标签：总览 / 任务 / 提示 / 日志 */
+const itemTab = ref<ChecklistTab>("overview");
 /** 是否是从待办页（某天弹层的"放大"）跳过来的 */
 const fromTodo = ref(false);
 const itemDate = ref<number>(Date.now());
 const itemDateStr = computed(() => ymd(new Date(itemDate.value)));
-const itemRange = ref<RangeKey>("day");
-const itemFrom = ref("");
-const itemTo = ref("");
 
 
 /** 前后翻一天 */
@@ -345,6 +344,7 @@ const trend = computed(() => {
 onMounted(() => {
   void load(false);
   void loadHabit();
+  void loadChecklistData();
   // 两层滚动（内容区 / 应用列表自身）都影响卡片可见性
   const c = document.querySelector(".content");
   c?.addEventListener("scroll", updateCardVis, { passive: true });
@@ -358,9 +358,66 @@ onUnmounted(() => {
   window.cancelAnimationFrame(cardRaf);
 });
 
-// 切回详细页时刷新习惯数据（v-show 页面 onMounted 只跑一次）
+/* ---------- 清单视角的待办三模块数据（任务 / 提示 / 日志计数与总览） ---------- */
+const tasks = ref<Task[]>([]);
+const rules = ref<ReminderRule[]>([]);
+const noteCount = ref(0);
+
+async function loadChecklistData() {
+  try {
+    tasks.value = await invoke<Task[]>("task_list");
+  } catch {
+    /* 忽略 */
+  }
+  try {
+    rules.value = await invoke<ReminderRule[]>("rule_list");
+  } catch {
+    /* 忽略 */
+  }
+  try {
+    const list = await invoke<{ date: string }[]>("notes_recent", { limit: 2000 });
+    noteCount.value = list.length;
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 任务进行中计数（与待办页任务卡同口径：重复任务按 1 条计） */
+const taskOpenCount = computed(() => {
+  const today = new Date().toISOString().slice(0, 10);
+  const dayOf = (t: Task) =>
+    new Date((t.dueTs ?? t.createdTs) * 1000).toISOString().slice(0, 10);
+  const tpls = tasks.value.filter((t) => t.repeatMode && !t.templateId);
+  let n = tasks.value.filter((t) => !t.repeatMode && !t.templateId && !t.done).length;
+  for (const tpl of tpls) {
+    if (tpl.repeatStopped) continue;
+    const inst = tasks.value.find((i) => i.templateId === tpl.id && dayOf(i) === today);
+    const scheduled = inst ?? (dayOf(tpl) === today ? tpl : null);
+    if (scheduled && !scheduled.done) n += 1;
+  }
+  return n;
+});
+
+const rulesEnabled = computed(() => rules.value.filter((r) => r.enabled).length);
+const rulesFull = computed(() => rules.value.filter((r) => r.style === "fullscreen").length);
+
+const ruleModeLabel = (r: ReminderRule) =>
+  r.mode === "interval" ? `每 ${r.intervalMinutes} 分钟` : `定点 ${r.dailyTimes.join(" / ")}`;
+
+const ruleRangeLabel = (r: ReminderRule): string => {
+  if (!r.startDate && !r.endDate) return "";
+  const md = (x: string | null) => (x ? x.slice(5).replace("-", "/") : "");
+  if (r.startDate && r.endDate) return `${md(r.startDate)}~${md(r.endDate)}`;
+  if (r.startDate) return `${md(r.startDate)} 起`;
+  return `至 ${md(r.endDate)}`;
+};
+
+// 切回详细页时刷新（v-show 页面 onMounted 只跑一次）
 watch(activeTab, (t) => {
-  if (t === "detail") void loadHabit();
+  if (t === "detail") {
+    void loadHabit();
+    void loadChecklistData();
+  }
 });
 
 // 图标模式下批量取图标
@@ -373,17 +430,28 @@ watchEffect(() => {
 // 从今日页/排行跳转过来：选中该应用，若当前范围没数据自动退到"总共"
 watch(navIntent, (n) => {
   if (!n) return;
-  // 点了待办里的任务名 → 事项视角并选中该固定事项
+  // 点了待办里的任务名 → 清单 · 任务 并选中该固定事项
   if (n.view === "task" && n.taskId != null) {
-    view.value = "items";
+    view.value = "checklist";
     fromTodo.value = true;
+    itemTab.value = "tasks";
     selectedHabit.value = n.taskId;
     void loadHabit();
     return;
   }
-  if (n.view === "items") {
-    view.value = "items";
+  // 待办三卡右上角的定位胶囊 → 清单对应子标签
+  if (n.view === "checklist") {
+    view.value = "checklist";
     fromTodo.value = true;
+    itemTab.value = n.sub ?? "overview";
+    void loadChecklistData();
+    return;
+  }
+  if (n.view === "items") {
+    // 某天弹层放大 → 清单 · 日志（那天的对照详情）
+    view.value = "checklist";
+    fromTodo.value = true;
+    itemTab.value = "notes";
     if (n.date) itemDate.value = new Date(`${n.date}T00:00:00`).getTime();
     return;
   }
@@ -399,13 +467,13 @@ watch(navIntent, (n) => {
   <div class="detail">
     <header class="head">
       <h1>详细</h1>
-      <span class="sub">按应用查看 · 选中左侧应用可下钻</span>
+      <span class="sub">应用看时长 · 清单看任务 / 提示 / 日志</span>
     </header>
 
     <div class="segrow">
       <div class="viewseg">
         <button class="vbtn" :class="{ active: view === 'time' }" @click="view = 'time'">应用</button>
-        <button class="vbtn" :class="{ active: view === 'items' }" @click="view = 'items'">事项</button>
+        <button class="vbtn" :class="{ active: view === 'checklist' }" @click="view = 'checklist'">清单</button>
       </div>
       <!-- 返回待办：常显（不管怎么进来的都能一键回去），默认圆形图标、悬停展开成胶囊 -->
       <button class="back" title="返回待办" @click="goTab('todo')">
@@ -416,81 +484,119 @@ watch(navIntent, (n) => {
       </button>
     </div>
 
-    <!-- 事项视角：直接复用某天对照详情 -->
-    <template v-if="view === 'items'">
-      <!-- 与「详细 · 应用」同款的 时间范围 卡（后续周/月/年/总共的聚合在这里接） -->
-      <section class="glass-card rangecard">
-        <RangeCard
-          v-model="itemRange"
-          :from="itemFrom"
-          :to="itemTo"
-          note="周 / 月 / 年 / 总共的范围聚合后续接上；现在先在左侧月历点选某一天查看"
-        />
-      </section>
+    <!-- 清单视角：总览 / 任务 / 提示 / 日志 -->
+    <template v-if="view === 'checklist'">
+      <div class="subtabs">
+        <button :class="{ active: itemTab === 'overview' }" @click="itemTab = 'overview'">总览</button>
+        <button :class="{ active: itemTab === 'tasks' }" @click="itemTab = 'tasks'">任务</button>
+        <button :class="{ active: itemTab === 'rules' }" @click="itemTab = 'rules'">提示</button>
+        <button :class="{ active: itemTab === 'notes' }" @click="itemTab = 'notes'">日志</button>
+      </div>
 
-      <!-- 全部固定事项总览：整体坚持度 + 最长连击保持者 -->
-      <section v-if="habitRows.length" class="glass-card habitstat">
-        <h2>全部固定事项 · 总览（基于近 30 天完成格；逐项明细可用上面的格点 / 时间轴视图在〈待办〉查看）</h2>
-        <div class="hsrow">
-          <div class="hs">
-            <p class="l">累计安排</p>
-            <p class="v">{{ habitOverview.arranged }} <small>天次</small></p>
+      <!-- 总览：固定事项汇总 + 待办三模块（统一数据卡规格，点卡切子标签） -->
+      <template v-if="itemTab === 'overview'">
+        <section v-if="habitRows.length" class="glass-card">
+          <h2>全部固定事项 · 总览（近 30 天完成格汇总；逐项打卡在〈待办〉页）</h2>
+          <div class="dcards">
+            <div class="dstat"><p class="dl">累计安排</p><p class="dv">{{ habitOverview.arranged }} <small>天次</small></p></div>
+            <div class="dstat"><p class="dl">完成</p><p class="dv accent">{{ habitOverview.done }} <small>天次</small></p></div>
+            <div class="dstat"><p class="dl">总体完成率</p><p class="dv">{{ habitOverview.rate < 0 ? "—" : `${habitOverview.rate}%` }}</p></div>
+            <div class="dstat"><p class="dl">最长连续{{ habitOverview.bestName ? ` · ${habitOverview.bestName}` : "" }}</p><p class="dv">{{ habitOverview.best }} <small>天</small></p></div>
           </div>
-          <div class="hs">
-            <p class="l">完成</p>
-            <p class="v accent">{{ habitOverview.done }} <small>天次</small></p>
+        </section>
+        <section class="glass-card">
+          <h2>待办三模块 · 概览（点卡片进入对应子页）</h2>
+          <div class="dcards">
+            <button class="dstat asbtn" @click="itemTab = 'tasks'">
+              <p class="dl">任务</p>
+              <p class="dv">{{ taskOpenCount }} <small>项进行中</small></p>
+              <p class="dl2">共 {{ tasks.length }} 条 · 点开看坚持情况</p>
+            </button>
+            <button class="dstat asbtn" @click="itemTab = 'rules'">
+              <p class="dl">提示</p>
+              <p class="dv">{{ rulesEnabled }} <small>条启用</small></p>
+              <p class="dl2">共 {{ rules.length }} 条规则</p>
+            </button>
+            <button class="dstat asbtn" @click="itemTab = 'notes'">
+              <p class="dl">日志</p>
+              <p class="dv">{{ noteCount }} <small>篇</small></p>
+              <p class="dl2">点开浏览 / 编辑某天</p>
+            </button>
           </div>
-          <div class="hs">
-            <p class="l">总体完成率</p>
-            <p class="v">{{ habitOverview.rate < 0 ? "—" : `${habitOverview.rate}%` }}</p>
-          </div>
-          <div class="hs">
-            <p class="l">最长连续</p>
-            <p class="v">{{ habitOverview.best }} <small>天</small></p>
-            <p class="l">{{ habitOverview.bestName || "—" }}</p>
-          </div>
-        </div>
-      </section>
+        </section>
+        <p v-if="!habitRows.length" class="empty">还没有固定事项：在〈待办 · 任务〉新建时把重复选成「每天 / 每周…」</p>
+      </template>
 
-      <!-- 选中固定事项的坚持统计（完成格在待办页底部；点待办里的任务名跳到这里并选中） -->
-      <section v-if="selHabit && habitStats" class="glass-card habitstat">
-        <h2>{{ selHabit.content }} · 坚持情况（基于近 30 天完成格）</h2>
-        <div class="hsrow">
-          <div class="hs">
-            <p class="l">安排天数</p>
-            <p class="v">{{ habitStats.total }}</p>
+      <!-- 任务：固定事项选择 + 单个任务坚持统计（不用再从待办跳转才能看） -->
+      <template v-else-if="itemTab === 'tasks'">
+        <section class="glass-card">
+          <div class="itemshead">
+            <h2>固定事项 · 坚持情况（近 30 天完成格）</h2>
+            <span class="avg">点名字切换；打卡在〈待办〉页的习惯追踪</span>
           </div>
-          <div class="hs">
-            <p class="l">完成次数</p>
-            <p class="v accent">{{ habitStats.doneCount }}</p>
+          <div class="chiprow">
+            <button
+              v-for="r in habitRows"
+              :key="r.taskId"
+              class="chip"
+              :class="{ active: selectedHabit === r.taskId }"
+              @click="selectedHabit = r.taskId"
+            >
+              {{ r.content }}<em v-if="r.stopped"> · 已停止</em>
+            </button>
           </div>
-          <div class="hs">
-            <p class="l">最近连续</p>
-            <p class="v">{{ habitStats.streak }} <small>天</small></p>
+          <div v-if="selHabit && habitStats" class="dcards">
+            <div class="dstat"><p class="dl">安排天数</p><p class="dv">{{ habitStats.total }} <small>天</small></p></div>
+            <div class="dstat"><p class="dl">完成次数</p><p class="dv accent">{{ habitStats.doneCount }} <small>次</small></p></div>
+            <div class="dstat"><p class="dl">最近连续</p><p class="dv">{{ habitStats.streak }} <small>天</small></p></div>
+            <div class="dstat"><p class="dl">最长连续</p><p class="dv">{{ habitStats.best }} <small>天</small></p></div>
+            <div class="dstat"><p class="dl">平均用时</p><p class="dv">{{ habitStats.avg != null ? `${habitStats.avg} 分` : "—" }}</p></div>
           </div>
-          <div class="hs">
-            <p class="l">最长连续</p>
-            <p class="v">{{ habitStats.best }} <small>天</small></p>
-          </div>
-          <div class="hs">
-            <p class="l">平均用时</p>
-            <p class="v">{{ habitStats.avg != null ? `${habitStats.avg} 分` : "—" }}</p>
-          </div>
-        </div>
-      </section>
+          <p v-else class="empty">点上面的名字看单个任务的坚持情况</p>
+        </section>
+      </template>
 
-      <section class="glass-card itemsview">
-        <div class="itemshead">
-          <h2>事项与记录</h2>
-        </div>
-        <div class="daynav">
-          <button class="dnav" title="前一天" @click="shiftItemDay(-1)">‹</button>
-          <span class="dnavday">{{ itemDateStr }}</span>
-          <button class="dnav" title="后一天" @click="shiftItemDay(1)">›</button>
-          <span class="dnavhint">也可以从〈待办〉的月历点某天、再点弹层右上角 □ 跳到这里</span>
-        </div>
-        <DayDetail :date="itemDateStr" />
-      </section>
+      <!-- 提示：规则总览（编辑在〈待办 · 提示〉） -->
+      <template v-else-if="itemTab === 'rules'">
+        <section class="glass-card">
+          <div class="itemshead">
+            <h2>提醒规则 · 总览</h2>
+            <button class="mini" @click="goTab('todo')">去〈待办 · 提示〉管理</button>
+          </div>
+          <div class="dcards">
+            <div class="dstat"><p class="dl">启用中</p><p class="dv accent">{{ rulesEnabled }} <small>条</small></p></div>
+            <div class="dstat"><p class="dl">全部规则</p><p class="dv">{{ rules.length }} <small>条</small></p></div>
+            <div class="dstat"><p class="dl">全屏方式</p><p class="dv">{{ rulesFull }} <small>条</small></p></div>
+          </div>
+          <div class="rulelist">
+            <div v-for="r in rules" :key="r.id" class="rrow" :class="{ off: !r.enabled }">
+              <span class="rdot" :class="{ on: r.enabled }"></span>
+              <span class="rtitle" :title="r.title">{{ r.title }}</span>
+              <span class="tag">{{ ruleModeLabel(r) }}</span>
+              <span class="tag">{{ r.style === "fullscreen" ? "全屏" : "卡片" }}</span>
+              <span v-if="ruleRangeLabel(r)" class="tag rng">{{ ruleRangeLabel(r) }}</span>
+            </div>
+          </div>
+          <p v-if="!rules.length" class="empty">还没有提醒规则</p>
+        </section>
+      </template>
+
+      <!-- 日志：某天的对照详情（完成率 / 时长 / 小时分布 / 日志） -->
+      <template v-else>
+        <section class="glass-card itemsview">
+          <div class="itemshead">
+            <h2>某天 · 记录与日志</h2>
+            <button class="mini" @click="goTab('todo')">去〈待办 · 日志〉写</button>
+          </div>
+          <div class="daynav">
+            <button class="dnav" title="前一天" @click="shiftItemDay(-1)">‹</button>
+            <span class="dnavday">{{ itemDateStr }}</span>
+            <button class="dnav" title="后一天" @click="shiftItemDay(1)">›</button>
+            <span class="dnavhint">也可以从〈待办〉的月历点某天、再点弹层的「放大」跳到这里</span>
+          </div>
+          <DayDetail :date="itemDateStr" />
+        </section>
+      </template>
     </template>
 
     <div v-if="view === 'time'" class="split">
@@ -720,45 +826,210 @@ watch(navIntent, (n) => {
   padding: 14px 16px;
 }
 
-.habitstat h2 {
-  margin: 0 0 10px;
+/* ===== 清单视角 =====
+   数据卡统一用「事项与记录 / 待办统计卡」同一套规格：
+   4 列网格 · 卡 padding 10px 12px · 标签 11px · 数值 18px/700 tabular-nums */
+.subtabs {
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 4px;
+  background: var(--surface);
+  width: fit-content;
 }
 
-.hsrow {
+.subtabs button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 5px 16px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color var(--dur), background var(--dur);
+}
+
+.subtabs button.active {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.dcards {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px;
 }
 
-.hs {
-  background: var(--surface);
+.dstat {
   border: 1px solid var(--border);
+  background: var(--surface);
   border-radius: var(--r-md);
-  padding: 8px 12px;
+  padding: 10px 12px;
+  text-align: left;
 }
 
-.hs .l {
+.dl {
   margin: 0 0 4px;
   font-size: 11px;
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.hs .v {
+.dl2 {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.dv {
   margin: 0;
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
-.hs .v.accent {
+.dv.accent {
   color: var(--accent-text);
 }
 
-.hs .v small {
+.dv small {
   font-size: 11px;
   font-weight: 400;
   color: var(--text-faint);
+}
+
+/* 可点的数据卡（总览的三模块概览） */
+.asbtn {
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color var(--dur), background var(--dur), transform var(--dur);
+}
+
+.asbtn:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  transform: translateY(calc(-1px * var(--motion)));
+}
+
+/* 任务子页：任务选择 chips */
+.chiprow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.chip {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: var(--r-full);
+  font-size: 11.5px;
+  font-family: inherit;
+  padding: 3px 12px;
+  cursor: pointer;
+  transition: color var(--dur), background var(--dur), border-color var(--dur);
+}
+
+.chip em {
+  font-style: normal;
+  color: var(--text-faint);
+}
+
+.chip:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.chip.active {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+/* 提示子页：规则只读列表（与待办提示卡同族样式） */
+.rulelist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.rrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+.rrow.off {
+  opacity: 0.5;
+  border-style: dashed;
+}
+
+.rdot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.rdot.on {
+  background: var(--good);
+}
+
+.rtitle {
+  flex: 1;
+  min-width: 40px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag {
+  flex: none;
+  font-size: 10px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: var(--r-full);
+  padding: 1px 8px;
+}
+
+.tag.rng {
+  color: var(--info, #6aa1ff);
+  background: var(--info-soft, rgba(106, 161, 255, 0.14));
+}
+
+/* 返回/前往胶囊（与任务卡编辑按钮同族） */
+.mini {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: var(--r-full);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: color var(--dur), border-color var(--dur), background var(--dur);
+  flex: none;
+}
+
+.mini:hover {
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
 
 .daynav {
