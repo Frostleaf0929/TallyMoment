@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { NInput, NSelect } from "naive-ui";
-import type { AppUsage, HabitRow, RangeReport, ReminderRule, Task } from "../types";
+import type { AppUsage, HabitRow, RangeReport, ReminderRule, ReminderStat, Task } from "../types";
 import { fmtDuration } from "../lib/format";
 import { colorFor } from "../lib/colors";
 import { accentColor } from "../lib/chartColors";
@@ -389,6 +389,8 @@ onUnmounted(() => {
 const tasks = ref<Task[]>([]);
 const rules = ref<ReminderRule[]>([]);
 const noteCount = ref(0);
+/** 提醒统计：规则 id -> 统计行 */
+const ruleStats = ref<Map<number, ReminderStat>>(new Map());
 
 async function loadChecklistData() {
   try {
@@ -398,6 +400,12 @@ async function loadChecklistData() {
   }
   try {
     rules.value = await invoke<ReminderRule[]>("rule_list");
+  } catch {
+    /* 忽略 */
+  }
+  try {
+    const list = await invoke<ReminderStat[]>("reminder_stats_list");
+    ruleStats.value = new Map(list.filter((r) => r.kind === "rule").map((r) => [r.refId, r]));
   } catch {
     /* 忽略 */
   }
@@ -543,7 +551,7 @@ watch(navIntent, (n) => {
           </div>
         </section>
         <section class="glass-card">
-          <h2>某天 · 记录 <span class="hint">（在⌈待办⌋的月历点某天、「放大」可直达这里）</span></h2>
+          <h2>某天 · 记录 <span class="hint">（在「待办」的月历点某天、「放大」可直达这里）</span></h2>
           <div class="daynav">
             <button class="dnav" title="前一天" @click="shiftItemDay(-1)">‹</button>
             <span class="dnavday">{{ itemDateStr }}</span>
@@ -556,7 +564,7 @@ watch(navIntent, (n) => {
       <!-- 任务：固定事项总览 + 选择 + 单个任务坚持统计 -->
       <template v-else-if="itemTab === 'tasks'">
         <section v-if="habitRows.length" class="glass-card">
-          <h2>全部固定事项 · 总览 <span class="hint">（近 30 天完成格汇总；逐项打卡在⌈待办⌋页）</span></h2>
+          <h2>全部固定事项 · 总览 <span class="hint">（近 30 天完成格汇总；逐项打卡在「待办」页）</span></h2>
           <div class="dcards">
             <div class="dstat"><p class="dl">累计安排</p><p class="dv">{{ habitOverview.arranged }} <small>天次</small></p></div>
             <div class="dstat"><p class="dl">完成</p><p class="dv accent">{{ habitOverview.done }} <small>天次</small></p></div>
@@ -567,7 +575,7 @@ watch(navIntent, (n) => {
         <section class="glass-card">
           <div class="itemshead">
             <h2>固定事项 · 坚持情况 <span class="hint">（近 30 天完成格）</span></h2>
-            <span class="avg">长条下拉切换；打卡在⌈待办⌋页的习惯追踪</span>
+            <span class="avg">长条下拉切换；打卡在「待办」页的习惯追踪</span>
           </div>
           <NSelect
             :value="selectedHabit ?? undefined"
@@ -577,7 +585,7 @@ watch(navIntent, (n) => {
             class="habitsel"
             @update:value="pickHabit"
           />
-          <span v-if="!habitRows.length" class="empty">还没有固定事项：在⌈待办 · 任务⌋新建时把重复选成「每天 / 每周…」</span>
+          <span v-if="!habitRows.length" class="empty">还没有固定事项：在「待办 · 任务」新建时把重复选成「每天 / 每周…」</span>
           <div v-if="selHabit && habitStats" class="dcards">
             <div class="dstat"><p class="dl">安排天数</p><p class="dv">{{ habitStats.total }} <small>天</small></p></div>
             <div class="dstat"><p class="dl">完成次数</p><p class="dv accent">{{ habitStats.doneCount }} <small>次</small></p></div>
@@ -589,12 +597,12 @@ watch(navIntent, (n) => {
         </section>
       </template>
 
-      <!-- 提示：规则总览（编辑在⌈待办 · 提示⌋） -->
+      <!-- 提示：规则总览（编辑在「待办 · 提示」） -->
       <template v-else-if="itemTab === 'rules'">
         <section class="glass-card">
           <div class="itemshead">
             <h2>提醒规则 · 总览</h2>
-            <button class="mini" @click="goTab('todo')">去⌈待办 · 提示⌋管理</button>
+            <button class="mini" @click="goTab('todo')">去「待办 · 提示」管理</button>
           </div>
           <div class="dcards">
             <div class="dstat"><p class="dl">启用中</p><p class="dv accent">{{ rulesEnabled }} <small>条</small></p></div>
@@ -608,13 +616,20 @@ watch(navIntent, (n) => {
               <span class="tag">{{ ruleModeLabel(r) }}</span>
               <span class="tag">{{ r.style === "fullscreen" ? "全屏" : "卡片" }}</span>
               <span v-if="ruleRangeLabel(r)" class="tag rng">{{ ruleRangeLabel(r) }}</span>
+              <span
+                v-if="ruleStats.get(r.id)"
+                class="tag stat"
+                :title="`弹出 ${ruleStats.get(r.id)!.shown} 次 · 确认 ${ruleStats.get(r.id)!.ack} · 稍后 ${ruleStats.get(r.id)!.snooze} · 其他 ${ruleStats.get(r.id)!.other}`"
+              >
+                弹 {{ ruleStats.get(r.id)!.shown }} · 点 {{ ruleStats.get(r.id)!.ack + ruleStats.get(r.id)!.snooze + ruleStats.get(r.id)!.other }}
+              </span>
             </div>
           </div>
           <p v-if="!rules.length" class="empty">还没有提醒规则</p>
         </section>
       </template>
 
-      <!-- 日志：与⌈待办 · 日志⌋同一套界面（列表 / 画廊 + 次级编辑器），默认画廊 -->
+      <!-- 日志：与「待办 · 日志」同一套界面（列表 / 画廊 + 次级编辑器），默认画廊 -->
       <template v-else>
         <section class="glass-card">
           <NotesPanel default-view="gallery" />
@@ -1031,6 +1046,11 @@ watch(navIntent, (n) => {
 .tag.rng {
   color: var(--info, #6aa1ff);
   background: var(--info-soft, rgba(106, 161, 255, 0.14));
+}
+
+.tag.stat {
+  color: var(--text-faint);
+  background: var(--surface);
 }
 
 /* 返回/前往胶囊（与任务卡编辑按钮同族） */

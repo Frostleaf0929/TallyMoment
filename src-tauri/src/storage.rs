@@ -372,6 +372,17 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         // 提醒规则生效范围：NULL = 不限（从某天开始 / 到某天为止）
         "ALTER TABLE reminder_rules ADD COLUMN start_date TEXT",
         "ALTER TABLE reminder_rules ADD COLUMN end_date TEXT",
+        // 提醒统计：每条提醒（规则/任务/间隔）弹出与点按的累计
+        "CREATE TABLE IF NOT EXISTS reminder_stats (
+            kind     TEXT NOT NULL,
+            ref_id   INTEGER NOT NULL,
+            shown    INTEGER NOT NULL DEFAULT 0,
+            ack      INTEGER NOT NULL DEFAULT 0,
+            snooze   INTEGER NOT NULL DEFAULT 0,
+            other    INTEGER NOT NULL DEFAULT 0,
+            last_ts  INTEGER,
+            PRIMARY KEY (kind, ref_id)
+        )",
         // 应用归族：同族（同一软件的不同文件名/副本，如便携版改名）在报表里合并显示。
         // 空 = 未归族（报表按自身名字处理）；读 exe 产品名回填，或用户在详细页手动并入。
         "ALTER TABLE apps ADD COLUMN family TEXT NOT NULL DEFAULT ''",
@@ -1577,6 +1588,82 @@ pub struct RuleDue {
     pub last_fired_key: String,
     /// card | fullscreen
     pub style: String,
+}
+
+// ---------- 提醒统计（弹出几次 / 点按几次） ----------
+
+/// 累计一条提醒事件：field ∈ shown | ack | snooze | other
+pub fn reminder_stat_add(conn: &Connection, kind: &str, ref_id: i64, field: &str) -> Result<(), String> {
+    let (sh, ac, sn, ot) = match field {
+        "shown" => (1, 0, 0, 0),
+        "ack" => (0, 1, 0, 0),
+        "snooze" => (0, 0, 1, 0),
+        "other" => (0, 0, 0, 1),
+        _ => return Err("统计字段非法".into()),
+    };
+    conn.execute(
+        "INSERT INTO reminder_stats(kind, ref_id, shown, ack, snooze, other, last_ts)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(kind, ref_id) DO UPDATE SET
+           shown = shown + ?3, ack = ack + ?4, snooze = snooze + ?5, other = other + ?6, last_ts = ?7",
+        rusqlite::params![kind, ref_id, sh, ac, sn, ot, Local::now().timestamp()],
+    )
+    .map_err(|e| format!("累计提醒统计失败: {e}"))?;
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderStat {
+    pub kind: String,
+    pub ref_id: i64,
+    pub shown: i64,
+    pub ack: i64,
+    pub snooze: i64,
+    pub other: i64,
+    pub last_ts: Option<i64>,
+}
+
+/// 全部提醒统计（前端按 kind+refId 关联展示）
+pub fn reminder_stats_list(conn: &Connection) -> Result<Vec<ReminderStat>, String> {
+    let mut stmt = conn
+        .prepare("SELECT kind, ref_id, shown, ack, snooze, other, last_ts FROM reminder_stats")
+        .map_err(|e| format!("查询提醒统计失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(ReminderStat {
+                kind: r.get(0)?,
+                ref_id: r.get(1)?,
+                shown: r.get(2)?,
+                ack: r.get(3)?,
+                snooze: r.get(4)?,
+                other: r.get(5)?,
+                last_ts: r.get(6)?,
+            })
+        })
+        .map_err(|e| format!("查询提醒统计失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取提醒统计失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 按路径读一张提醒背景图（试看/预览用，不动轮换队列）
+pub fn reminder_bg_read_file(conn: &Connection, path: &str) -> Result<BgPick, String> {
+    if !PathBuf::from(path).is_file() {
+        return Err("图片不存在".into());
+    }
+    let data = std::fs::read(path).map_err(|e| format!("读取图片失败: {e}"))?;
+    let cfg = bg_img_cfg_of(conn, path);
+    Ok(BgPick {
+        mime: bg_mime(path),
+        data: crate::pet_settings::base64_encode(&data),
+        fit: cfg.fit,
+        align: cfg.align,
+        zoom: cfg.zoom,
+        scrim: cfg.scrim,
+    })
 }
 
 pub fn rule_enabled(conn: &Connection) -> Result<Vec<RuleDue>, String> {
@@ -3472,24 +3559,6 @@ pub fn reminder_bg_set_rotate(conn: &Connection, on: bool) {
 }
 
 /// 试看：强制下一次全屏提醒使用指定图片（轮换开=塞进洗牌队列队首；关=把游标拨到它）
-pub fn reminder_bg_test_pick(conn: &Connection, path: &str) -> Result<(), String> {
-    let groups = bg_groups(conn);
-    let active = bg_active_index(conn, groups.len());
-    let files: Vec<String> = groups
-        .get(active)
-        .map(|g| g.files.clone())
-        .unwrap_or_default();
-    if !files.iter().any(|f| f == path) {
-        return Err("这张图不在当前组里".into());
-    }
-    if reminder_bg_rotate_get(conn) {
-        let _ = set_setting(conn, "ui.reminder_bg_hand", &serde_json::to_string(&vec![path.to_string()]).unwrap_or_else(|_| "[]".into()));
-    } else if let Some(i) = files.iter().position(|f| f == path) {
-        let _ = set_setting(conn, "ui.reminder_bg_cursor", &i.to_string());
-    }
-    Ok(())
-}
-
 /// 取本次全屏提醒要用的背景图（当前组）：
 /// 顺序 = 游标从左到右循环；随机 = 洗牌队列逐张出队，一轮结束自动重洗（轮内不重复）
 pub fn reminder_bg_pick(conn: &Connection) -> Result<Option<BgPick>, String> {
@@ -5021,6 +5090,29 @@ mod tai_export_tests {
         let due = due_tasks(&conn, now).unwrap();
         assert_eq!(due.len(), 1, "只有今天到期的应触发提醒");
         assert_eq!(due[0].content, "今天到期");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 提醒统计：弹出/点按累计与列表（按 kind+refId 分行）
+    #[test]
+    fn reminder_stats_accumulate() {
+        let path = std::env::temp_dir().join("tm-reminder-stats.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        reminder_stat_add(&conn, "rule", 7, "shown").unwrap();
+        reminder_stat_add(&conn, "rule", 7, "shown").unwrap();
+        reminder_stat_add(&conn, "rule", 7, "ack").unwrap();
+        reminder_stat_add(&conn, "rule", 7, "snooze").unwrap();
+        reminder_stat_add(&conn, "task", 9, "shown").unwrap();
+        assert!(reminder_stat_add(&conn, "rule", 7, "bogus").is_err());
+        let list = reminder_stats_list(&conn).unwrap();
+        assert_eq!(list.len(), 2);
+        let r = list.iter().find(|x| x.kind == "rule").unwrap();
+        assert_eq!((r.shown, r.ack, r.snooze, r.other), (2, 1, 1, 0));
+        assert!(r.last_ts.is_some());
+        let t = list.iter().find(|x| x.kind == "task").unwrap();
+        assert_eq!(t.shown, 1);
         drop(conn);
         let _ = std::fs::remove_file(&path);
     }

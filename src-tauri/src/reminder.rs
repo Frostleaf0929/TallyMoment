@@ -21,6 +21,18 @@ impl ActionDef {
     }
 }
 
+/// 随 payload 下发的背景图（Rust 端弹提醒时就地选好，前端不再自己挑——轮换必中）
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BgData {
+    pub mime: String,
+    pub data: String,
+    pub fit: String,
+    pub align: String,
+    pub zoom: i64,
+    pub scrim: i64,
+}
+
 /// 提醒卡内容包：一条 = 一张卡（多卡由前端栈维护）
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +49,8 @@ pub struct Payload {
     pub actions: Vec<ActionDef>,
     /// card | fullscreen（全屏提醒方式）
     pub style: String,
+    /// 全屏背景（弹出前在 Rust 端选好；None = 前端自行兜底）
+    pub bg: Option<BgData>,
 }
 
 impl Payload {
@@ -52,6 +66,30 @@ impl Payload {
             accent: None,
             actions: vec![ActionDef::new("ack", "知道了")],
             style: "card".into(),
+            bg: None,
+        }
+    }
+}
+
+fn bg_data_from(pick: crate::storage::BgPick) -> BgData {
+    BgData {
+        mime: pick.mime,
+        data: pick.data,
+        fit: pick.fit,
+        align: pick.align,
+        zoom: pick.zoom,
+        scrim: pick.scrim,
+    }
+}
+
+/// 弹出即计数（kind = "test" 的试看不计）
+fn stat_shown(app: &AppHandle, kind: &str, ref_id: i64) {
+    if kind == "test" {
+        return;
+    }
+    if let Some(db) = app.try_state::<crate::Db>() {
+        if let Ok(conn) = db.0.lock() {
+            let _ = crate::storage::reminder_stat_add(&conn, kind, ref_id, "shown");
         }
     }
 }
@@ -79,6 +117,7 @@ pub fn take_pending() -> Vec<Payload> {
 /// 弹出右下角提醒小窗；窗口已存在则直接追加卡片
 pub fn show(app: &AppHandle, payload: Payload) {
     eprintln!("[reminder] show kind={} ref={}", payload.kind, payload.ref_id);
+    stat_shown(app, &payload.kind, payload.ref_id);
     if payload.style == "fullscreen" {
         show_fullscreen(app, payload);
         return;
@@ -154,8 +193,20 @@ fn kill_border(_win: &tauri::WebviewWindow) {}
 /// 全屏提醒：铺满主屏的置顶无边框窗口（"该休息了"那一类）
 /// 窗口先隐藏、等前端就绪再显示：睡眠唤醒后 WebView 首帧可能迟迟不渲染，
 /// 立即显示会露出默认底色（半夜"全黑一片+滚动条"的来源）
-pub fn show_fullscreen(app: &AppHandle, payload: Payload) {
+pub fn show_fullscreen(app: &AppHandle, mut payload: Payload) {
     eprintln!("[diag] show_fullscreen 进入");
+    // 就地选图：弹出前在 Rust 端轮换取一张随 payload 下发（试看 payload 自带，跳过）
+    if payload.kind != "test" && payload.bg.is_none() {
+        if let Some(db) = app.try_state::<crate::Db>() {
+            if let Ok(conn) = db.0.lock() {
+                match crate::storage::reminder_bg_pick(&conn) {
+                    Ok(Some(pick)) => payload.bg = Some(bg_data_from(pick)),
+                    Ok(None) => {}
+                    Err(e) => eprintln!("[reminder] 选图失败: {e}"),
+                }
+            }
+        }
+    }
     if let Some(win) = app.get_webview_window("reminder_full") {
         eprintln!("[diag] show_fullscreen: 复用已有窗口");
         FULL_SHOWN.store(true, std::sync::atomic::Ordering::Relaxed);

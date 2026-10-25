@@ -644,6 +644,14 @@ fn task_stop_repeat(app: tauri::AppHandle, id: i64, stopped: bool) -> Result<(),
 }
 
 /// 开机自启动是否显示主窗（默认不显示 = 静默后台启动）
+/// 提醒统计（弹出/确认/稍后/其他，前端按 kind+refId 关联）
+#[tauri::command]
+fn reminder_stats_list(app: tauri::AppHandle) -> Result<Vec<storage::ReminderStat>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::reminder_stats_list(&conn)
+}
+
 /// 空闲判定分钟数（0 = 关闭离开检测；设置页"空闲判定"）
 #[tauri::command]
 fn idle_threshold_get(app: tauri::AppHandle) -> Result<u32, String> {
@@ -777,11 +785,12 @@ fn reminder_bg_thumbs(app: tauri::AppHandle) -> Result<Vec<storage::BgThumb>, St
 #[tauri::command]
 fn reminder_bg_test_show(app: tauri::AppHandle, path: String) -> Result<(), String> {
     eprintln!("[diag] test_show 进入（{path}）");
-    {
+    // 试看 = 精确显示编辑中的这张图：读图随 payload 下发，不占用轮换队列
+    let bg = {
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
-        storage::reminder_bg_test_pick(&conn, &path)?;
-    }
+        storage::reminder_bg_read_file(&conn, &path)?
+    };
     // ⚠️ 窗口创建必须由后台线程发起：命令跑在主线程，而 tao/tauri 的窗口创建
     // 需要事件循环线程执行——在主线程里同步 build 会"等待自己"而永久卡死整个应用
     // （2026-10-05 由看门狗实测坐实：[diag] 主线程 2.5s 无响应 ｜ Db锁 空闲）。
@@ -800,6 +809,14 @@ fn reminder_bg_test_show(app: tauri::AppHandle, path: String) -> Result<(), Stri
                 accent: None,
                 actions: vec![reminder::ActionDef::new("ack", "知道了")],
                 style: "fullscreen".into(),
+                bg: Some(reminder::BgData {
+                    mime: bg.mime,
+                    data: bg.data,
+                    fit: bg.fit,
+                    align: bg.align,
+                    zoom: bg.zoom,
+                    scrim: bg.scrim,
+                }),
             },
         );
         eprintln!("[diag] test_show 完成（窗口已请求显示）");
@@ -948,6 +965,19 @@ fn rule_delete(app: tauri::AppHandle, id: i64) -> Result<(), String> {
 /// 提醒卡按钮回传：规则稍后 / 任务完成与延后
 #[tauri::command]
 fn reminder_action(app: tauri::AppHandle, kind: String, ref_id: i64, action: String) -> Result<(), String> {
+    // 点按统计：知道了/完成=确认；稍后=延后；忽略/继续/停止计时等=其他（试看不计）
+    if kind != "test" {
+        let field = match action.as_str() {
+            "ack" | "done" => "ack",
+            "snooze5" | "snooze10" => "snooze",
+            _ => "other",
+        };
+        if let Some(db) = app.try_state::<Db>() {
+            if let Ok(conn) = db.0.lock() {
+                let _ = storage::reminder_stat_add(&conn, &kind, ref_id, field);
+            }
+        }
+    }
     match kind.as_str() {
         "rule" => {
             if action == "snooze5" {
@@ -1980,6 +2010,7 @@ pub fn run() {
             rule_set_enabled,
             rule_delete,
             reminder_action,
+            reminder_stats_list,
             reminder_resize,
             reminder_pending,
             reminder_show_window,

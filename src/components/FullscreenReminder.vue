@@ -6,6 +6,15 @@ import { bgImgStyle, bgScrimOpacity } from "../lib/bgStyle";
 
 /** 全屏休息提醒（提醒方式 = 全屏时由 reminder_full 窗口渲染）
  *  设计：分层柔光 + 呼吸动效 + 大号提示语 + 两个动作按钮 */
+interface BgData {
+  mime: string;
+  data: string;
+  fit: string;
+  align: string;
+  zoom: number;
+  scrim: number;
+}
+
 interface Payload {
   id: string;
   kind: string;
@@ -14,6 +23,8 @@ interface Payload {
   body: string;
   accent: string | null;
   actions: { id: string; label: string }[];
+  /** Rust 端弹出时就地选好的背景（None = 前端自行兜底） */
+  bg?: BgData | null;
 }
 
 const item = ref<Payload | null>(null);
@@ -30,7 +41,13 @@ const scrimStyle = computed(() => ({
   opacity: bg.value ? bgScrimOpacity(bg.value.scrim) : "1",
 }));
 
-async function refreshBg() {
+/** 背景来源优先级：payload 自带（Rust 端弹出时就地选好）> 自行兜底选一张 */
+async function refreshBg(p?: Payload | null) {
+  if (p?.bg) {
+    const w = p.bg;
+    bg.value = { url: `data:${w.mime};base64,${w.data}`, fit: w.fit, align: w.align, zoom: w.zoom, scrim: w.scrim };
+    return;
+  }
   try {
     const w = await invoke<{
       mime: string;
@@ -48,17 +65,17 @@ async function refreshBg() {
 
 function apply(p: Payload) {
   item.value = p;
-  void refreshBg();
+  void refreshBg(p);
   if (autoClose) clearTimeout(autoClose);
   // 全屏页给足停留时间，但不无限挂着
   autoClose = window.setTimeout(() => void dismiss("ack"), 60_000);
 }
 
 onMounted(async () => {
-  void refreshBg();
   try {
     const pending = await invoke<Payload[]>("reminder_pending");
     if (pending.length) apply(pending[pending.length - 1]);
+    else void refreshBg();
     unlisten = await listen<Payload>("reminder-show", (e) => apply(e.payload));
   } catch {
     /* 忽略 */

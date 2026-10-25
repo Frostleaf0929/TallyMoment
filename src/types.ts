@@ -233,6 +233,17 @@ export interface ReminderAction {
   label: string;
 }
 
+/** 提醒统计（按 kind+refId 关联：rule/task/task-interval） */
+export interface ReminderStat {
+  kind: string;
+  refId: number;
+  shown: number;
+  ack: number;
+  snooze: number;
+  other: number;
+  lastTs: number | null;
+}
+
 export interface ReminderPayload {
   id: string;
   kind: "rule" | "task";
