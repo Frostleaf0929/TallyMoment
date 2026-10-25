@@ -179,13 +179,14 @@ async function importRules() {
       <div v-for="r in rules" :key="r.id" class="row" :class="{ off: !r.enabled }">
         <span class="dot" :class="{ on: r.enabled }" :title="r.enabled ? '启用中' : '已停用'"></span>
         <span class="content" :title="r.title">{{ r.title }}</span>
+        <span v-if="r.body" class="body" :title="r.body">{{ r.body }}</span>
+        <span class="spacer"></span>
         <span class="tag">{{ modeLabel(r) }}</span>
         <span class="tag">{{ r.sticky ? "常驻" : `${r.cardDurationSec}s` }}</span>
         <span class="tag" :class="{ full: r.style === 'fullscreen' }">
           {{ r.style === "fullscreen" ? "全屏" : "卡片" }}
         </span>
         <span v-if="rangeLabel(r)" class="tag rng" title="生效日期范围，过期自动停">{{ rangeLabel(r) }}</span>
-        <span v-if="r.body" class="body" :title="r.body">{{ r.body }}</span>
         <NSwitch size="small" :value="r.enabled" @update:value="(v: boolean) => toggle(r, v)" />
         <button class="mini edit" title="编辑" @click="openEdit(r)">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -336,8 +337,9 @@ async function importRules() {
 }
 
 .content {
-  flex: 1;
-  min-width: 60px;
+  /* 标题与备注都限宽：超出省略，长规则不挤压右侧标签 */
+  flex: none;
+  max-width: 210px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
@@ -347,13 +349,17 @@ async function importRules() {
 }
 
 .body {
-  flex: 1;
-  min-width: 40px;
+  flex: none;
+  max-width: 280px;
   font-size: 11.5px;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.spacer {
+  flex: 1;
 }
 
 .tag {

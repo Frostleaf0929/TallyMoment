@@ -76,7 +76,7 @@ function onCell(row: HabitRow, date: string) {
 <template>
   <div>
     <div class="hg-head">
-      <p class="hg-title">习惯追踪 · 固定事项完成情况（点行名选中，点格子打卡）</p>
+      <p class="hg-title">习惯追踪 · 固定事项完成情况 <span class="hint">（点行名选中，点格子打卡）</span></p>
       <div class="hg-ctl">
         <div class="hg-spans">
           <button
@@ -147,6 +147,12 @@ function onCell(row: HabitRow, date: string) {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
+}
+
+.hg-title .hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
 }
 
 .hg-ctl {

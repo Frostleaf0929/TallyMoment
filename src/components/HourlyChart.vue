@@ -42,6 +42,8 @@ const seriesData = computed(() => {
   const ladder = [1, 0.72, 0.54, 0.4, 0.3, 0.22, 0.16];
   let rank = 0;
   const out = [...seriesMap.entries()]
+    // 整段时间全为 0 的系列直接不进图（图例与 tooltip 都不再出现"0 分钟"项）
+    .filter(([, data]) => data.some((v) => v > 0))
     .sort((a, b) => (totals.get(b[0]) ?? Infinity) - (totals.get(a[0]) ?? Infinity))
     .map(([key, data]) => {
       const color =
@@ -68,7 +70,21 @@ function render() {
         backgroundColor: c.tipBg,
         borderColor: c.tipBorder,
         textStyle: { color: c.tipText, fontSize: 12 },
-        valueFormatter: (v: number) => `${v} 分钟`,
+        formatter: (params: unknown) => {
+          // 只列该小时真正有时长的应用（0 分钟的不再占行），按分钟降序
+          const arr = (Array.isArray(params) ? params : [params]) as Array<{
+            axisValue: string;
+            seriesName: string;
+            value: number;
+            marker: string;
+          }>;
+          const rows = arr
+            .filter((q) => (q.value ?? 0) > 0)
+            .sort((a, b) => b.value - a.value)
+            .map((q) => `${q.marker} ${q.seriesName}&nbsp;&nbsp;<b>${q.value}</b> 分钟`);
+          const hour = arr[0]?.axisValue ?? "";
+          return [`<b>${hour} 时</b>`, ...rows].join("<br/>");
+        },
       },
       // 图例改用自绘 HTML（见模板）：ECharts 内置图例在窄卡片里会压到绘图区上
       legend: { show: false },

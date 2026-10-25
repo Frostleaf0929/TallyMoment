@@ -32,7 +32,17 @@ const msg = ref("");
 const err = ref("");
 const busy = ref(false);
 /** 视图三态：edit 只编辑 / split 上下分栏（编辑+预览）/ preview 只读预览 */
-const noteView = ref<"edit" | "split" | "preview">("split");
+/** 编辑器视图：记忆上次选择（首次默认编辑） */
+const noteView = ref<"edit" | "split" | "preview">(
+  (localStorage.getItem("notes.view") as "edit" | "split" | "preview") || "edit"
+);
+watch(noteView, (v) => {
+  try {
+    localStorage.setItem("notes.view", v);
+  } catch {
+    /* 忽略 */
+  }
+});
 /** 插入图片的宽度（新图片块用） */
 const imgWidth = ref<"100%" | "60%" | "33%">("100%");
 
@@ -40,7 +50,17 @@ const imgWidth = ref<"100%" | "60%" | "33%">("100%");
 const allNotes = ref<DailyNote[]>([]);
 const listLoaded = ref(false);
 const searchText = ref("");
-const listMode = ref<"list" | "gallery">(props.defaultView);
+/** 列表 / 画廊：同样记忆上次选择（没记过才用调用方给的默认值） */
+const listMode = ref<"list" | "gallery">(
+  (localStorage.getItem("notes.listMode") as "list" | "gallery") || props.defaultView
+);
+watch(listMode, (v) => {
+  try {
+    localStorage.setItem("notes.listMode", v);
+  } catch {
+    /* 忽略 */
+  }
+});
 
 function ymd(ts: number): string {
   const d = new Date(ts);
@@ -270,6 +290,7 @@ async function saveDay() {
     draftRestore.value = null;
     coversStarted = false;
     await loadList();
+    if (listMode.value === "gallery") void loadCovers();
   } catch (e) {
     err.value = String(e).replace(/^.*Error: /, "");
   } finally {
@@ -412,9 +433,11 @@ watch(
   }
 );
 
-onMounted(() => {
-  void loadList();
+onMounted(async () => {
+  await loadList();
   void loadDay();
+  // 默认就是画廊时 watch 不会触发；等列表取回后再加载封面（否则空列表直接跳过）
+  if (listMode.value === "gallery") void loadCovers();
 });
 </script>
 
@@ -486,7 +509,6 @@ onMounted(() => {
         />
         <span class="d">{{ dateStr() }}{{ dateStr() === today ? " · 今天" : "" }}</span>
         <div class="acts">
-          <NButton size="tiny" quaternary @click="addImage">添加图片</NButton>
           <NButton size="tiny" quaternary @click="importMd">导入 MD</NButton>
           <NButton size="tiny" quaternary @click="exportMd">导出全部 MD</NButton>
           <NButton size="small" type="primary" secondary :loading="busy" @click="saveDay">保存</NButton>
@@ -549,7 +571,7 @@ onMounted(() => {
         />
       </div>
 
-      <div v-if="images.length" class="imgs">
+      <div v-if="images.length && noteView === 'edit'" class="imgs">
         <div v-for="name in images" :key="name" class="img">
           <img v-if="thumbs[`${dateStr()}/${name}`]" :src="thumbs[`${dateStr()}/${name}`]" alt="" />
           <span v-else class="none">读取中…</span>

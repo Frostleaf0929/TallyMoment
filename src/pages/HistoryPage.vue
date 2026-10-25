@@ -302,7 +302,7 @@ onMounted(async () => {
         </section>
 
         <section class="glass-card wide">
-          <h2>24 小时分布（整段累计）</h2>
+          <h2>24 小时分布 <span class="hint">（整段累计）</span></h2>
           <HourlyChart :slices="period.hourly" />
         </section>
 
@@ -370,4 +370,9 @@ onMounted(async () => {
 .stat .value.num2 { font-size: 14px; }
 .stat small { font-size: 12px; font-weight: 400; color: var(--text-faint); }
 .empty { color: var(--text-faint); font-size: 13px; }
+.glass-card h2 .hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
+}
 </style>

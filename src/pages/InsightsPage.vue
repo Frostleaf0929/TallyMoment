@@ -339,7 +339,7 @@ watch(isLight, renderChart);
 
     <!-- 状态分布（按小时） -->
     <section class="glass-card wide">
-      <h2>{{ rangeLabel }}各小时状态（按推断状态堆叠）</h2>
+      <h2>{{ rangeLabel }}各小时状态 <span class="hint">（按推断状态堆叠）</span></h2>
       <DayBars :labels="stateBars.labels" :series="stateBars.series" />
       <p class="hint">
         块 = 间隔不足 5 分钟的使用归并；心流/专注/碎片为本地规则推断，不是精确值。
@@ -862,5 +862,10 @@ watch(isLight, renderChart);
 .empty {
   color: var(--text-faint);
   font-size: 13px;
+}
+.glass-card h2 .hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
 }
 </style>

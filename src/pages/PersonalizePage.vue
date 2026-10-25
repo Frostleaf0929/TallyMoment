@@ -78,16 +78,24 @@ const accentLabel = computed(() =>
     : "自定义"
 );
 
-/** 玻璃三组参数一键回默认：背景 26px/70% · 侧栏 26px/60% · 卡片 26px/90%/阴影 1.1× */
-function resetGlassDefaults() {
+/** 各卡自己的恢复默认：只动本卡管的参数 */
+function resetBgDefaults() {
   bgBlur.value = 26;
   bgAlpha.value = 70;
+  msg.value = "背景已恢复默认：26px / 70%";
+}
+
+function resetSideDefaults() {
   sideBlur.value = 26;
   sideAlpha.value = 60;
+  msg.value = "侧边栏已恢复默认：26px / 60%";
+}
+
+function resetCardDefaults() {
   cardBlur.value = 26;
   cardAlpha.value = 90;
   cardShadow.value = 1.1;
-  msg.value = "已恢复默认：背景 26px/70% · 侧栏 26px/60% · 卡片 26px/90%/阴影 1.1×";
+  msg.value = "卡片已恢复默认：26px / 90% / 阴影 1.1×";
 }
 
 function randomAccent() {
@@ -645,7 +653,59 @@ onMounted(async () => {
       <span class="sub">皮肤预设 · 壁纸 · 玻璃材质 · 透明度 · 动效</span>
     </header>
 
-    <!-- 显示（原在设置页，按用户要求移到这里，放在皮肤预设之前） -->
+    <!-- 主题与壁纸 -->
+    <div class="glass-card card">
+      <h2>主题与壁纸</h2>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">明暗主题</p>
+          <p class="rd">浅色主题下图表与图标也已适配</p>
+        </div>
+        <div class="seg">
+          <button
+            v-for="t in themes"
+            :key="t.key"
+            class="seg-item"
+            :class="{ active: themePref === t.key }"
+            @click="themePref = t.key"
+          >
+            <Icon :name="t.icon" :size="15" />
+            <span>{{ t.label }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">壁纸</p>
+          <p class="rd">玻璃效果需要有"东西"可糊，柔光渐变是最省性能的选择</p>
+        </div>
+        <div class="seg">
+          <button
+            v-for="w in wallKinds"
+            :key="w.key"
+            class="seg-item"
+            :class="{ active: wallKind === w.key }"
+            @click="wallKind = w.key"
+          >
+            {{ w.label }}
+          </button>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">本地图片</p>
+          <p class="rd">从本机选择一张图作为底衬（只存本机数据目录，不上传）</p>
+        </div>
+        <div class="acts">
+          <button class="ghost" @click="pickWallpaper">选择图片</button>
+          <button class="ghost danger" @click="clearWallpaper">移除图片</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 显示（应用配色 / 排行条数） -->
     <div class="glass-card card">
       <h2>显示</h2>
       <div class="row col">
@@ -887,64 +947,9 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 主题与壁纸 -->
-    <div class="glass-card card">
-      <h2>主题与壁纸</h2>
-      <div class="row">
-        <div class="rlabel">
-          <p class="rt">明暗主题</p>
-          <p class="rd">浅色主题下图表与图标也已适配</p>
-        </div>
-        <div class="seg">
-          <button
-            v-for="t in themes"
-            :key="t.key"
-            class="seg-item"
-            :class="{ active: themePref === t.key }"
-            @click="themePref = t.key"
-          >
-            <Icon :name="t.icon" :size="15" />
-            <span>{{ t.label }}</span>
-          </button>
-        </div>
-      </div>
-
-      <div class="row">
-        <div class="rlabel">
-          <p class="rt">壁纸</p>
-          <p class="rd">玻璃效果需要有"东西"可糊，柔光渐变是最省性能的选择</p>
-        </div>
-        <div class="seg">
-          <button
-            v-for="w in wallKinds"
-            :key="w.key"
-            class="seg-item"
-            :class="{ active: wallKind === w.key }"
-            @click="wallKind = w.key"
-          >
-            {{ w.label }}
-          </button>
-        </div>
-      </div>
-
-      <div class="row">
-        <div class="rlabel">
-          <p class="rt">本地图片</p>
-          <p class="rd">从本机选择一张图作为底衬（只存本机数据目录，不上传）</p>
-        </div>
-        <div class="acts">
-          <button class="ghost" @click="pickWallpaper">选择图片</button>
-          <button class="ghost danger" @click="clearWallpaper">移除图片</button>
-        </div>
-      </div>
-    </div>
-
     <!-- 玻璃效果：所有"有多透"的控制收在同一组 -->
     <div class="glass-card card">
-      <div class="cardhead">
-        <h2>玻璃效果</h2>
-        <button class="ghost" @click="resetGlassDefaults">恢复默认</button>
-      </div>
+      <h2>玻璃效果</h2>
 
       <div class="row">
         <div class="rlabel">
@@ -972,21 +977,30 @@ onMounted(async () => {
 
     <!-- 背景 -->
     <div class="glass-card card">
-      <h2>背景</h2>
+      <div class="cardhead">
+        <h2>背景</h2>
+        <button class="ghost" @click="resetBgDefaults">恢复默认</button>
+      </div>
       <SettingSlider v-model="bgBlur" label="背景模糊" desc="0 ~ 60px：柔光/壁纸的朦胧程度" :min="0" :max="60" suffix="px" />
       <SettingSlider v-model="bgAlpha" label="背景不透明度" desc="30% ~ 100%，越低桌面越透" :min="30" :max="100" suffix="%" />
     </div>
 
     <!-- 侧边栏 -->
     <div class="glass-card card">
-      <h2>侧边栏</h2>
+      <div class="cardhead">
+        <h2>侧边栏</h2>
+        <button class="ghost" @click="resetSideDefaults">恢复默认</button>
+      </div>
       <SettingSlider v-model="sideBlur" label="侧边栏亚克力模糊" desc="0 ~ 60px" :min="0" :max="60" suffix="px" />
       <SettingSlider v-model="sideAlpha" label="侧边栏不透明度" desc="0% ~ 100%" :min="0" :max="100" suffix="%" />
     </div>
 
     <!-- 卡片 -->
     <div class="glass-card card">
-      <h2>卡片</h2>
+      <div class="cardhead">
+        <h2>卡片</h2>
+        <button class="ghost" @click="resetCardDefaults">恢复默认</button>
+      </div>
       <SettingSlider v-model="cardBlur" label="卡片亚克力模糊" desc="0 ~ 60px" :min="0" :max="60" suffix="px" />
       <SettingSlider v-model="cardAlpha" label="卡片不透明度" desc="50% ~ 100%" :min="50" :max="100" suffix="%" />
       <SettingSlider v-model="cardShadow" label="卡片阴影强度" desc="0 = 无阴影（扁平）；1 = 标准；越大浮起感越强" :min="0" :max="2" :step="0.1" suffix="×" />
@@ -1329,11 +1343,22 @@ onMounted(async () => {
   position: absolute;
   inset: 0;
   margin: auto;
-  width: 13px;
-  height: 13px;
+  width: 16px;
+  height: 16px;
   pointer-events: none;
   color: #fff;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.6));
+  z-index: 1;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.65));
+}
+
+/* 自定义色块上的灰色遮罩：与预设色块拉开明度差 */
+.picker::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(30, 30, 30, 0.32);
+  pointer-events: none;
 }
 
 /* 卡片标题行（标题左、恢复默认右） */
