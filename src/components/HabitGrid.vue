@@ -92,7 +92,7 @@ function onCell(row: HabitRow, date: string) {
     </div>
 
     <p v-if="!rows.length" class="hg-empty">
-      还没有固定事项：在《任务》新建时把重复选成「每天 / 每周…」，它就会出现在这里，坚持情况一眼可见。
+      还没有固定事项：在⌈任务⌋新建时把重复选成「每天 / 每周…」，它就会出现在这里，坚持情况一眼可见。
     </p>
 
     <div v-else class="hg-scroll">

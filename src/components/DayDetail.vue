@@ -90,7 +90,7 @@ async function load(date: string) {
 
 watch(() => props.date, load, { immediate: true });
 
-/** 去《待办 · 日志》编辑这天的日志（参照"返回待办"的胶囊按钮样式） */
+/** 去⌈待办 · 日志⌋编辑这天的日志（参照"返回待办"的胶囊按钮样式） */
 function editNote() {
   notesIntent.value = { date: props.date, at: Date.now() };
   goTab("todo");
@@ -131,7 +131,7 @@ function onBodyClick(e: MouseEvent) {
     <div v-if="mode === 'full'" class="dsec notecard">
       <div class="notehead">
         <p class="dl">那天写了什么{{ Object.keys(noteImages).length ? ` · ${Object.keys(noteImages).length} 张图片` : "" }}</p>
-        <button class="editnote" title="到《待办 · 日志》编辑这天" @click="editNote">
+        <button class="editnote" title="到⌈待办 · 日志⌋编辑这天" @click="editNote">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { primaryMonitor } from "@tauri-apps/api/window";
 import { bgImgStyle } from "../lib/bgStyle";
@@ -36,6 +36,19 @@ const emit = defineEmits<{ (e: "wallpaper-changed"): void }>();
 const msg = ref("");
 const reminderBgSet = ref(false);
 const err = ref("");
+
+/* 提示改成浮出 toast：页面底部的常驻行不滚动根本看不见，也不该一直占着 */
+const toast = ref<{ text: string; kind: "ok" | "err" } | null>(null);
+let toastTimer = 0;
+function flashToast() {
+  const text = msg.value || err.value;
+  if (!text) return;
+  toast.value = { text, kind: err.value ? "err" : "ok" };
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (toast.value = null), 2600);
+}
+watch(msg, flashToast);
+watch(err, flashToast);
 
 const themes: { key: "dark" | "light" | "system"; label: string; icon: string }[] = [
   { key: "dark", label: "深色", icon: "moon" },
@@ -772,7 +785,7 @@ onMounted(async () => {
       <div class="row col">
         <div class="rlabel">
           <p class="rt">预设</p>
-          <p class="rd">终末地＝超充黄绿深色 HUD；跟随强调色＝用《强调色》里设置的的颜色</p>
+          <p class="rd">终末地＝超充黄绿深色 HUD；跟随强调色＝用⌈强调色⌋里设置的的颜色</p>
         </div>
         <div class="seg grid2">
           <button
@@ -918,7 +931,7 @@ onMounted(async () => {
       <div class="acts" style="display: flex; gap: 8px">
         <button class="btn" @click="resetIslandPos">位置重置（回屏幕顶部居中）</button>
       </div>
-      <p v-if="msg" class="ok">{{ msg }}</p>
+
       </div>
     </div>
 
@@ -1117,8 +1130,11 @@ onMounted(async () => {
       </p>
     </div>
 
-    <p v-if="msg" class="ok">{{ msg }}</p>
-    <p v-if="err" class="err">{{ err }}</p>
+    <Teleport to="body">
+      <Transition name="toastfade">
+        <div v-if="toast" class="msgtoast" :class="toast.kind">{{ toast.text }}</div>
+      </Transition>
+    </Teleport>
     <!-- 全图编辑层：双击缩略图进入，拖动调位置，实时预览蒙版。
          stage = 与显示器等比的"虚拟屏幕"，保证窗口模式下的预览与真实全屏一致。
          （Teleport 渲染到 body，但节点必须留在根 div 内保持单根，否则页面的 v-show 隐藏失效） -->
@@ -1359,6 +1375,40 @@ onMounted(async () => {
   border-radius: 50%;
   background: rgba(30, 30, 30, 0.32);
   pointer-events: none;
+}
+
+/* 浮出提示：底部居中胶囊，2.6 秒自动消失 */
+.msgtoast {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  max-width: min(560px, 86%);
+  padding: 8px 18px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--accent-border);
+  background: var(--surface-solid);
+  color: var(--text);
+  font-size: 12.5px;
+  box-shadow: var(--card-shadow);
+  word-break: break-all;
+}
+
+.msgtoast.err {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.toastfade-enter-active,
+.toastfade-leave-active {
+  transition: opacity var(--dur) ease, transform var(--dur) ease;
+}
+
+.toastfade-enter-from,
+.toastfade-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(6px);
 }
 
 /* 卡片标题行（标题左、恢复默认右） */

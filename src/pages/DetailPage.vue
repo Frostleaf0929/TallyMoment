@@ -543,7 +543,7 @@ watch(navIntent, (n) => {
           </div>
         </section>
         <section class="glass-card">
-          <h2>某天 · 记录 <span class="hint">（在《待办》的月历点某天、「放大」可直达这里）</span></h2>
+          <h2>某天 · 记录 <span class="hint">（在⌈待办⌋的月历点某天、「放大」可直达这里）</span></h2>
           <div class="daynav">
             <button class="dnav" title="前一天" @click="shiftItemDay(-1)">‹</button>
             <span class="dnavday">{{ itemDateStr }}</span>
@@ -556,7 +556,7 @@ watch(navIntent, (n) => {
       <!-- 任务：固定事项总览 + 选择 + 单个任务坚持统计 -->
       <template v-else-if="itemTab === 'tasks'">
         <section v-if="habitRows.length" class="glass-card">
-          <h2>全部固定事项 · 总览 <span class="hint">（近 30 天完成格汇总；逐项打卡在《待办》页）</span></h2>
+          <h2>全部固定事项 · 总览 <span class="hint">（近 30 天完成格汇总；逐项打卡在⌈待办⌋页）</span></h2>
           <div class="dcards">
             <div class="dstat"><p class="dl">累计安排</p><p class="dv">{{ habitOverview.arranged }} <small>天次</small></p></div>
             <div class="dstat"><p class="dl">完成</p><p class="dv accent">{{ habitOverview.done }} <small>天次</small></p></div>
@@ -567,7 +567,7 @@ watch(navIntent, (n) => {
         <section class="glass-card">
           <div class="itemshead">
             <h2>固定事项 · 坚持情况 <span class="hint">（近 30 天完成格）</span></h2>
-            <span class="avg">长条下拉切换；打卡在《待办》页的习惯追踪</span>
+            <span class="avg">长条下拉切换；打卡在⌈待办⌋页的习惯追踪</span>
           </div>
           <NSelect
             :value="selectedHabit ?? undefined"
@@ -577,7 +577,7 @@ watch(navIntent, (n) => {
             class="habitsel"
             @update:value="pickHabit"
           />
-          <span v-if="!habitRows.length" class="empty">还没有固定事项：在《待办 · 任务》新建时把重复选成「每天 / 每周…」</span>
+          <span v-if="!habitRows.length" class="empty">还没有固定事项：在⌈待办 · 任务⌋新建时把重复选成「每天 / 每周…」</span>
           <div v-if="selHabit && habitStats" class="dcards">
             <div class="dstat"><p class="dl">安排天数</p><p class="dv">{{ habitStats.total }} <small>天</small></p></div>
             <div class="dstat"><p class="dl">完成次数</p><p class="dv accent">{{ habitStats.doneCount }} <small>次</small></p></div>
@@ -589,12 +589,12 @@ watch(navIntent, (n) => {
         </section>
       </template>
 
-      <!-- 提示：规则总览（编辑在《待办 · 提示》） -->
+      <!-- 提示：规则总览（编辑在⌈待办 · 提示⌋） -->
       <template v-else-if="itemTab === 'rules'">
         <section class="glass-card">
           <div class="itemshead">
             <h2>提醒规则 · 总览</h2>
-            <button class="mini" @click="goTab('todo')">去《待办 · 提示》管理</button>
+            <button class="mini" @click="goTab('todo')">去⌈待办 · 提示⌋管理</button>
           </div>
           <div class="dcards">
             <div class="dstat"><p class="dl">启用中</p><p class="dv accent">{{ rulesEnabled }} <small>条</small></p></div>
@@ -614,7 +614,7 @@ watch(navIntent, (n) => {
         </section>
       </template>
 
-      <!-- 日志：与《待办 · 日志》同一套界面（列表 / 画廊 + 次级编辑器），默认画廊 -->
+      <!-- 日志：与⌈待办 · 日志⌋同一套界面（列表 / 画廊 + 次级编辑器），默认画廊 -->
       <template v-else>
         <section class="glass-card">
           <NotesPanel default-view="gallery" />

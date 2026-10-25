@@ -177,7 +177,7 @@ function applyData() {
 
   $("next-name").innerHTML = data.nextTask
     ? `${esc(data.nextTask.content)}<span class="t">${fmtDue(data.nextTask.dueTs)}</span>`
-    : `<span style="color:var(--ink-dim)">暂无待办，去《待办》添加</span>`;
+    : `<span style="color:var(--ink-dim)">暂无待办，去⌈待办⌋添加</span>`;
   const tl = $("tasks");
   tl.innerHTML = data.tasks.length
     ? data.tasks

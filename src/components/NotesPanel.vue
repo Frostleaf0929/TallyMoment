@@ -363,6 +363,22 @@ const imageMap = computed(() => {
   return m;
 });
 
+/** 正文里已引用的附件名（![](images/x) 与 <img src="images/x"> 两种写法） */
+const referencedImages = computed(() => {
+  const set = new Set<string>();
+  for (const m of content.value.matchAll(/!\[\]\(images\/([^)]+)\)/g)) set.add(m[1]);
+  for (const m of content.value.matchAll(/<img[^>]*src="images\/([^"]+)"/g)) set.add(m[1]);
+  return set;
+});
+
+/** 底部附件条显示哪些：编辑视图 = 全部（正文是源码，需要可视化清单）；
+ *  分栏/预览 = 只显示正文没引用到的（正文已渲染的不再重复，未引用的也不至于看不见） */
+const stripImages = computed(() =>
+  noteView.value === "edit"
+    ? images.value
+    : images.value.filter((n) => !referencedImages.value.has(n))
+);
+
 async function addImage() {
   err.value = "";
   try {
@@ -571,8 +587,8 @@ onMounted(async () => {
         />
       </div>
 
-      <div v-if="images.length && noteView === 'edit'" class="imgs">
-        <div v-for="name in images" :key="name" class="img">
+      <div v-if="stripImages.length" class="imgs">
+        <div v-for="name in stripImages" :key="name" class="img">
           <img v-if="thumbs[`${dateStr()}/${name}`]" :src="thumbs[`${dateStr()}/${name}`]" alt="" />
           <span v-else class="none">读取中…</span>
           <button class="rm" title="从此天移除" @click="removeImage(name)">×</button>
