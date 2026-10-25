@@ -11,7 +11,12 @@ use crate::{input_hook, reminder, storage};
 use chrono::Timelike;
 
 /// 空闲判定阈值：超过 60 秒无键鼠输入视为离开，停止计时
-const IDLE_THRESHOLD_MS: u32 = 60_000;
+/// 空闲判定毫秒数（运行时可调，设置键 track.idle_min；0 = 不做离开检测）
+static IDLE_THRESHOLD_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(60_000);
+
+fn idle_threshold_ms() -> u32 {
+    IDLE_THRESHOLD_MS.load(std::sync::atomic::Ordering::Relaxed)
+}
 /// 每 1 分钟做一次落库检查点，异常退出最多丢 1 分钟数据
 const CHECKPOINT_SECS: i64 = 60;
 /// 托盘状态刷新间隔（秒）
@@ -189,8 +194,21 @@ pub fn spawn(app: AppHandle) {
             continue;
         }
 
+        // 阈值缓存每 60 秒从设置刷新一次（设置页改完最迟一分钟生效）
+        if now % 60 == 0 {
+            let mins = with_db(&app, |db| Ok::<u32, String>(storage::idle_threshold_min(db)))
+                .and_then(|r| r.ok())
+                .unwrap_or(1);
+            IDLE_THRESHOLD_MS.store(
+                mins.saturating_mul(60_000),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+
         let idle = idle_ms();
-        let active = idle < IDLE_THRESHOLD_MS;
+        let threshold = idle_threshold_ms();
+        // threshold = 0：不做离开检测（Tai 口径，只要在前台就算）
+        let active = threshold == 0 || idle < threshold;
 
         if !active {
             // 离开：会话截止到最后一次输入时刻

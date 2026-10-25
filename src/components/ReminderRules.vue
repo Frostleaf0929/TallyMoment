@@ -187,7 +187,12 @@ async function importRules() {
         <span v-if="rangeLabel(r)" class="tag rng" title="生效日期范围，过期自动停">{{ rangeLabel(r) }}</span>
         <span v-if="r.body" class="body" :title="r.body">{{ r.body }}</span>
         <NSwitch size="small" :value="r.enabled" @update:value="(v: boolean) => toggle(r, v)" />
-        <button class="mini edit" title="编辑" @click="openEdit(r)">编辑</button>
+        <button class="mini edit" title="编辑" @click="openEdit(r)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>编辑</span>
+        </button>
         <NPopconfirm @positive-click="remove(r)">
           <template #trigger>
             <NButton quaternary size="tiny" type="error">删除</NButton>
@@ -210,8 +215,8 @@ async function importRules() {
         <span class="ftitle">{{ form.isNew ? "新建提醒" : "编辑提醒" }}</span>
       </div>
 
-      <input v-model="draft.title" class="edit" placeholder="标题，如：护眼提醒" maxlength="50" />
-      <textarea v-model="draft.body" class="edit area" placeholder="正文（可选）" rows="2" />
+      <input v-model="draft.title" class="finput" placeholder="标题，如：护眼提醒" maxlength="50" />
+      <textarea v-model="draft.body" class="finput area" placeholder="正文（可选）" rows="2" />
       <div class="frow">
         <span class="flabel">触发</span>
         <div class="seg">
@@ -372,6 +377,10 @@ async function importRules() {
 
 .mini {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-faint);
@@ -383,9 +392,44 @@ async function importRules() {
   transition: color var(--dur), border-color var(--dur), background var(--dur);
 }
 
+.mini svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
+}
+
+/* 编辑胶囊：与日志卡同款——默认圆形图标，悬停展开文字 */
 .mini.edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
   color: var(--accent-text);
   border-color: var(--accent-border);
+  overflow: hidden;
+  transition: width var(--dur) cubic-bezier(0.22, 0.61, 0.36, 1), background var(--dur), color var(--dur), border-color var(--dur);
+}
+
+.mini.edit:hover {
+  width: 64px;
+  background: var(--accent-soft);
+}
+
+.mini.edit span {
+  max-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: max-width var(--dur) ease, opacity var(--dur) ease, margin-left var(--dur) ease;
+}
+
+.mini.edit:hover span {
+  max-width: 34px;
+  opacity: 1;
+  margin-left: 4px;
 }
 
 .empty {
@@ -404,6 +448,13 @@ async function importRules() {
 .mini.back {
   font-size: 11px;
   padding: 4px 10px;
+  color: var(--text-muted);
+}
+
+.mini.back:hover {
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
 
 .ftitle {
@@ -412,7 +463,7 @@ async function importRules() {
   color: var(--text);
 }
 
-.edit {
+.finput {
   width: 100%;
   border: 1px solid var(--accent-border);
   background: var(--surface);
@@ -426,11 +477,11 @@ async function importRules() {
   box-sizing: border-box;
 }
 
-.edit:focus {
+.finput:focus {
   border-color: var(--accent-text);
 }
 
-.edit.area {
+.finput.area {
   resize: vertical;
   line-height: 1.6;
 }

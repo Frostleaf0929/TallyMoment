@@ -104,6 +104,13 @@ pub fn file_description(path: &str) -> Option<String> {
     version_string(path, "FileDescription")
 }
 
+/// 友好名（任务栏悬停名）：FileDescription 为空/纯空白时回退 ProductName。
+/// 相当一部分软件（wallpaper32、mpv、pcsuite…）没有 FileDescription，只有产品名。
+pub fn friendly_name(path: &str) -> Option<String> {
+    let fd = file_description(path).filter(|v| !v.trim().is_empty());
+    fd.or_else(|| product_name(path).filter(|v| !v.trim().is_empty()))
+}
+
 /// exe 产品名（构建期由打包配置写入，**不含版本号**）
 #[cfg(windows)]
 pub fn product_name(path: &str) -> Option<String> {

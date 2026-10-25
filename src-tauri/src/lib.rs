@@ -644,6 +644,24 @@ fn task_stop_repeat(app: tauri::AppHandle, id: i64, stopped: bool) -> Result<(),
 }
 
 /// 开机自启动是否显示主窗（默认不显示 = 静默后台启动）
+/// 空闲判定分钟数（0 = 关闭离开检测；设置页"空闲判定"）
+#[tauri::command]
+fn idle_threshold_get(app: tauri::AppHandle) -> Result<u32, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    Ok(storage::idle_threshold_min(&conn))
+}
+
+#[tauri::command]
+fn idle_threshold_set(app: tauri::AppHandle, mins: u32) -> Result<(), String> {
+    if mins > 120 {
+        return Err("空闲判定需在 0~120 分钟".into());
+    }
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|_| "数据库锁不可用")?;
+    storage::set_setting(&conn, "track.idle_min", &mins.to_string())
+}
+
 #[tauri::command]
 fn startup_show_get(app: tauri::AppHandle) -> Result<bool, String> {
     let db = app.state::<Db>();
@@ -1918,6 +1936,8 @@ pub fn run() {
             task_stop_repeat,
             startup_show_get,
             startup_show_set,
+            idle_threshold_get,
+            idle_threshold_set,
             todo_stats,
             habit_grid,
             habit_toggle,

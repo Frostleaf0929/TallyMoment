@@ -21,6 +21,8 @@ const isDev = import.meta.env.DEV;
 const autoStart = ref(false);
 /** 开机自启动时是否显示主窗（关 = 静默后台启动，记录类软件应无痕） */
 const startupShow = ref(false);
+/** 空闲判定分钟数（0 = 关闭离开检测，与 Tai 同口径） */
+const idleMin = ref(1);
 const trackSelf = ref(false);
 type DataMod = "tasks" | "rules" | "all";
 const mod = ref<DataMod>("tasks");
@@ -155,6 +157,15 @@ async function toggleAutoStart(v: boolean) {
   }
 }
 
+async function setIdleMin(v: number) {
+  try {
+    await invoke("idle_threshold_set", { mins: v });
+    idleMin.value = v;
+  } catch (e) {
+    dataErr.value = String(e).replace(/^.*Error: /, "");
+  }
+}
+
 async function toggleStartupShow(v: boolean) {
   try {
     await invoke("startup_show_set", { on: v });
@@ -196,6 +207,11 @@ onMounted(async () => {
     startupShow.value = await invoke<boolean>("startup_show_get");
   } catch {
     startupShow.value = false;
+  }
+  try {
+    idleMin.value = await invoke<number>("idle_threshold_get");
+  } catch {
+    idleMin.value = 1;
   }
   try {
     data.value = await invoke<DataInfo>("data_info");
@@ -279,6 +295,21 @@ async function bumpFlow(key: "contextApps" | "contextMin" | "activeMin", delta: 
           <p class="rd">默认关闭：弹提醒卡会把拾刻置为前台，计进去会污染应用统计；打开后拾刻自己的前台时间也正常记录</p>
         </div>
         <NSwitch :value="trackSelf" @update:value="toggleTrackSelf" />
+      </div>
+      <div class="row">
+        <div class="rlabel">
+          <p class="rt">空闲判定</p>
+          <p class="rd">无键鼠操作多久后停止计时（离开检测）。看视频、阅读这类不动键鼠的场景容易被判成离开而少记；设为「关闭」则前台就算时长，与 Tai 等工具口径一致</p>
+        </div>
+        <select v-model.number="idleMin" class="idleSel" @change="setIdleMin(idleMin)">
+          <option :value="0">关闭</option>
+          <option :value="1">1 分钟</option>
+          <option :value="2">2 分钟</option>
+          <option :value="5">5 分钟</option>
+          <option :value="10">10 分钟</option>
+          <option :value="15">15 分钟</option>
+          <option :value="30">30 分钟</option>
+        </select>
       </div>
       <div class="row">
         <div class="rlabel">
@@ -484,6 +515,18 @@ async function bumpFlow(key: "contextApps" | "contextMin" | "activeMin", delta: 
   justify-content: space-between;
   gap: 16px;
   padding: 6px 0;
+}
+
+.idleSel {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 5px 8px;
+  outline: none;
 }
 
 .seg {

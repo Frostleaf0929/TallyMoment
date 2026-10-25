@@ -434,7 +434,12 @@ async function importMd() {
         <button class="mini" :class="{ on: !!t.startTs }" :title="t.startTs ? '结束计时' : '开始做'" @click="toggleStart(t)">
           {{ t.startTs ? "计时中" : "开始" }}
         </button>
-        <button class="mini edit" title="编辑" @click="openEditTask(t)">编辑</button>
+        <button class="mini edit" title="编辑" @click="openEditTask(t)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>编辑</span>
+        </button>
         <NPopconfirm @positive-click="remove(t)">
           <template #trigger>
             <NButton quaternary size="tiny" type="error">删除</NButton>
@@ -478,7 +483,12 @@ async function importMd() {
         >
           {{ g.todayInst.startTs ? "计时中" : "开始" }}
         </button>
-        <button v-if="g.template || g.todayInst" class="mini edit" title="编辑 / 详情" @click="openGroupEdit(g)">编辑</button>
+        <button v-if="g.template || g.todayInst" class="mini edit" title="编辑 / 详情" @click="openGroupEdit(g)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>编辑</span>
+        </button>
         <NPopconfirm v-if="g.template" @positive-click="remove(g.template!)">
           <template #trigger>
             <NButton quaternary size="tiny" type="error">删除</NButton>
@@ -516,7 +526,12 @@ async function importMd() {
           <span v-if="g.repeatMode" class="rep">{{ repeatLabel(g.repeatMode) }}{{ g.stopped ? " · 已停止" : "" }}</span>
           <span v-else class="rep no">{{ g.stopLabel }}</span>
           <span class="hcount">已完成 {{ g.doneCount }} 次</span>
-          <button class="mini edit" @click="openGroupEdit(g)">详情</button>
+          <button class="mini edit" title="坚持详情" @click="openGroupEdit(g)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>详情</span>
+        </button>
         </div>
       </template>
     </template>
@@ -537,7 +552,7 @@ async function importMd() {
       <template v-if="form.mode === 'new'">
         <input
           v-model="fdContent"
-          class="edit fd-content"
+          class="finput fd-content"
           placeholder="任务内容…（时间留空 = 今天）"
           maxlength="200"
           @keyup.enter="submitNew"
@@ -561,7 +576,7 @@ async function importMd() {
       <!-- 编辑一次性任务 / 模板 / 孤儿组 -->
       <template v-else>
         <template v-if="editingTask || editGroup?.template || editGroup?.todayInst">
-          <input v-model="fdContent" class="edit" maxlength="200" @keyup.enter="saveEdit" />
+          <input v-model="fdContent" class="finput" maxlength="200" @keyup.enter="saveEdit" />
           <div class="frow">
             <select v-model.number="fdPriority" class="esel">
               <option :value="2">高优先</option>
@@ -781,9 +796,38 @@ async function importMd() {
   transition: color var(--dur), border-color var(--dur), background var(--dur);
 }
 
+/* 编辑/详情胶囊：与日志卡同款——默认圆形图标，悬停展开文字 */
 .mini.edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
   color: var(--accent-text);
   border-color: var(--accent-border);
+  overflow: hidden;
+  transition: width var(--dur) cubic-bezier(0.22, 0.61, 0.36, 1), background var(--dur), color var(--dur), border-color var(--dur);
+}
+
+.mini.edit:hover {
+  width: 64px;
+  background: var(--accent-soft);
+}
+
+.mini.edit span {
+  max-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: max-width var(--dur) ease, opacity var(--dur) ease, margin-left var(--dur) ease;
+}
+
+.mini.edit:hover span {
+  max-width: 34px;
+  opacity: 1;
+  margin-left: 4px;
 }
 
 .mini.on {
@@ -830,6 +874,13 @@ async function importMd() {
 .mini.back {
   font-size: 11px;
   padding: 4px 10px;
+  color: var(--text-muted);
+}
+
+.mini.back:hover {
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
 
 .ftitle {
@@ -838,7 +889,7 @@ async function importMd() {
   color: var(--text);
 }
 
-.edit {
+.finput {
   width: 100%;
   border: 1px solid var(--accent-border);
   background: var(--surface);
@@ -851,7 +902,7 @@ async function importMd() {
   margin-bottom: 10px;
 }
 
-.edit:focus {
+.finput:focus {
   border-color: var(--accent-text);
 }
 

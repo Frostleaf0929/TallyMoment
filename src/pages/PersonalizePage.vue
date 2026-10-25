@@ -714,7 +714,7 @@ onMounted(async () => {
       <div class="row col">
         <div class="rlabel">
           <p class="rt">预设</p>
-          <p class="rd">终末地＝超充黄绿深色 HUD；跟随强调色＝用〈强调色〉里设置的的颜色</p>
+          <p class="rd">终末地＝超充黄绿深色 HUD；跟随强调色＝用《强调色》里设置的的颜色</p>
         </div>
         <div class="seg grid2">
           <button

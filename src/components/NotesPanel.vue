@@ -13,7 +13,9 @@ import {
 } from "../lib/mdBlocks";
 
 /** 每日日志：默认是记录列表（列表 / 画廊两种看法），点开某天才进编辑器（与任务/提醒同一套交互） */
-const props = defineProps<{ dayTs?: number }>();
+const props = withDefaults(defineProps<{ dayTs?: number; defaultView?: "list" | "gallery" }>(), {
+  defaultView: "list",
+});
 interface DailyNote {
   date: string;
   content: string;
@@ -38,7 +40,7 @@ const imgWidth = ref<"100%" | "60%" | "33%">("100%");
 const allNotes = ref<DailyNote[]>([]);
 const listLoaded = ref(false);
 const searchText = ref("");
-const listMode = ref<"list" | "gallery">("list");
+const listMode = ref<"list" | "gallery">(props.defaultView);
 
 function ymd(ts: number): string {
   const d = new Date(ts);

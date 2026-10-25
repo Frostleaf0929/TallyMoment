@@ -11,6 +11,7 @@ import { iconColor, iconUrl, requestIcons } from "../lib/appIcons";
 import { activeTab, goTab, navIntent, type ChecklistTab } from "../lib/uiState";
 import BallLoader from "../components/BallLoader.vue";
 import DayDetail from "../components/DayDetail.vue";
+import NotesPanel from "../components/NotesPanel.vue";
 import RangeCard from "../components/RangeCard.vue";
 import DayBars from "../components/DayBars.vue";
 import HourlyChart from "../components/HourlyChart.vue";
@@ -448,10 +449,10 @@ watch(navIntent, (n) => {
     return;
   }
   if (n.view === "items") {
-    // 某天弹层放大 → 清单 · 日志（那天的对照详情）
+    // 某天弹层放大 → 清单 · 总览（那天的记录统计；日志本身在「日志」子页）
     view.value = "checklist";
     fromTodo.value = true;
-    itemTab.value = "notes";
+    itemTab.value = "overview";
     if (n.date) itemDate.value = new Date(`${n.date}T00:00:00`).getTime();
     return;
   }
@@ -493,19 +494,10 @@ watch(navIntent, (n) => {
         <button :class="{ active: itemTab === 'notes' }" @click="itemTab = 'notes'">日志</button>
       </div>
 
-      <!-- 总览：固定事项汇总 + 待办三模块（统一数据卡规格，点卡切子标签） -->
+      <!-- 总览：待办三模块 + 某天记录统计（月历跳转落这里） -->
       <template v-if="itemTab === 'overview'">
-        <section v-if="habitRows.length" class="glass-card">
-          <h2>全部固定事项 · 总览（近 30 天完成格汇总；逐项打卡在〈待办〉页）</h2>
-          <div class="dcards">
-            <div class="dstat"><p class="dl">累计安排</p><p class="dv">{{ habitOverview.arranged }} <small>天次</small></p></div>
-            <div class="dstat"><p class="dl">完成</p><p class="dv accent">{{ habitOverview.done }} <small>天次</small></p></div>
-            <div class="dstat"><p class="dl">总体完成率</p><p class="dv">{{ habitOverview.rate < 0 ? "—" : `${habitOverview.rate}%` }}</p></div>
-            <div class="dstat"><p class="dl">最长连续{{ habitOverview.bestName ? ` · ${habitOverview.bestName}` : "" }}</p><p class="dv">{{ habitOverview.best }} <small>天</small></p></div>
-          </div>
-        </section>
         <section class="glass-card">
-          <h2>待办三模块 · 概览（点卡片进入对应子页）</h2>
+          <h2>待办三模块 · 概览 <span class="hint">（点卡片进入对应子页）</span></h2>
           <div class="dcards">
             <button class="dstat asbtn" @click="itemTab = 'tasks'">
               <p class="dl">任务</p>
@@ -524,15 +516,32 @@ watch(navIntent, (n) => {
             </button>
           </div>
         </section>
-        <p v-if="!habitRows.length" class="empty">还没有固定事项：在〈待办 · 任务〉新建时把重复选成「每天 / 每周…」</p>
+        <section class="glass-card">
+          <h2>某天 · 记录 <span class="hint">（在《待办》的月历点某天、「放大」可直达这里）</span></h2>
+          <div class="daynav">
+            <button class="dnav" title="前一天" @click="shiftItemDay(-1)">‹</button>
+            <span class="dnavday">{{ itemDateStr }}</span>
+            <button class="dnav" title="后一天" @click="shiftItemDay(1)">›</button>
+          </div>
+          <DayDetail :date="itemDateStr" mode="stats" />
+        </section>
       </template>
 
-      <!-- 任务：固定事项选择 + 单个任务坚持统计（不用再从待办跳转才能看） -->
+      <!-- 任务：固定事项总览 + 选择 + 单个任务坚持统计 -->
       <template v-else-if="itemTab === 'tasks'">
+        <section v-if="habitRows.length" class="glass-card">
+          <h2>全部固定事项 · 总览 <span class="hint">（近 30 天完成格汇总；逐项打卡在《待办》页）</span></h2>
+          <div class="dcards">
+            <div class="dstat"><p class="dl">累计安排</p><p class="dv">{{ habitOverview.arranged }} <small>天次</small></p></div>
+            <div class="dstat"><p class="dl">完成</p><p class="dv accent">{{ habitOverview.done }} <small>天次</small></p></div>
+            <div class="dstat"><p class="dl">总体完成率</p><p class="dv">{{ habitOverview.rate < 0 ? "—" : `${habitOverview.rate}%` }}</p></div>
+            <div class="dstat"><p class="dl">最长连续{{ habitOverview.bestName ? ` · ${habitOverview.bestName}` : "" }}</p><p class="dv">{{ habitOverview.best }} <small>天</small></p></div>
+          </div>
+        </section>
         <section class="glass-card">
           <div class="itemshead">
-            <h2>固定事项 · 坚持情况（近 30 天完成格）</h2>
-            <span class="avg">点名字切换；打卡在〈待办〉页的习惯追踪</span>
+            <h2>固定事项 · 坚持情况 <span class="hint">（近 30 天完成格）</span></h2>
+            <span class="avg">点名字切换；打卡在《待办》页的习惯追踪</span>
           </div>
           <div class="chiprow">
             <button
@@ -544,6 +553,7 @@ watch(navIntent, (n) => {
             >
               {{ r.content }}<em v-if="r.stopped"> · 已停止</em>
             </button>
+            <span v-if="!habitRows.length" class="empty">还没有固定事项：在《待办 · 任务》新建时把重复选成「每天 / 每周…」</span>
           </div>
           <div v-if="selHabit && habitStats" class="dcards">
             <div class="dstat"><p class="dl">安排天数</p><p class="dv">{{ habitStats.total }} <small>天</small></p></div>
@@ -556,12 +566,12 @@ watch(navIntent, (n) => {
         </section>
       </template>
 
-      <!-- 提示：规则总览（编辑在〈待办 · 提示〉） -->
+      <!-- 提示：规则总览（编辑在《待办 · 提示》） -->
       <template v-else-if="itemTab === 'rules'">
         <section class="glass-card">
           <div class="itemshead">
             <h2>提醒规则 · 总览</h2>
-            <button class="mini" @click="goTab('todo')">去〈待办 · 提示〉管理</button>
+            <button class="mini" @click="goTab('todo')">去《待办 · 提示》管理</button>
           </div>
           <div class="dcards">
             <div class="dstat"><p class="dl">启用中</p><p class="dv accent">{{ rulesEnabled }} <small>条</small></p></div>
@@ -581,20 +591,10 @@ watch(navIntent, (n) => {
         </section>
       </template>
 
-      <!-- 日志：某天的对照详情（完成率 / 时长 / 小时分布 / 日志） -->
+      <!-- 日志：与《待办 · 日志》同一套界面（列表 / 画廊 + 次级编辑器），默认画廊 -->
       <template v-else>
-        <section class="glass-card itemsview">
-          <div class="itemshead">
-            <h2>某天 · 记录与日志</h2>
-            <button class="mini" @click="goTab('todo')">去〈待办 · 日志〉写</button>
-          </div>
-          <div class="daynav">
-            <button class="dnav" title="前一天" @click="shiftItemDay(-1)">‹</button>
-            <span class="dnavday">{{ itemDateStr }}</span>
-            <button class="dnav" title="后一天" @click="shiftItemDay(1)">›</button>
-            <span class="dnavhint">也可以从〈待办〉的月历点某天、再点弹层的「放大」跳到这里</span>
-          </div>
-          <DayDetail :date="itemDateStr" />
+        <section class="glass-card">
+          <NotesPanel default-view="gallery" />
         </section>
       </template>
     </template>
@@ -1137,6 +1137,13 @@ watch(navIntent, (n) => {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
+}
+
+/* 卡片标题里的括号备注：更小更淡，不与标题同级 */
+.glass-card h2 .hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
 }
 
 .cardhead {

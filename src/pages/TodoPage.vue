@@ -177,6 +177,13 @@ function jumpChecklist(sub: "tasks" | "rules" | "notes") {
   jumpTo("checklist", undefined, undefined, undefined, sub);
 }
 
+/** 弹层头部的跳转：当前打开的模块直接映射清单子页 */
+function jumpSheet() {
+  if (openModule.value === "tasks" || openModule.value === "rules" || openModule.value === "notes") {
+    jumpChecklist(openModule.value);
+  }
+}
+
 const notesPanel = ref<InstanceType<typeof NotesPanel> | null>(null);
 
 /* 任何跨页跳转都先关掉本页的二级框：不然遮罩盖着新页面，看起来像"点了没反应" */
@@ -332,56 +339,32 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
     <!-- 任务看板 -->
     <!-- 三卡并列：任务 / 待办提醒 / 日志（点卡片在二级框里编辑） -->
     <section class="modrow">
-      <div class="glass-card mcard" role="button" tabindex="0" @click="openModule = 'tasks'" @keyup.enter="openModule = 'tasks'">
+      <button class="glass-card mcard" @click="openModule = 'tasks'">
         <div class="mhead">
           <h2>任务</h2>
-          <span class="macts">
-            <button class="jump" title="在「详细 · 清单」中查看" @click.stop="jumpChecklist('tasks')">
-              <svg viewBox="0 0 24 24" class="jicon" aria-hidden="true">
-                <path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-              <span class="jtxt">清单</span>
-            </button>
-            <Icon name="checklist" :size="16" />
-          </span>
+          <Icon name="checklist" :size="16" />
         </div>
         <p class="mnum">{{ openCount }} <small>项未完成</small></p>
         <p class="msub">今日待办 {{ todayTasks.length }} 项 · 点开编辑清单</p>
-      </div>
+      </button>
 
-      <div class="glass-card mcard" role="button" tabindex="0" @click="openModule = 'rules'" @keyup.enter="openModule = 'rules'">
+      <button class="glass-card mcard" @click="openModule = 'rules'">
         <div class="mhead">
           <h2>提示</h2>
-          <span class="macts">
-            <button class="jump" title="在「详细 · 清单」中查看" @click.stop="jumpChecklist('rules')">
-              <svg viewBox="0 0 24 24" class="jicon" aria-hidden="true">
-                <path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-              <span class="jtxt">清单</span>
-            </button>
-            <Icon name="bell" :size="16" />
-          </span>
+          <Icon name="bell" :size="16" />
         </div>
         <p class="mnum">{{ rules.filter((r) => r.enabled).length }} <small>条启用中</small></p>
         <p class="msub">共 {{ rules.length }} 条规则 · 点开管理</p>
-      </div>
+      </button>
 
-      <div class="glass-card mcard" role="button" tabindex="0" @click="openModule = 'notes'" @keyup.enter="openModule = 'notes'">
+      <button class="glass-card mcard" @click="openModule = 'notes'">
         <div class="mhead">
           <h2>日志</h2>
-          <span class="macts">
-            <button class="jump" title="在「详细 · 清单」中查看" @click.stop="jumpChecklist('notes')">
-              <svg viewBox="0 0 24 24" class="jicon" aria-hidden="true">
-                <path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-              <span class="jtxt">清单</span>
-            </button>
-            <Icon name="doc" :size="16" />
-          </span>
+          <Icon name="doc" :size="16" />
         </div>
         <p class="mnum">{{ noteCount }} <small>篇</small></p>
         <p class="msub">{{ lastNoteDate || "还没有日志" }} · 点开写今天的</p>
-      </div>
+      </button>
     </section>
 
 
@@ -424,16 +407,12 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
           <div class="modhead">
             <h2>{{ moduleTitle }}</h2>
             <div class="dacts">
-              <!-- 日志二级框：编辑胶囊（打开选中那天的日志编辑器，与待办卡片同族样式） -->
-              <button
-                v-if="openModule === 'notes'"
-                class="wbtn editpill"
-                title="编辑这天的日志"
-                @click="notesPanel?.openEditor()"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24">
-                  <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              <!-- 跳转胶囊：直达「详细 · 清单」对应子页（样式与月历定位按钮同族） -->
+              <button v-if="openModule" class="jump" title="在「详细 · 清单」中查看" @click="jumpSheet">
+                <svg viewBox="0 0 24 24" class="jicon" aria-hidden="true">
+                  <path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
+                <span class="jtxt">清单</span>
               </button>
               <button class="wbtn" title="关闭" @click="openModule = ''">
                 <svg width="12" height="12" viewBox="0 0 12 12">
@@ -528,13 +507,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   font-family: inherit;
 }
 
-/* 卡片右上角的跳转胶囊：默认圆形图标，悬停展开文字（与月历定位按钮同族） */
-.macts {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
+/* 弹层头部的跳转胶囊：默认圆形图标，悬停展开文字（与月历定位按钮同族） */
 .jump {
   display: inline-flex;
   align-items: center;
@@ -797,19 +770,6 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
   color: var(--text);
 }
 
-/* 日志弹层的「编辑」胶囊：与任务卡编辑按钮同族的强调态 */
-.wbtn.editpill {
-  width: auto;
-  padding: 0 9px;
-  color: var(--accent-text);
-  border: 1px solid var(--accent-border);
-  background: var(--accent-soft);
-}
-
-.wbtn.editpill:hover {
-  color: var(--surface);
-  background: var(--accent-text);
-}
 
 .sheet {
   width: min(700px, 100%);

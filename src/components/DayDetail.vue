@@ -8,8 +8,11 @@ import HourlyChart from "./HourlyChart.vue";
 import MarkdownPreview from "./MarkdownPreview.vue";
 
 /** 某一天的对照详情：完成率 / 使用时长 / 小时分布 / 日志与图片
- *  同时用于待办页的弹层与「详细 · 事项」页 */
-const props = defineProps<{ date: string }>();
+ *  同时用于待办页的弹层与「详细 · 清单」页
+ *  mode = "full"（默认）完整渲染；"stats" 只渲染数据卡与小时分布（清单·总览用，日志归「日志」子页） */
+const props = withDefaults(defineProps<{ date: string; mode?: "full" | "stats" }>(), {
+  mode: "full",
+});
 
 const report = ref<DayReport | null>(null);
 const stats = ref<{ todayDone: number; weekRate: number; ontimeRate: number; avgMinutes: number } | null>(
@@ -87,7 +90,7 @@ async function load(date: string) {
 
 watch(() => props.date, load, { immediate: true });
 
-/** 去〈待办 · 日志〉编辑这天的日志（参照"返回待办"的胶囊按钮样式） */
+/** 去《待办 · 日志》编辑这天的日志（参照"返回待办"的胶囊按钮样式） */
 function editNote() {
   notesIntent.value = { date: props.date, at: Date.now() };
   goTab("todo");
@@ -125,10 +128,10 @@ function onBodyClick(e: MouseEvent) {
       <HourlyChart :slices="report?.hourly ?? []" :height="180" />
     </div>
 
-    <div class="dsec notecard">
+    <div v-if="mode === 'full'" class="dsec notecard">
       <div class="notehead">
         <p class="dl">那天写了什么{{ Object.keys(noteImages).length ? ` · ${Object.keys(noteImages).length} 张图片` : "" }}</p>
-        <button class="editnote" title="到〈待办 · 日志〉编辑这天" @click="editNote">
+        <button class="editnote" title="到《待办 · 日志》编辑这天" @click="editNote">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
@@ -145,7 +148,7 @@ function onBodyClick(e: MouseEvent) {
       <p v-if="imgLoading" class="dtext">图片加载中…</p>
     </div>
 
-    <div class="dsec">
+    <div v-if="mode === 'full'" class="dsec">
       <p class="dl">状态 / 分析 / 完成率</p>
       <p class="dtext">框架已就位，细化的状态判定、分析与完成率对比后续继续打磨。</p>
     </div>

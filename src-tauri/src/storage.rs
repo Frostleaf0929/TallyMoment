@@ -252,7 +252,7 @@ pub fn backfill_friendly_names(conn: &Connection) -> Result<usize, String> {
         if exe.is_empty() || !std::path::Path::new(&exe).exists() {
             continue;
         }
-        let Some(fd) = crate::app_icon::file_description(&exe) else {
+        let Some(fd) = crate::app_icon::friendly_name(&exe) else {
             continue;
         };
         conn.execute(
@@ -500,7 +500,7 @@ pub fn app_id_for(
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
         if (display.is_empty() || display == stem) && !exe_path.is_empty() {
-            if let Some(fd) = crate::app_icon::file_description(exe_path) {
+            if let Some(fd) = crate::app_icon::friendly_name(exe_path) {
                 display = fd;
             }
         }
@@ -874,6 +874,14 @@ pub fn task_stop_repeat(conn: &Connection, id: i64, stopped: bool) -> Result<(),
         return Err("只有重复任务本身可以停止或恢复".into());
     }
     Ok(())
+}
+
+/// 空闲判定分钟数（0 = 不做离开检测；与 Tai 等不剔空闲的工具同口径）
+pub fn idle_threshold_min(conn: &Connection) -> u32 {
+    get_setting(conn, "track.idle_min")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(1)
+        .clamp(0, 120)
 }
 
 /// 记录"开始做"的时间（每日追踪）
