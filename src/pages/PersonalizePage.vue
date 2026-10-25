@@ -12,8 +12,6 @@ import { onMounted } from "vue";
 import {
   accent,
   accentIsPreset,
-  applySkin,
-  activeSkinKey,
   bgAlpha,
   cardAlpha,
   bgBlur,
@@ -27,7 +25,6 @@ import {
   material,
   motion,
   sideAlpha,
-  skins,
   themePref,
   wallKind,
   wallImageUrl,
@@ -66,8 +63,6 @@ const wallKinds: { key: "none" | "gradient" | "image"; label: string }[] = [
   { key: "image", label: "本地图片" },
 ];
 
-const currentSkin = computed(() => activeSkinKey());
-
 /** 取色器：预设色块选中时显示该预设的实际色值，拖动即切到自定义色 */
 const pickerValue = computed({
   get: () => {
@@ -83,13 +78,16 @@ const accentLabel = computed(() =>
     : "自定义"
 );
 
-function pickSkin(key: string) {
-  const s = skins.find((x) => x.key === key);
-  if (s) {
-    applySkin(s);
-    msg.value = `已应用皮肤「${s.label}」`;
-    err.value = "";
-  }
+/** 玻璃三组参数一键回默认：背景 26px/70% · 侧栏 26px/60% · 卡片 26px/90%/阴影 1.1× */
+function resetGlassDefaults() {
+  bgBlur.value = 26;
+  bgAlpha.value = 70;
+  sideBlur.value = 26;
+  sideAlpha.value = 60;
+  cardBlur.value = 26;
+  cardAlpha.value = 90;
+  cardShadow.value = 1.1;
+  msg.value = "已恢复默认：背景 26px/70% · 侧栏 26px/60% · 卡片 26px/90%/阴影 1.1×";
 }
 
 function randomAccent() {
@@ -864,31 +862,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 皮肤预设 -->
-    <div class="glass-card card">
-      <h2>皮肤预设</h2>
-      <div class="skins">
-        <button
-          v-for="s in skins"
-          :key="s.key"
-          class="skin"
-          :class="{ active: currentSkin === s.key }"
-          :title="s.label"
-          @click="pickSkin(s.key)"
-        >
-          <span class="preview" :style="{ background: s.swatch[0] }">
-            <span class="pv-card" :style="{ background: s.swatch[1] }">
-              <span class="pv-bar" :style="{ background: s.swatch[2] }"></span>
-              <span class="pv-bar short" :style="{ background: s.swatch[2], opacity: 0.6 }"></span>
-            </span>
-          </span>
-          <span class="sname">{{ s.label }}</span>
-          <span v-if="currentSkin === s.key" class="tick"><Icon name="checklist" :size="12" /></span>
-        </button>
-      </div>
-      <p class="rd more">预设会一次性设定主题、强调色、材质与透明度；之后你仍然可以单独微调任何一项。</p>
-    </div>
-
     <!-- 强调色 -->
     <div class="glass-card card">
       <h2>强调色</h2>
@@ -904,9 +877,12 @@ onMounted(async () => {
         ></button>
         <label class="picker" :title="`自定义颜色（当前：${accentLabel}）`">
           <input v-model="pickerValue" type="color" />
+          <svg class="pk-edit" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 20h4L19 9l-4-4L4 16v4zM13 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
         </label>
         <button class="ghost" @click="randomAccent">随机</button>
-        <button class="ghost" @click="accent = 'indigo'">恢复默认</button>
+        <button class="ghost" @click="accent = 'rose'">恢复默认</button>
         <span class="cur">{{ accentLabel }}</span>
       </div>
     </div>
@@ -965,7 +941,10 @@ onMounted(async () => {
 
     <!-- 玻璃效果：所有"有多透"的控制收在同一组 -->
     <div class="glass-card card">
-      <h2>玻璃效果</h2>
+      <div class="cardhead">
+        <h2>玻璃效果</h2>
+        <button class="ghost" @click="resetGlassDefaults">恢复默认</button>
+      </div>
 
       <div class="row">
         <div class="rlabel">
@@ -1335,6 +1314,7 @@ onMounted(async () => {
 }
 
 .picker {
+  position: relative;
   width: 30px;
   height: 30px;
   border-radius: 50%;
@@ -1342,6 +1322,30 @@ onMounted(async () => {
   overflow: hidden;
   display: inline-flex;
   cursor: pointer;
+}
+
+/* 取色器中央的编辑小图标：一眼分清这是自定义入口而不是预设色块 */
+.pk-edit {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 13px;
+  height: 13px;
+  pointer-events: none;
+  color: #fff;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.6));
+}
+
+/* 卡片标题行（标题左、恢复默认右） */
+.cardhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cardhead h2 {
+  margin: 0 0 12px;
 }
 
 .picker input {

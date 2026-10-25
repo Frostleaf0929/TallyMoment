@@ -12,26 +12,26 @@
    ============================================================ */
 
 :root {
-  /* 表面 */
-  --bg: #0f1116;
-  --bg-rgb: 15, 17, 22;
-  --side-rgb: 20, 24, 31;
+  /* 表面（深色中性黑：参考主流软件深色模式的 #161616，去掉蓝味） */
+  --bg: #161616;
+  --bg-rgb: 22, 22, 22;
+  --side-rgb: 25, 25, 25;
   /* 三层透明度（个性化页写入） */
   --bg-alpha: 1;   /* 界面底色（画布） */
   --side-alpha: 0.5; /* 侧边栏 */
   --card-alpha: 1;   /* 卡片（乘在 --bg-glass 之上） */
-  --bg-glass: rgba(20, 24, 31, 0.58);
+  --bg-glass: rgba(25, 25, 25, 0.58);
   --surface: rgba(255, 255, 255, 0.045);
   --surface-hover: rgba(255, 255, 255, 0.08);
-  --surface-solid: #161a21;
+  --surface-solid: #1b1b1b;
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.13);
   --card-border: rgba(255, 255, 255, 0.1);
   --card-shadow: 0 10px 30px rgba(0, 0, 0, 0.34), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
   --card-shadow-hover: 0 20px 48px rgba(0, 0, 0, 0.46);
 
-  /* 文字 */
-  --text: #dde1e9;
+  /* 文字（深色下提亮主文字，侧栏不再发灰） */
+  --text: #eaedf4;
   --text-muted: #8a91a0;
   --text-faint: #5a626e;
 
@@ -74,10 +74,8 @@
   --side-shadow: 0 0 0 rgba(0, 0, 0, 0);
   --card-shadow-strength: 1;
 
-  /* 背景层柔光（跟随强调色） */
+  /* 背景层柔光（跟随强调色；wall-b/c 由 .wall 里用强调色派生，保证任何强调色下都和谐） */
   --wall-a: rgba(123, 132, 236, 0.2);
-  --wall-b: rgba(125, 146, 207, 0.16);
-  --wall-c: rgba(160, 143, 224, 0.14);
   --wall-image: none;
   --wall-image-opacity: 1;
 
@@ -92,7 +90,7 @@
   --chart-label: #5c6474;
   --chart-split: #1c212d;
   --chart-rail: rgba(255, 255, 255, 0.09);
-  --chart-tip-bg: #161a24;
+  --chart-tip-bg: #1b1b1b;
   --chart-tip-border: #2a2f3d;
   --chart-tip-text: #e8eaf2;
 
@@ -137,8 +135,6 @@
   --shadow-card: 0 10px 30px rgba(30, 40, 70, 0.1);
   --shadow-soft: 0 4px 14px rgba(30, 40, 70, 0.07);
   --wall-a: rgba(106, 116, 224, 0.16);
-  --wall-b: rgba(106, 131, 196, 0.14);
-  --wall-c: rgba(160, 143, 224, 0.12);
   --chart-axis: rgba(20, 30, 50, 0.22);
   --chart-label: #6b7385;
   --chart-split: rgba(20, 30, 50, 0.08);
@@ -281,10 +277,11 @@ html[data-mode="pet"] body {
   z-index: 0;
   pointer-events: none;
   background-color: rgba(var(--bg-rgb), var(--bg-alpha));
+  /* Zen 式整体柔光：三个大半径的近似色光斑互相叠加，覆盖整屏而不是只亮角落 */
   background-image: var(--wall-image),
-    radial-gradient(58% 48% at 16% 8%, var(--wall-a), transparent 70%),
-    radial-gradient(52% 42% at 88% 16%, var(--wall-b), transparent 72%),
-    radial-gradient(70% 58% at 62% 104%, var(--wall-c), transparent 76%);
+    radial-gradient(95% 75% at 14% -8%, var(--wall-a), transparent 62%),
+    radial-gradient(85% 70% at 103% 24%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 64%),
+    radial-gradient(130% 95% at 48% 118%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 66%);
   background-size: cover, auto, auto, auto;
   background-position: center, center, center, center;
   background-repeat: no-repeat;

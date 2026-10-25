@@ -167,11 +167,6 @@ async function load() {
 }
 
 
-/** 点任务名 → 详细 · 清单 · 任务，按任务看坚持情况 */
-function jumpToDetail(taskId: number) {
-  jumpTo("task", undefined, undefined, taskId);
-}
-
 /** 卡片右上角的定位胶囊：直达「详细 · 清单」对应子标签（样式与月历定位按钮同族） */
 function jumpChecklist(sub: "tasks" | "rules" | "notes") {
   jumpTo("checklist", undefined, undefined, undefined, sub);
@@ -422,7 +417,7 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
             </div>
           </div>
           <template v-if="openModule === 'tasks'">
-            <TaskBoard :tasks="tasks" @reload="load" @jump="jumpToDetail" />
+            <TaskBoard :tasks="tasks" @reload="load" />
           </template>
           <template v-else-if="openModule === 'rules'">
             <ReminderRules :rules="rules" @reload="load" />
@@ -440,10 +435,11 @@ const bucketMax = () => Math.max(1, ...(stats.value?.buckets ?? [1]));
           <h2>{{ detailDate }} · 那天</h2>
           <div class="dacts">
             <!-- 与窗口控制同款图标：□ 放大（跳转到 详细 · 清单 · 日志）、× 关闭 -->
-            <button class="wbtn" title="在「详细 · 清单 · 日志」中打开" @click="openInDetail">
-              <svg width="12" height="12" viewBox="0 0 12 12">
-                <rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <button class="jump" title="在「详细 · 清单 · 总览」中打开" @click="openInDetail">
+              <svg viewBox="0 0 24 24" class="jicon" aria-hidden="true">
+                <path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
+              <span class="jtxt">清单</span>
             </button>
             <button class="wbtn" title="关闭" @click="detailDate = ''">
               <svg width="12" height="12" viewBox="0 0 12 12">

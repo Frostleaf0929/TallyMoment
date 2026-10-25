@@ -403,6 +403,7 @@ async function importRules() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0;
   width: 26px;
   height: 24px;
   padding: 0;

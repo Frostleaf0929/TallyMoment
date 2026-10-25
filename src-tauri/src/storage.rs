@@ -880,7 +880,7 @@ pub fn task_stop_repeat(conn: &Connection, id: i64, stopped: bool) -> Result<(),
 pub fn idle_threshold_min(conn: &Connection) -> u32 {
     get_setting(conn, "track.idle_min")
         .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(1)
+        .unwrap_or(0)
         .clamp(0, 120)
 }
 

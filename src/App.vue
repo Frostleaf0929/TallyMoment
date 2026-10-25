@@ -17,11 +17,13 @@ import SettingsPage from "./pages/SettingsPage.vue";
 import PersonalizePage from "./pages/PersonalizePage.vue";
 import { activeTab, appsTopN, isLight, navIntent, tabIntent } from "./lib/uiState";
 import {
+  accent,
   applyAppearance,
   glass,
   isDark,
   saveAppearance,
   systemDark,
+  themePref,
   wallImageUrl,
   wallKind,
 } from "./lib/appearance";
@@ -78,6 +80,54 @@ const collapsed = ref(localStorage.getItem("ui.side") === "collapsed");
 watch(active, (t) => (activeTab.value = t));
 
 const naiveTheme = ref<GlobalTheme | null>(darkTheme);
+
+/** naive 组件的主题覆盖：把弹窗/下拉/确认按钮接到拾刻的 token 上
+ *  （此前 Popconfirm/NSelect/Modal 用 naive 默认样式：灰底选中、绿色确认、橙色警告，与主题不统一）
+ *  accent/主题变化后 applyAppearance 已把新色写进 CSS 变量，这里读出来喂给 naive */
+const naiveOverrides = computed(() => {
+  void accent.value;
+  void themePref.value;
+  const cs = getComputedStyle(document.documentElement);
+  const read = (name: string, fb: string) => (cs.getPropertyValue(name) || fb).trim();
+  const accentC = read("--accent", "#7b84ec");
+  const good = read("--good", "#6fb59a");
+  const warn = read("--warn", "#d3a95e");
+  const danger = read("--danger", "#c9797b");
+  const info = read("--info", "#7d92cf");
+  const quadruple = (v: string) => ({
+    color: v,
+    hover: v,
+    pressed: v,
+    suppl: v,
+  });
+  const [pc, pcH, pcP, pcS] = [accentC, accentC, accentC, accentC];
+  void quadruple;
+  return {
+    common: {
+      borderRadius: "10px",
+      primaryColor: pc,
+      primaryColorHover: pcH,
+      primaryColorPressed: pcP,
+      primaryColorSuppl: pcS,
+      infoColor: info,
+      infoColorHover: info,
+      infoColorPressed: info,
+      infoColorSuppl: info,
+      successColor: good,
+      successColorHover: good,
+      successColorPressed: good,
+      successColorSuppl: good,
+      warningColor: warn,
+      warningColorHover: warn,
+      warningColorPressed: warn,
+      warningColorSuppl: warn,
+      errorColor: danger,
+      errorColorHover: danger,
+      errorColorPressed: danger,
+      errorColorSuppl: danger,
+    },
+  };
+});
 watchEffect(() => {
   applyAppearance();
   saveAppearance();
@@ -234,7 +284,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <NConfigProvider :theme="naiveTheme" :locale="zhCN" :date-locale="dateZhCN">
+  <NConfigProvider :theme="naiveTheme" :theme-overrides="naiveOverrides" :locale="zhCN" :date-locale="dateZhCN">
     <FullscreenReminder v-if="mode === 'reminder_full'" />
     <ToastStack v-else-if="mode === 'reminder'" />
     <PetView v-else-if="mode === 'pet'" />
@@ -268,7 +318,12 @@ onUnmounted(() => {
             @mousedown.stop
             @click="toggleCollapse"
           >
-            <img class="logoimg" src="/app-icon.svg" alt="拾刻" draggable="false" />
+            <img
+              class="logoimg"
+              :src="isDark() ? '/app-icon-line-inv.svg' : '/app-icon-line.svg'"
+              alt="拾刻"
+              draggable="false"
+            />
           </button>
           <!-- 展开时：品牌文字 + 原来的收起图标（不放应用图标） -->
           <template v-else>

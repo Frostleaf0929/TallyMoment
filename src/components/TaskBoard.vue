@@ -2,11 +2,11 @@
 import { computed, nextTick, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { NButton, NCheckbox, NPopconfirm } from "naive-ui";
+import { NButton, NCheckbox, NPopconfirm, NSelect } from "naive-ui";
 import type { Task } from "../types";
 
 const props = defineProps<{ tasks: Task[] }>();
-const emit = defineEmits<{ (e: "reload"): void; (e: "jump", taskId: number): void }>();
+const emit = defineEmits<{ (e: "reload"): void }>();
 
 const DONE_PREVIEW = 12;
 const showAllDone = ref(false);
@@ -171,6 +171,15 @@ const REPEAT_OPTS = [
   { label: "每月", value: "monthly" },
   { label: "每年", value: "yearly" },
 ];
+const PRIORITY_OPTS = [
+  { label: "高优先", value: 2 },
+  { label: "中优先", value: 1 },
+  { label: "低优先", value: 0 },
+];
+const STYLE_OPTS_FULL = STYLE_OPTS.map((o) => ({
+  label: `到期提醒：${o.label}`,
+  value: o.value,
+}));
 /** 正在编辑的重复任务组：从最新列表实时取（停止/清理后统计即时刷新） */
 const editGroup = computed<Group | null>(() => {
   const f = form.value;
@@ -427,7 +436,7 @@ async function importMd() {
       <div v-for="t in oneOffOpen" :key="t.id" class="row">
         <NCheckbox size="small" :checked="t.done" @update:checked="(v: boolean) => toggle(t, v)" />
         <span class="prio" :class="priorityClass(t.priority)">{{ priorityLabel(t.priority) }}</span>
-        <span class="content clickable" title="点击跳转详情" @click="emit('jump', t.templateId ?? t.id)">
+        <span class="content clickable" title="双击编辑" @dblclick="openEditTask(t)">
           {{ t.content }}
         </span>
         <span v-if="t.dueTs" class="due">{{ dueLabel(t) }}</span>
@@ -464,7 +473,7 @@ async function importMd() {
           @update:checked="(v: boolean) => toggleGroup(g, v)"
         />
         <span class="prio" :class="priorityClass(g.priority)">{{ priorityLabel(g.priority) }}</span>
-        <span class="content clickable" title="点击跳转详情" @click="emit('jump', g.jumpId)">
+        <span class="content clickable" title="双击编辑" @dblclick="openGroupEdit(g)">
           {{ g.content }}
         </span>
         <span v-if="g.todayInst?.startTs && !g.todayInst?.done" class="mini on plain">计时中</span>
@@ -520,7 +529,7 @@ async function importMd() {
       <template v-if="doneGroups.length">
         <p class="done-head">重复任务历史</p>
         <div v-for="g in doneGroups" :key="'g' + g.key" class="row done">
-          <span class="content strikethrough clickable" title="点击跳转详情看每天情况" @click="emit('jump', g.jumpId)">
+          <span class="content strikethrough clickable" title="双击看坚持详情" @dblclick="openGroupEdit(g)">
             {{ g.content }}
           </span>
           <span v-if="g.repeatMode" class="rep">{{ repeatLabel(g.repeatMode) }}{{ g.stopped ? " · 已停止" : "" }}</span>
@@ -559,15 +568,9 @@ async function importMd() {
           @input="saveDraft"
         />
         <div class="frow">
-          <select v-model.number="fdPriority" class="esel">
-            <option :value="2">高优先</option>
-            <option :value="1">中优先</option>
-            <option :value="0">低优先</option>
-          </select>
+          <NSelect v-model:value="fdPriority" :options="PRIORITY_OPTS" size="small" class="nsel" />
           <input v-model="fdTime" type="time" class="esel tp" />
-          <select v-model="fdRepeat" class="esel">
-            <option v-for="o in REPEAT_OPTS" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </select>
+          <NSelect v-model:value="fdRepeat" :options="REPEAT_OPTS" size="small" class="nsel" />
           <button class="primary" @click="submitNew">添加</button>
         </div>
         <p class="fnote">选了「每天 / 每周…」就是固定事项：每天只占任务列表一行，完成情况进习惯追踪；随时可以停止重复，历史记录不会丢。</p>
@@ -578,17 +581,9 @@ async function importMd() {
         <template v-if="editingTask || editGroup?.template || editGroup?.todayInst">
           <input v-model="fdContent" class="finput" maxlength="200" @keyup.enter="saveEdit" />
           <div class="frow">
-            <select v-model.number="fdPriority" class="esel">
-              <option :value="2">高优先</option>
-              <option :value="1">中优先</option>
-              <option :value="0">低优先</option>
-            </select>
-            <select v-model="fdStyle" class="esel" title="到期提醒方式">
-              <option v-for="o in STYLE_OPTS" :key="o.value" :value="o.value">到期提醒：{{ o.label }}</option>
-            </select>
-            <select v-model="fdInterval" class="esel" title="计时中的间隔确认">
-              <option v-for="o in INTERVAL_OPTS" :key="o.value" :value="o.value">{{ o.label }}</option>
-            </select>
+            <NSelect v-model:value="fdPriority" :options="PRIORITY_OPTS" size="small" class="nsel" />
+            <NSelect v-model:value="fdStyle" :options="STYLE_OPTS_FULL" size="small" class="nsel wide" title="到期提醒方式" />
+            <NSelect v-model:value="fdInterval" :options="INTERVAL_OPTS" size="small" class="nsel wide" title="计时中的间隔确认" />
             <button class="primary" @click="saveEdit">保存</button>
           </div>
           <div class="frow appsrow">
@@ -801,6 +796,7 @@ async function importMd() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0;
   width: 26px;
   height: 24px;
   padding: 0;
@@ -937,6 +933,15 @@ async function importMd() {
 
 .esel.tp {
   padding: 5px 8px;
+}
+
+/* 表单里的 naive 下拉：与相邻输入同宽同高 */
+.nsel {
+  width: 118px;
+}
+
+.nsel.wide {
+  width: 168px;
 }
 
 .primary {

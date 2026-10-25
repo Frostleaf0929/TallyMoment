@@ -12,7 +12,7 @@ export type Material = "frosted" | "liquid";
 export type WallKind = "none" | "gradient" | "image";
 
 /** 外观参数版本：默认值变了要让旧值一次性失效 */
-export const UI_VERSION = "4";
+export const UI_VERSION = "5";
 const stale = () => localStorage.getItem("ui.v") !== UI_VERSION;
 
 const num = (key: string, fallback: number) => {
@@ -34,14 +34,14 @@ export const material = ref<Material>(
 );
 export const blur = ref(num("ui.blur", 32));
 export const bgAlpha = ref(stale() ? 70 : num("ui.bgAlpha", 70));
-export const sideAlpha = ref(stale() ? 40 : num("ui.sideAlpha", 40));
+export const sideAlpha = ref(stale() ? 60 : num("ui.sideAlpha", 60));
 export const cardAlpha = ref(num("ui.cardAlpha", 90));
 /* 三块表面各自的模糊与阴影（个性化页分三组调） */
-export const bgBlur = ref(stale() ? 18 : num("ui.bgBlur", 18));
+export const bgBlur = ref(stale() ? 26 : num("ui.bgBlur", 26));
 export const sideBlur = ref(stale() ? 26 : num("ui.sideBlur", 26));
 export const cardBlur = ref(stale() ? 26 : num("ui.cardBlur", 26));
 export const sideShadow = ref(num("ui.sideShadow", 0));
-export const cardShadow = ref(num("ui.cardShadow", 1));
+export const cardShadow = ref(num("ui.cardShadow", 1.1));
 /** 应用名模式：true = 全英文（exe 名），false = 跟随系统显示名 */
 export const appNameEnglish = ref(localStorage.getItem("ui.appNameEn") === "1");
 /** 应用配色模式：random 随机色 / accent 跟随强调色 / iconColor 按图标取色 / icon 直接显示图标 */

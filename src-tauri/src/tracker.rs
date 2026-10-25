@@ -12,7 +12,7 @@ use chrono::Timelike;
 
 /// 空闲判定阈值：超过 60 秒无键鼠输入视为离开，停止计时
 /// 空闲判定毫秒数（运行时可调，设置键 track.idle_min；0 = 不做离开检测）
-static IDLE_THRESHOLD_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(60_000);
+static IDLE_THRESHOLD_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 fn idle_threshold_ms() -> u32 {
     IDLE_THRESHOLD_MS.load(std::sync::atomic::Ordering::Relaxed)
@@ -153,6 +153,15 @@ fn foreground() -> Option<(String, String, String, String)> {
 
 /// 追踪主循环：每秒一次，独立线程
 pub fn spawn(app: AppHandle) {
+    // 启动即同步一次空闲阈值（此后循环里每 60 秒刷新）
+    if let Some(db) = app.try_state::<Db>() {
+        if let Ok(conn) = db.0.lock() {
+            IDLE_THRESHOLD_MS.store(
+                storage::idle_threshold_min(&conn).saturating_mul(60_000),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+    }
     // 自排除用"自身 exe 完整路径"判定（比文件名可靠：改名/换版本都不影响）
     let self_path = std::env::current_exe()
         .ok()
@@ -198,7 +207,7 @@ pub fn spawn(app: AppHandle) {
         if now % 60 == 0 {
             let mins = with_db(&app, |db| Ok::<u32, String>(storage::idle_threshold_min(db)))
                 .and_then(|r| r.ok())
-                .unwrap_or(1);
+                .unwrap_or(0);
             IDLE_THRESHOLD_MS.store(
                 mins.saturating_mul(60_000),
                 std::sync::atomic::Ordering::Relaxed,

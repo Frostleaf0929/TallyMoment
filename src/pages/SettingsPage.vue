@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { NSwitch } from "naive-ui";
+import { NSwitch, NSelect } from "naive-ui";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -22,7 +22,16 @@ const autoStart = ref(false);
 /** 开机自启动时是否显示主窗（关 = 静默后台启动，记录类软件应无痕） */
 const startupShow = ref(false);
 /** 空闲判定分钟数（0 = 关闭离开检测，与 Tai 同口径） */
-const idleMin = ref(1);
+const idleMin = ref(0);
+const idleOpts = [
+  { label: "关闭", value: 0 },
+  { label: "1 分钟", value: 1 },
+  { label: "2 分钟", value: 2 },
+  { label: "5 分钟", value: 5 },
+  { label: "10 分钟", value: 10 },
+  { label: "15 分钟", value: 15 },
+  { label: "30 分钟", value: 30 },
+];
 const trackSelf = ref(false);
 type DataMod = "tasks" | "rules" | "all";
 const mod = ref<DataMod>("tasks");
@@ -301,15 +310,13 @@ async function bumpFlow(key: "contextApps" | "contextMin" | "activeMin", delta: 
           <p class="rt">空闲判定</p>
           <p class="rd">无键鼠操作多久后停止计时（离开检测）。看视频、阅读这类不动键鼠的场景容易被判成离开而少记；设为「关闭」则前台就算时长，与 Tai 等工具口径一致</p>
         </div>
-        <select v-model.number="idleMin" class="idleSel" @change="setIdleMin(idleMin)">
-          <option :value="0">关闭</option>
-          <option :value="1">1 分钟</option>
-          <option :value="2">2 分钟</option>
-          <option :value="5">5 分钟</option>
-          <option :value="10">10 分钟</option>
-          <option :value="15">15 分钟</option>
-          <option :value="30">30 分钟</option>
-        </select>
+        <NSelect
+          :value="idleMin"
+          :options="idleOpts"
+          size="small"
+          class="idleSel"
+          @update:value="setIdleMin"
+        />
       </div>
       <div class="row">
         <div class="rlabel">
@@ -519,14 +526,7 @@ async function bumpFlow(key: "contextApps" | "contextMin" | "activeMin", delta: 
 
 .idleSel {
   flex: none;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  border-radius: var(--r-sm);
-  font-size: 12px;
-  font-family: inherit;
-  padding: 5px 8px;
-  outline: none;
+  width: 128px;
 }
 
 .seg {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { NInput } from "naive-ui";
+import { NInput, NSelect } from "naive-ui";
 import type { AppUsage, HabitRow, RangeReport, ReminderRule, Task } from "../types";
 import { fmtDuration } from "../lib/format";
 import { colorFor } from "../lib/colors";
@@ -55,6 +55,32 @@ async function loadHabit() {
 const selHabit = computed(
   () => habitRows.value.find((r) => r.taskId === selectedHabit.value) ?? null
 );
+
+/** 下拉选项（已停止的标注出来） */
+const habitOptions = computed(() =>
+  habitRows.value.map((r) => ({
+    label: r.stopped ? `${r.content}（已停止）` : r.content,
+    value: r.taskId,
+  }))
+);
+
+/** 记忆上次查看的固定事项：下次进来还是它（没有记忆或已不存在则选第一个） */
+const HABIT_MEM_KEY = "detail.lastHabit";
+watch(habitRows, (rows) => {
+  const ids = new Set(rows.map((r) => r.taskId));
+  if (selectedHabit.value != null && ids.has(selectedHabit.value)) return;
+  const mem = Number(localStorage.getItem(HABIT_MEM_KEY));
+  selectedHabit.value = ids.has(mem) ? mem : (rows[0]?.taskId ?? null);
+});
+
+function pickHabit(id: number) {
+  selectedHabit.value = id;
+  try {
+    localStorage.setItem(HABIT_MEM_KEY, String(id));
+  } catch {
+    /* 忽略 */
+  }
+}
 
 /** 全部固定事项总览（近 30 天完成格汇总）：想看的不只是单个任务，还有整体坚持度 */
 const habitOverview = computed(() => {
@@ -541,20 +567,17 @@ watch(navIntent, (n) => {
         <section class="glass-card">
           <div class="itemshead">
             <h2>固定事项 · 坚持情况 <span class="hint">（近 30 天完成格）</span></h2>
-            <span class="avg">点名字切换；打卡在《待办》页的习惯追踪</span>
+            <span class="avg">长条下拉切换；打卡在《待办》页的习惯追踪</span>
           </div>
-          <div class="chiprow">
-            <button
-              v-for="r in habitRows"
-              :key="r.taskId"
-              class="chip"
-              :class="{ active: selectedHabit === r.taskId }"
-              @click="selectedHabit = r.taskId"
-            >
-              {{ r.content }}<em v-if="r.stopped"> · 已停止</em>
-            </button>
-            <span v-if="!habitRows.length" class="empty">还没有固定事项：在《待办 · 任务》新建时把重复选成「每天 / 每周…」</span>
-          </div>
+          <NSelect
+            :value="selectedHabit ?? undefined"
+            :options="habitOptions"
+            size="small"
+            placeholder="选择固定事项"
+            class="habitsel"
+            @update:value="pickHabit"
+          />
+          <span v-if="!habitRows.length" class="empty">还没有固定事项：在《待办 · 任务》新建时把重复选成「每天 / 每周…」</span>
           <div v-if="selHabit && habitStats" class="dcards">
             <div class="dstat"><p class="dl">安排天数</p><p class="dv">{{ habitStats.total }} <small>天</small></p></div>
             <div class="dstat"><p class="dl">完成次数</p><p class="dv accent">{{ habitStats.doneCount }} <small>次</small></p></div>
@@ -916,11 +939,9 @@ watch(navIntent, (n) => {
   transform: translateY(calc(-1px * var(--motion)));
 }
 
-/* 任务子页：任务选择 chips */
-.chiprow {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+/* 任务子页：固定事项长条下拉 */
+.habitsel {
+  width: 100%;
   margin-bottom: 12px;
 }
 
